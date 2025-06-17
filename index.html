@@ -15,11 +15,11 @@
     L.tileLayer('map/{z}/{x}/{y}.jpeg', {
       continuousWorld: false,
       noWrap: true,  
-      minZoom: 2,
+      minZoom: 3,
       maxZoom: 6,
     }).addTo(map);
   //Coordinate Finder
-  /*
+/*
     var marker = L.marker([0, 0], {
       draggable: true,
     }).addTo(map);
@@ -28,8 +28,82 @@
       marker.getPopup().setContent(marker.getLatLng().toString()).openOn(map);
     });
     */
+  
+  //Icons
+  var rl = L.icon({
+		iconUrl:       'icons/players/rl.png',
+		iconRetinaUrl: 'icons/players/rl.png',
+		shadowUrl:     '',
+		iconSize:    [40, 40],
+		iconAnchor:  [20, 20],
+		popupAnchor: [1, -34],
+		tooltipAnchor: [20, -28],
+	});
+  var ms = L.icon({
+		iconUrl:       'icons/players/ms.png',
+		iconRetinaUrl: 'icons/players/ms.png',
+		shadowUrl:     '',
+		iconSize:    [40, 40],
+		iconAnchor:  [20, 20],
+		popupAnchor: [1, -34],
+		tooltipAnchor: [20, -28],
+	});
+  var nk = L.icon({
+		iconUrl:       'icons/players/nk.png',
+		iconRetinaUrl: 'icons/players/nk.png',
+		shadowUrl:     '',
+		iconSize:    [40, 40],
+		iconAnchor:  [20, 20],
+		popupAnchor: [1, -34],
+		tooltipAnchor: [20, -28],
+	});
+  var ls = L.icon({
+		iconUrl:       'icons/players/ls.png',
+		iconRetinaUrl: 'icons/players/ls.png',
+		shadowUrl:     '',
+		iconSize:    [40, 40],
+		iconAnchor:  [20, 20],
+		popupAnchor: [1, -34],
+		tooltipAnchor: [20, -28],
+	});
+  var sg = L.icon({
+		iconUrl:       'icons/players/sg.png',
+		iconRetinaUrl: 'icons/players/sg.png',
+		shadowUrl:     '',
+		iconSize:    [40, 40],
+		iconAnchor:  [20, 20],
+		popupAnchor: [1, -34],
+		tooltipAnchor: [20, -28],
+	});
+  var pm = L.icon({
+		iconUrl:       'icons/players/pm.png',
+		iconRetinaUrl: 'icons/players/pm.png',
+		shadowUrl:     '',
+		iconSize:    [40, 40],
+		iconAnchor:  [20, 20],
+		popupAnchor: [1, -34],
+		tooltipAnchor: [20, -28],
+	});
   //Markers
-  var el_gulndar = L.marker([50.190968, 113.115234]).bindPopup('<b>Player Location</b>').addTo(map);
+  var pl = L.marker([50.190968, 113.115234]).bindPopup('<b>Party Location</b>');
+  //players
+  var Raphael = L.marker([50.999929, 60.820313], {icon: rl}).bindPopup("<b>Prinz Ferguson of Erigon</b>");
+  var Philipp = L.marker([50.092393, 113.48877], {icon: pm}).bindPopup("<b>Dr. Jake Brigance</b>");
+  var Mark = L.marker([50.092393, 112.719727], {icon: ms}).bindPopup("<b>Xarrakas Valthaash</b>");
+  var Niki = L.marker([60.370429, 138.29898], {icon: nk}).bindPopup("<b>Aaron Orphos</b>");
+  var Luke = L.marker([50.44313, 101.68943], {icon: ls}).bindPopup("<b>Lonhard Brightshield</b>");
+  var Stefan = L.marker([43.149094, -96.49961], {icon: sg}).bindPopup("<b>Arctos</b>");
+    //Marker Groups
+  var players = L.layerGroup([Raphael, Philipp, Mark, Niki, Luke, Stefan]);
+  var current_location  = L.layerGroup([pl]);
+  //Marker Overlay
+  var overlays={
+    "Party Location" : current_location,
+    "Player Origins" : players,
+    }
+
+    //GROUP CONTROLS
+  L.control.layers(null, overlays).addTo(map);
     </script>
   </body>
 </html>
