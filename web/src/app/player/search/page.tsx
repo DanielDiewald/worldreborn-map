@@ -1,0 +1,7 @@
+import Link from "next/link";
+import { PlayerShell } from "@/components/player-shell";
+import { requirePlayerSession } from "@/lib/auth/player-session";
+import { getPlayerContext } from "@/lib/player-view";
+import { searchForPlayer } from "@/lib/search";
+
+export default async function PlayerSearchPage({searchParams}:{searchParams:Promise<{q?:string}>}){const session=await requirePlayerSession();const [context,search]=await Promise.all([getPlayerContext(session.projectId,session.playerId),searchParams]);if(!context)return null;const q=search.q?.trim()??"";const results=q?await searchForPlayer(session.projectId,session.playerId,q):[];return <PlayerShell projectName={context.project_name} playerName={context.player_name}><div className="page-heading compact-heading"><div><span className="eyebrow">World / Search</span><h1>Suche</h1><p>Es erscheinen ausschließlich Informationen aus deinem Wissensstand.</p></div></div><section className="panel-card"><form className="filter-bar"><input name="q" defaultValue={q} placeholder="Welt durchsuchen …"/><button>Search</button></form><div className="stack">{results.map((result)=><Link className="panel-card nested-card" key={`${result.entityType}:${result.entityId}`} href={result.href}><span className="soft-label">{result.entityType}</span><strong>{result.name}</strong>{result.subtitle?<small>{result.subtitle}</small>:null}</Link>)}</div>{q&&results.length===0?<div className="empty-state"><strong>Keine bekannten Treffer</strong></div>:null}</section></PlayerShell>;}
