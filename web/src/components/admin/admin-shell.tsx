@@ -4,7 +4,7 @@ import { listProjects } from "@/lib/projects";
 import { logoutAdmin } from "@/app/admin/actions";
 import { ProjectSwitcher } from "./project-switcher";
 
-type Section = "dashboard" | "npcs" | "projects";
+type Section = "dashboard" | "npcs" | "players" | "projects";
 
 type Props = {
   children: ReactNode;
@@ -90,7 +90,7 @@ export async function AdminShell({ children, projectId, projectName, section = "
 
           <div className="nav-section">
             <span className="nav-section-title">Spieler</span>
-            <NavItem icon="players" disabled>Players</NavItem>
+            <NavItem href={projectId ? `${base}/players` : undefined} icon="players" active={section === "players"} disabled={!projectId}>Players</NavItem>
             <NavItem icon="shield" disabled>Permissions</NavItem>
           </div>
 
