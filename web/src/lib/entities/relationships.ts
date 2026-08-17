@@ -1,0 +1,34 @@
+import "server-only";
+
+import { z } from "zod";
+import { pool } from "@/lib/db";
+
+const supportedEntityType=z.enum(["npc","god","character","group","location"]);
+const relationshipSchema=z.object({entityAType:supportedEntityType,entityAId:z.coerce.number().int().positive(),entityBType:supportedEntityType,entityBId:z.coerce.number().int().positive(),relationshipTypeId:z.coerce.number().int().positive(),startDisplay:z.string().max(240).optional(),endDisplay:z.string().max(240).optional(),status:z.string().trim().min(1).max(30).default("active"),publicDescription:z.string().max(100000).optional(),adminNotes:z.string().max(100000).optional(),visibilityMode:z.enum(["admin_only","all_players","selected_players"]).default("admin_only")});
+
+async function entityExists(projectId:number,type:z.infer<typeof supportedEntityType>,id:number){switch(type){case"npc":return (await pool.query("SELECT 1 FROM npcs WHERE camp_id=$1 AND n_id=$2 AND archived_at IS NULL",[projectId,id])).rowCount===1;case"god":return (await pool.query("SELECT 1 FROM gods g JOIN npcs n ON n.n_id=g.n_id WHERE n.camp_id=$1 AND g.g_id=$2 AND n.archived_at IS NULL",[projectId,id])).rowCount===1;case"character":return (await pool.query("SELECT 1 FROM charakters c JOIN npcs n ON n.n_id=c.n_id WHERE n.camp_id=$1 AND c.char_id=$2 AND n.archived_at IS NULL",[projectId,id])).rowCount===1;case"group":return (await pool.query("SELECT 1 FROM groups WHERE camp_id=$1 AND gr_id=$2 AND archived_at IS NULL",[projectId,id])).rowCount===1;case"location":return (await pool.query("SELECT 1 FROM locations WHERE camp_id=$1 AND loc_id=$2 AND archived_at IS NULL",[projectId,id])).rowCount===1;}}
+
+export async function listRelationshipTypes(){const r=await pool.query<{relationship_type_id:number;code:string;label:string;inverse_label:string|null;category:string;directed:boolean}>("SELECT relationship_type_id,code,label,inverse_label,category,directed FROM relationship_types ORDER BY category,label");return r.rows;}
+
+export async function listRelationships(projectId:number){const r=await pool.query<{relationship_id:string;entity_a_type:string;entity_a_id:string;entity_b_type:string;entity_b_id:string;type_code:string;type_label:string;inverse_label:string|null;directed:boolean;status:string;public_description:string|null;admin_notes:string|null;visibility_mode:string;metadata:Record<string,unknown>}>(
+`SELECT r.relationship_id,r.entity_a_type,r.entity_a_id,r.entity_b_type,r.entity_b_id,rt.code AS type_code,rt.label AS type_label,rt.inverse_label,rt.directed,r.status,r.public_description,r.admin_notes,r.visibility_mode,r.metadata
+ FROM relationships r JOIN relationship_types rt ON rt.relationship_type_id=r.relationship_type_id WHERE r.project_id=$1 ORDER BY r.relationship_id`,[projectId]);return r.rows;}
+
+export async function createRelationship(projectId:number,input:unknown){const d=relationshipSchema.parse(input);if(d.entityAType===d.entityBType&&d.entityAId===d.entityBId)throw new Error("An entity cannot relate to itself.");if(!(await entityExists(projectId,d.entityAType,d.entityAId))||!(await entityExists(projectId,d.entityBType,d.entityBId)))throw new Error("Both relationship entities must belong to this project.");const type=await pool.query("SELECT 1 FROM relationship_types WHERE relationship_type_id=$1",[d.relationshipTypeId]);if(type.rowCount!==1)throw new Error("Unknown relationship type.");const r=await pool.query<{relationship_id:string}>(
+`INSERT INTO relationships(project_id,entity_a_type,entity_a_id,entity_b_type,entity_b_id,relationship_type_id,start_display,end_display,status,public_description,admin_notes,visibility_mode,metadata)
+ VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'{}'::jsonb) RETURNING relationship_id`,[projectId,d.entityAType,d.entityAId,d.entityBType,d.entityBId,d.relationshipTypeId,d.startDisplay||null,d.endDisplay||null,d.status,d.publicDescription||null,d.adminNotes||null,d.visibilityMode]);return Number(r.rows[0].relationship_id);}
+
+export async function deleteRelationship(projectId:number,relationshipId:number){const r=await pool.query("DELETE FROM relationships WHERE project_id=$1 AND relationship_id=$2 AND NOT (metadata ? 'legacy_source')",[projectId,relationshipId]);if(r.rowCount!==1)throw new Error("Relationship not found or is a protected legacy adapter record.");}
+
+export async function getVisibleRelationships(projectId:number,playerId:number){const r=await pool.query<{relationship_id:string;entity_a_type:string;entity_a_id:string;entity_b_type:string;entity_b_id:string;type_label:string;inverse_label:string|null;directed:boolean;public_description:string|null}>(
+`SELECT r.relationship_id,r.entity_a_type,r.entity_a_id,r.entity_b_type,r.entity_b_id,rt.label AS type_label,rt.inverse_label,rt.directed,r.public_description
+ FROM relationships r JOIN relationship_types rt ON rt.relationship_type_id=r.relationship_type_id
+ LEFT JOIN entity_visibility rv ON rv.project_id=r.project_id AND rv.player_id=$2 AND rv.entity_type='relationship' AND rv.entity_id=r.relationship_id
+ WHERE r.project_id=$1 AND COALESCE(rv.visible,r.visibility_mode='all_players')
+ AND NOT EXISTS(SELECT 1 FROM entity_visibility ev WHERE ev.project_id=$1 AND ev.player_id=$2 AND ev.entity_type=r.entity_a_type AND ev.entity_id=r.entity_a_id AND ev.visible=false)
+ AND NOT EXISTS(SELECT 1 FROM entity_visibility ev WHERE ev.project_id=$1 AND ev.player_id=$2 AND ev.entity_type=r.entity_b_type AND ev.entity_id=r.entity_b_id AND ev.visible=false)
+ ORDER BY r.relationship_id`,[projectId,playerId]);return r.rows;}
+
+export async function getFamilyTree(projectId:number){const people=await pool.query<{n_id:number;name:string;image:string;kind:string}>(
+`SELECT n.n_id,n.name,n.image,CASE WHEN g.g_id IS NOT NULL THEN 'god' WHEN c.char_id IS NOT NULL THEN 'character' ELSE 'npc' END AS kind
+ FROM npcs n LEFT JOIN gods g ON g.n_id=n.n_id LEFT JOIN charakters c ON c.n_id=n.n_id WHERE n.camp_id=$1 AND n.archived_at IS NULL ORDER BY n.name`,[projectId]);const relations=await pool.query<{parent_id:number;child_id:number}>("SELECT p.parent_id,p.child_id FROM parent_child_relationships p JOIN npcs a ON a.n_id=p.parent_id JOIN npcs b ON b.n_id=p.child_id WHERE a.camp_id=$1 AND b.camp_id=$1 UNION SELECT r.entity_a_id::int,r.entity_b_id::int FROM relationships r JOIN relationship_types rt ON rt.relationship_type_id=r.relationship_type_id WHERE r.project_id=$1 AND rt.code='parent' AND r.entity_a_type='npc' AND r.entity_b_type='npc' AND NOT (r.metadata ? 'legacy_source')",[projectId]);const partners=await pool.query<{a:number;b:number;label:string}>("SELECT r.entity_a_id::int AS a,r.entity_b_id::int AS b,rt.label FROM relationships r JOIN relationship_types rt ON rt.relationship_type_id=r.relationship_type_id WHERE r.project_id=$1 AND rt.category='family' AND rt.code IN ('spouse','romantic','ex_partner')",[projectId]);return{people:people.rows,parentChild:relations.rows,partners:partners.rows};}
