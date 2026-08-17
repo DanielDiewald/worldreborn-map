@@ -14,6 +14,20 @@ const locationSchema = z.object({
   visibilityMode: z.enum(["admin_only", "all_players", "selected_players"]).default("admin_only"),
 });
 
+export type LocationListItem = {
+  loc_id: number;
+  name: string;
+  coat_of_arm: string | null;
+  parent_loc_id: number | null;
+  location_type: string | null;
+  description: string | null;
+  owner_n_id: number | null;
+  population: string | null;
+  visibility_mode: string;
+  parent_name: string | null;
+  owner_name: string | null;
+};
+
 async function validateReferences(projectId: number, parentLocId?: number | null, ownerNpcId?: number | null) {
   if (parentLocId) {
     const parent = await pool.query("SELECT 1 FROM locations WHERE camp_id=$1 AND loc_id=$2 AND archived_at IS NULL", [projectId, parentLocId]);
@@ -26,7 +40,7 @@ async function validateReferences(projectId: number, parentLocId?: number | null
 }
 
 export async function listLocations(projectId: number) {
-  const result = await pool.query(
+  const result = await pool.query<LocationListItem>(
     `SELECT l.loc_id, l.name, l.coat_of_arm, l.parent_loc_id, l.location_type,
             l.description, l.owner_n_id, l.population, l.visibility_mode,
             p.name AS parent_name, o.name AS owner_name
@@ -85,6 +99,5 @@ export async function archiveLocation(projectId: number, locationId: number) {
 }
 
 export async function getLocationTree(projectId: number) {
-  const rows = await listLocations(projectId);
-  return rows;
+  return listLocations(projectId);
 }
