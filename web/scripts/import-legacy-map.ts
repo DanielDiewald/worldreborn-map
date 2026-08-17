@@ -1,4 +1,8 @@
 import { Client } from "pg";
+import {
+  loadProjectEnvironment,
+  requireDatabaseUrl,
+} from "../src/lib/environment";
 
 type LegacyMarker = {
   sourceKey: string;
@@ -25,10 +29,7 @@ const markers: LegacyMarker[] = [
     lat: 50.999929,
     lng: 60.820313,
     icon: "icons/players/rl.png",
-    npcCandidates: [
-      "Prinz Ferguson of Erigon",
-      "Prince Ferguson of Erigon",
-    ],
+    npcCandidates: ["Prinz Ferguson of Erigon", "Prince Ferguson of Erigon"],
   },
   {
     sourceKey: "legacy-player-philipp",
@@ -78,21 +79,15 @@ const markers: LegacyMarker[] = [
 ];
 
 async function main() {
-  const connectionString = process.env.DATABASE_URL;
-
-  if (!connectionString) {
-    throw new Error("DATABASE_URL is required");
-  }
-
+  loadProjectEnvironment();
+  const connectionString = requireDatabaseUrl();
   const client = new Client({ connectionString });
 
-  await client.connect();
-
   try {
+    await client.connect();
     await client.query("BEGIN");
 
     const projectId = 1;
-
     const mapResult = await client.query<{ map_id: string }>(
       `SELECT map_id
          FROM project_maps
@@ -104,9 +99,7 @@ async function main() {
     );
 
     if (mapResult.rowCount !== 1) {
-      throw new Error(
-        "Aetheris primary map is missing. Run db:migrate first.",
-      );
+      throw new Error("Aetheris primary map is missing. Run npm run db:migrate first.");
     }
 
     const mapId = mapResult.rows[0].map_id;
@@ -116,20 +109,12 @@ async function main() {
       let entityId: number | null = null;
 
       if (marker.npcCandidates?.length) {
-        const npcResult = await client.query<{
-          n_id: number;
-          name: string;
-        }>(
+        const npcResult = await client.query<{ n_id: number; name: string }>(
           `SELECT n_id, name
              FROM npcs
             WHERE camp_id = $1
               AND lower(name) = ANY($2::text[])`,
-          [
-            projectId,
-            marker.npcCandidates.map((name) =>
-              name.toLowerCase(),
-            ),
-          ],
+          [projectId, marker.npcCandidates.map((name) => name.toLowerCase())],
         );
 
         if (npcResult.rowCount === 1) {
@@ -140,42 +125,11 @@ async function main() {
 
       await client.query(
         `INSERT INTO map_markers (
-           project_id,
-           map_id,
-           marker_type,
-           source_key,
-           entity_type,
-           entity_id,
-           coordinate_mode,
-           lat,
-           lng,
-           icon,
-           label,
-           visibility_mode,
-           layer,
-           metadata
+           project_id, map_id, marker_type, source_key, entity_type, entity_id,
+           coordinate_mode, lat, lng, icon, label, visibility_mode, layer, metadata
          )
-         VALUES (
-           $1,
-           $2,
-           $3,
-           $4,
-           $5,
-           $6,
-           'latlng',
-           $7,
-           $8,
-           $9,
-           $10,
-           'admin_only',
-           $11,
-           $12::jsonb
-         )
-         ON CONFLICT (
-           project_id,
-           map_id,
-           source_key
-         )
+         VALUES ($1, $2, $3, $4, $5, $6, 'latlng', $7, $8, $9, $10, 'admin_only', $11, $12::jsonb)
+         ON CONFLICT (project_id, map_id, source_key)
          WHERE source_key IS NOT NULL
          DO UPDATE SET
            marker_type = EXCLUDED.marker_type,
@@ -197,30 +151,24 @@ async function main() {
           marker.lng,
           marker.icon ?? null,
           marker.label,
-          marker.type === "player_origin"
-            ? "players"
-            : "party",
-          JSON.stringify({
-            imported_from: "legacy index.html",
-          }),
+          marker.type === "player_origin" ? "players" : "party",
+          JSON.stringify({ imported_from: "legacy index.html" }),
         ],
       );
     }
 
     await client.query("COMMIT");
-
-    console.log(
-      `Imported ${markers.length} legacy markers into project ${projectId}.`,
-    );
+    console.log(`Imported ${markers.length} legacy markers into project ${projectId}.`);
   } catch (error) {
-    await client.query("ROLLBACK");
-    throw error;
+    await client.query("ROLLBACK").catch(() => undefined);
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Legacy map import failed: ${message}`, { cause: error });
   } finally {
     await client.end();
   }
 }
 
 main().catch((error) => {
-  console.error(error);
+  console.error(error instanceof Error ? error.message : error);
   process.exitCode = 1;
 });
