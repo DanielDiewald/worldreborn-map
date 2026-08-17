@@ -1,0 +1,35 @@
+{
+  "name": "worldreborn-web",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "db:migrate": "tsx scripts/migrate.ts up",
+    "db:rollback": "tsx scripts/migrate.ts down",
+    "import:legacy-map": "tsx scripts/import-legacy-map.ts"
+  },
+  "dependencies": {
+    "argon2": "0.45.1",
+    "drizzle-orm": "0.45.2",
+    "next": "16.2.11",
+    "pg": "8.22.0",
+    "react": "19.2.7",
+    "react-dom": "19.2.7",
+    "zod": "4.4.3",
+    "server-only": "0.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "24.3.0",
+    "@types/pg": "8.15.5",
+    "@types/react": "19.1.12",
+    "@types/react-dom": "19.1.9",
+    "eslint": "9.34.0",
+    "eslint-config-next": "16.2.11",
+    "tsx": "4.20.5",
+    "typescript": "5.9.3"
+  }
+}
