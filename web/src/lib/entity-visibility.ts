@@ -93,10 +93,9 @@ export async function setPlayerEntityVisibility(args: {
 
   await pool.query(
     `INSERT INTO audit_log (project_id, actor_type, action, entity_type, entity_id, metadata)
-     VALUES ($1, 'admin', 'visibility.changed', $3, $4, $5::jsonb)`,
+     VALUES ($1, 'admin', 'visibility.changed', $2, $3, $4::jsonb)`,
     [
       args.projectId,
-      args.playerId,
       args.entityType,
       args.entityId,
       JSON.stringify({ player_id: args.playerId, visible: args.visible }),
