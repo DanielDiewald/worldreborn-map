@@ -4,6 +4,10 @@ on:
   push:
   pull_request:
 
+concurrency:
+  group: quality-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   web:
     runs-on: ubuntu-latest
