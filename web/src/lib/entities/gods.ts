@@ -1,0 +1,164 @@
+import "server-only";
+
+import { z } from "zod";
+import { pool } from "@/lib/db";
+
+const visibility = z.enum(["admin_only", "all_players", "selected_players"]);
+const godSchema = z.object({
+  name: z.string().trim().min(1).max(100),
+  gender: z.string().trim().min(1).max(10).default("unknown"),
+  image: z.string().trim().max(4000).optional(),
+  publicDescription: z.string().max(100_000).optional(),
+  adminNotes: z.string().max(100_000).optional(),
+  species: z.string().trim().max(80).optional(),
+  profession: z.string().trim().max(120).optional(),
+  personTitle: z.string().trim().max(120).optional(),
+  godTitle: z.string().trim().max(30).optional(),
+  faction: z.string().trim().max(30).optional(),
+  domain: z.string().trim().max(30).optional(),
+  visibilityMode: visibility.default("admin_only"),
+});
+
+export async function listGods(projectId: number) {
+  const result = await pool.query<{
+    god_id: number;
+    npc_id: number;
+    name: string;
+    image: string;
+    title: string;
+    domain: string;
+    faction: string;
+    visibility_mode: string;
+  }>(
+    `SELECT g.g_id AS god_id, n.n_id AS npc_id, n.name, n.image,
+            g.title, g.domain, g.faction, n.visibility_mode
+       FROM gods g
+       JOIN npcs n ON n.n_id = g.n_id
+      WHERE n.camp_id = $1
+        AND n.archived_at IS NULL
+      ORDER BY n.name, g.g_id`,
+    [projectId],
+  );
+  return result.rows;
+}
+
+export async function getGod(projectId: number, godId: number) {
+  const result = await pool.query<{
+    god_id: number;
+    npc_id: number;
+    name: string;
+    gender: string;
+    image: string;
+    notes: string;
+    public_description: string | null;
+    admin_notes: string | null;
+    person_title: string | null;
+    species: string | null;
+    profession: string | null;
+    visibility_mode: "admin_only" | "all_players" | "selected_players";
+    god_title: string;
+    faction: string;
+    domain: string;
+  }>(
+    `SELECT g.g_id AS god_id, n.n_id AS npc_id, n.name, n.gender, n.image, n.notes,
+            n.public_description, n.admin_notes, n.title AS person_title,
+            n.species, n.profession, n.visibility_mode,
+            g.title AS god_title, g.faction, g.domain
+       FROM gods g
+       JOIN npcs n ON n.n_id = g.n_id
+      WHERE n.camp_id = $1
+        AND g.g_id = $2
+        AND n.archived_at IS NULL`,
+    [projectId, godId],
+  );
+  return result.rows[0] ?? null;
+}
+
+export async function createGod(projectId: number, input: unknown) {
+  const data = godSchema.parse(input);
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const npc = await client.query<{ n_id: number }>(
+      `INSERT INTO npcs (
+         camp_id, name, notes, gender, image, public_description, admin_notes,
+         title, species, profession, visibility_mode, metadata, updated_at
+       )
+       SELECT c.camp_id, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, '{}'::jsonb, now()
+         FROM campaigns c
+        WHERE c.camp_id = $1 AND c.status <> 'archived'
+       RETURNING n_id`,
+      [projectId, data.name, data.adminNotes || "no notes yet", data.gender,
+        data.image || "noimage", data.publicDescription || null, data.adminNotes || null,
+        data.personTitle || null, data.species || null, data.profession || null,
+        data.visibilityMode],
+    );
+    if (npc.rowCount !== 1) throw new Error("Project not found or archived.");
+
+    const god = await client.query<{ g_id: number }>(
+      `INSERT INTO gods (n_id, faction, title, domain)
+       VALUES ($1, $2, $3, $4)
+       RETURNING g_id`,
+      [npc.rows[0].n_id, data.faction || "unknown", data.godTitle || "unknown", data.domain || "unknown"],
+    );
+    await client.query(
+      `INSERT INTO audit_log (project_id, actor_type, action, entity_type, entity_id, metadata)
+       VALUES ($1, 'admin', 'god.created', 'god', $2, $3::jsonb)`,
+      [projectId, god.rows[0].g_id, JSON.stringify({ npc_id: npc.rows[0].n_id })],
+    );
+    await client.query("COMMIT");
+    return god.rows[0].g_id;
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function updateGod(projectId: number, godId: number, input: unknown) {
+  const data = godSchema.parse(input);
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const row = await client.query<{ n_id: number }>(
+      `SELECT n.n_id FROM gods g JOIN npcs n ON n.n_id=g.n_id
+        WHERE g.g_id=$2 AND n.camp_id=$1 AND n.archived_at IS NULL
+        FOR UPDATE`,
+      [projectId, godId],
+    );
+    if (row.rowCount !== 1) throw new Error("God not found in this project.");
+    const npcId = row.rows[0].n_id;
+    await client.query(
+      `UPDATE npcs SET name=$3, notes=$4, gender=$5, image=$6,
+         public_description=$7, admin_notes=$8, title=$9, species=$10,
+         profession=$11, visibility_mode=$12, updated_at=now()
+       WHERE camp_id=$1 AND n_id=$2`,
+      [projectId, npcId, data.name, data.adminNotes || "no notes yet", data.gender,
+        data.image || "noimage", data.publicDescription || null, data.adminNotes || null,
+        data.personTitle || null, data.species || null, data.profession || null,
+        data.visibilityMode],
+    );
+    await client.query(
+      `UPDATE gods SET faction=$3, title=$4, domain=$5
+        WHERE g_id=$2 AND n_id=$1`,
+      [npcId, godId, data.faction || "unknown", data.godTitle || "unknown", data.domain || "unknown"],
+    );
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function archiveGod(projectId: number, godId: number) {
+  const result = await pool.query(
+    `UPDATE npcs n SET archived_at=now(), updated_at=now()
+       FROM gods g
+      WHERE g.g_id=$2 AND g.n_id=n.n_id AND n.camp_id=$1 AND n.archived_at IS NULL`,
+    [projectId, godId],
+  );
+  if (result.rowCount !== 1) throw new Error("God not found in this project.");
+}
