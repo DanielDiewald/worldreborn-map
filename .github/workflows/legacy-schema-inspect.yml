@@ -1,0 +1,14 @@
+name: Legacy Schema Inspect
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/legacy-schema-inspect.yml'
+
+jobs:
+  schema:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Inspect legacy PostgreSQL schema
+        run: pg_restore --schema-only --no-owner --no-privileges --file=- web/worldreborn-before-foundation.dump
