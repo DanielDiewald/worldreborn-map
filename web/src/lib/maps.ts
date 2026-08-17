@@ -1,0 +1,264 @@
+import "server-only";
+
+import { z } from "zod";
+import { pool } from "@/lib/db";
+
+const visibilitySchema = z.enum(["admin_only", "all_players", "selected_players"]);
+const markerTypeSchema = z.enum([
+  "location",
+  "npc",
+  "god",
+  "character",
+  "group",
+  "event",
+  "quest",
+  "portal",
+  "dungeon",
+  "landmark",
+  "custom",
+  "party_location",
+  "player_origin",
+]);
+
+const markerSchema = z.object({
+  markerType: markerTypeSchema,
+  entityType: z.string().trim().max(40).nullable().optional(),
+  entityId: z.coerce.number().int().positive().nullable().optional(),
+  coordinateMode: z.enum(["latlng", "xy"]).default("latlng"),
+  lat: z.coerce.number().finite().nullable().optional(),
+  lng: z.coerce.number().finite().nullable().optional(),
+  x: z.coerce.number().finite().nullable().optional(),
+  y: z.coerce.number().finite().nullable().optional(),
+  icon: z.string().trim().max(4000).nullable().optional(),
+  label: z.string().trim().min(1).max(200),
+  shortDescription: z.string().max(20_000).nullable().optional(),
+  visibilityMode: visibilitySchema.default("admin_only"),
+  layer: z.string().trim().min(1).max(80).default("default"),
+  zIndex: z.coerce.number().int().min(-100_000).max(100_000).default(0),
+}).superRefine((value, ctx) => {
+  if (value.coordinateMode === "latlng" && (value.lat == null || value.lng == null)) {
+    ctx.addIssue({ code: "custom", message: "Latitude and longitude are required for lat/lng markers." });
+  }
+  if (value.coordinateMode === "xy" && (value.x == null || value.y == null)) {
+    ctx.addIssue({ code: "custom", message: "X and Y are required for image-map markers." });
+  }
+  if ((value.entityType == null) !== (value.entityId == null)) {
+    ctx.addIssue({ code: "custom", message: "Entity type and entity ID must be set together." });
+  }
+});
+
+export async function listProjectMaps(projectId: number) {
+  const result = await pool.query<{
+    map_id: string;
+    name: string;
+    map_type: "tile" | "image";
+    tile_url: string | null;
+    image_path: string | null;
+    min_zoom: number;
+    max_zoom: number;
+    center_lat: number | null;
+    center_lng: number | null;
+    bounds: unknown;
+    config: Record<string, unknown>;
+    is_primary: boolean;
+  }>(
+    `SELECT map_id, name, map_type, tile_url, image_path, min_zoom, max_zoom,
+            center_lat, center_lng, bounds, config, is_primary
+       FROM project_maps
+      WHERE project_id = $1
+      ORDER BY is_primary DESC, map_id`,
+    [projectId],
+  );
+  return result.rows;
+}
+
+export async function getProjectMap(projectId: number, mapId: number) {
+  const result = await pool.query<{
+    map_id: string;
+    name: string;
+    map_type: "tile" | "image";
+    tile_url: string | null;
+    image_path: string | null;
+    min_zoom: number;
+    max_zoom: number;
+    center_lat: number | null;
+    center_lng: number | null;
+    bounds: unknown;
+    config: Record<string, unknown>;
+    is_primary: boolean;
+  }>(
+    `SELECT map_id, name, map_type, tile_url, image_path, min_zoom, max_zoom,
+            center_lat, center_lng, bounds, config, is_primary
+       FROM project_maps
+      WHERE project_id = $1 AND map_id = $2`,
+    [projectId, mapId],
+  );
+  return result.rows[0] ?? null;
+}
+
+export async function listMapMarkers(projectId: number, mapId: number) {
+  const result = await pool.query(
+    `SELECT marker_id, marker_type, entity_type, entity_id, coordinate_mode,
+            lat, lng, x, y, icon, label, short_description,
+            visibility_mode, layer, z_index, metadata
+       FROM map_markers
+      WHERE project_id = $1 AND map_id = $2
+      ORDER BY layer, z_index, marker_id`,
+    [projectId, mapId],
+  );
+  return result.rows;
+}
+
+async function assertMapBelongsToProject(projectId: number, mapId: number) {
+  const result = await pool.query(
+    "SELECT 1 FROM project_maps WHERE project_id = $1 AND map_id = $2",
+    [projectId, mapId],
+  );
+  if (result.rowCount !== 1) throw new Error("Map does not belong to this project.");
+}
+
+export async function createMapMarker(projectId: number, mapId: number, input: unknown) {
+  await assertMapBelongsToProject(projectId, mapId);
+  const marker = markerSchema.parse(input);
+  const result = await pool.query<{ marker_id: string }>(
+    `INSERT INTO map_markers (
+       project_id, map_id, marker_type, entity_type, entity_id, coordinate_mode,
+       lat, lng, x, y, icon, label, short_description, visibility_mode, layer, z_index
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+     RETURNING marker_id`,
+    [
+      projectId, mapId, marker.markerType, marker.entityType ?? null, marker.entityId ?? null,
+      marker.coordinateMode, marker.lat ?? null, marker.lng ?? null, marker.x ?? null, marker.y ?? null,
+      marker.icon ?? null, marker.label, marker.shortDescription ?? null, marker.visibilityMode,
+      marker.layer, marker.zIndex,
+    ],
+  );
+  const markerId = Number(result.rows[0].marker_id);
+  await pool.query(
+    `INSERT INTO audit_log (project_id, actor_type, action, entity_type, entity_id)
+     VALUES ($1, 'admin', 'map.marker_created', 'map_marker', $2)`,
+    [projectId, markerId],
+  );
+  return markerId;
+}
+
+export async function updateMapMarker(projectId: number, mapId: number, markerId: number, input: unknown) {
+  await assertMapBelongsToProject(projectId, mapId);
+  const marker = markerSchema.parse(input);
+  const result = await pool.query(
+    `UPDATE map_markers
+        SET marker_type=$4, entity_type=$5, entity_id=$6, coordinate_mode=$7,
+            lat=$8, lng=$9, x=$10, y=$11, icon=$12, label=$13,
+            short_description=$14, visibility_mode=$15, layer=$16, z_index=$17,
+            updated_at=now()
+      WHERE project_id=$1 AND map_id=$2 AND marker_id=$3`,
+    [
+      projectId, mapId, markerId, marker.markerType, marker.entityType ?? null, marker.entityId ?? null,
+      marker.coordinateMode, marker.lat ?? null, marker.lng ?? null, marker.x ?? null, marker.y ?? null,
+      marker.icon ?? null, marker.label, marker.shortDescription ?? null, marker.visibilityMode,
+      marker.layer, marker.zIndex,
+    ],
+  );
+  if (result.rowCount !== 1) throw new Error("Marker not found in this map/project.");
+}
+
+export async function moveMapMarker(projectId: number, mapId: number, markerId: number, position: { lat?: number; lng?: number; x?: number; y?: number }) {
+  await assertMapBelongsToProject(projectId, mapId);
+  const hasLatLng = Number.isFinite(position.lat) && Number.isFinite(position.lng);
+  const hasXy = Number.isFinite(position.x) && Number.isFinite(position.y);
+  if (hasLatLng === hasXy) throw new Error("Provide exactly one coordinate pair.");
+  const result = await pool.query(
+    `UPDATE map_markers
+        SET coordinate_mode = $4,
+            lat = $5, lng = $6, x = $7, y = $8, updated_at = now()
+      WHERE project_id = $1 AND map_id = $2 AND marker_id = $3`,
+    [
+      projectId, mapId, markerId, hasLatLng ? "latlng" : "xy",
+      hasLatLng ? position.lat : null, hasLatLng ? position.lng : null,
+      hasXy ? position.x : null, hasXy ? position.y : null,
+    ],
+  );
+  if (result.rowCount !== 1) throw new Error("Marker not found in this map/project.");
+  await pool.query(
+    `INSERT INTO audit_log (project_id, actor_type, action, entity_type, entity_id)
+     VALUES ($1, 'admin', 'map.marker_moved', 'map_marker', $2)`,
+    [projectId, markerId],
+  );
+}
+
+export async function deleteMapMarker(projectId: number, mapId: number, markerId: number) {
+  await assertMapBelongsToProject(projectId, mapId);
+  const result = await pool.query(
+    "DELETE FROM map_markers WHERE project_id=$1 AND map_id=$2 AND marker_id=$3",
+    [projectId, mapId, markerId],
+  );
+  if (result.rowCount !== 1) throw new Error("Marker not found in this map/project.");
+}
+
+export async function getVisibleMapMarkers(projectId: number, mapId: number, playerId: number) {
+  await assertMapBelongsToProject(projectId, mapId);
+  const result = await pool.query<{
+    marker_id: string;
+    marker_type: string;
+    coordinate_mode: string;
+    lat: number | null;
+    lng: number | null;
+    x: number | null;
+    y: number | null;
+    icon: string | null;
+    label: string;
+    short_description: string | null;
+    layer: string;
+    z_index: number;
+  }>(
+    `SELECT m.marker_id, m.marker_type, m.coordinate_mode, m.lat, m.lng, m.x, m.y,
+            m.icon, m.label, m.short_description, m.layer, m.z_index
+       FROM map_markers m
+       JOIN users u ON u.user_id = $3 AND u.camp_id = $1 AND u.active = true
+       LEFT JOIN entity_visibility mv
+         ON mv.project_id = m.project_id AND mv.player_id = $3
+        AND mv.entity_type = 'map_marker' AND mv.entity_id = m.marker_id
+      WHERE m.project_id = $1
+        AND m.map_id = $2
+        AND COALESCE(mv.visible, m.visibility_mode = 'all_players')
+        AND (
+          m.entity_type IS NULL OR
+          CASE m.entity_type
+            WHEN 'npc' THEN EXISTS (
+              SELECT 1 FROM npcs n
+              LEFT JOIN entity_visibility ev ON ev.project_id=n.camp_id AND ev.player_id=$3 AND ev.entity_type='npc' AND ev.entity_id=n.n_id
+              WHERE n.camp_id=$1 AND n.n_id=m.entity_id AND n.archived_at IS NULL AND COALESCE(ev.visible, n.visibility_mode='all_players')
+            )
+            WHEN 'god' THEN EXISTS (
+              SELECT 1 FROM gods g JOIN npcs n ON n.n_id=g.n_id
+              LEFT JOIN entity_visibility ev ON ev.project_id=n.camp_id AND ev.player_id=$3 AND ev.entity_type='god' AND ev.entity_id=g.g_id
+              WHERE n.camp_id=$1 AND g.g_id=m.entity_id AND n.archived_at IS NULL AND COALESCE(ev.visible, n.visibility_mode='all_players')
+            )
+            WHEN 'character' THEN EXISTS (
+              SELECT 1 FROM charakters c JOIN npcs n ON n.n_id=c.n_id
+              LEFT JOIN entity_visibility ev ON ev.project_id=n.camp_id AND ev.player_id=$3 AND ev.entity_type='character' AND ev.entity_id=c.char_id
+              WHERE n.camp_id=$1 AND c.char_id=m.entity_id AND n.archived_at IS NULL AND COALESCE(ev.visible, n.visibility_mode='all_players')
+            )
+            WHEN 'location' THEN EXISTS (
+              SELECT 1 FROM locations l
+              LEFT JOIN entity_visibility ev ON ev.project_id=l.camp_id AND ev.player_id=$3 AND ev.entity_type='location' AND ev.entity_id=l.loc_id
+              WHERE l.camp_id=$1 AND l.loc_id=m.entity_id AND l.archived_at IS NULL AND COALESCE(ev.visible, l.visibility_mode='all_players')
+            )
+            WHEN 'group' THEN EXISTS (
+              SELECT 1 FROM groups g
+              LEFT JOIN entity_visibility ev ON ev.project_id=g.camp_id AND ev.player_id=$3 AND ev.entity_type='group' AND ev.entity_id=g.gr_id
+              WHERE g.camp_id=$1 AND g.gr_id=m.entity_id AND g.archived_at IS NULL AND COALESCE(ev.visible, g.visibility_mode='all_players')
+            )
+            WHEN 'event' THEN EXISTS (
+              SELECT 1 FROM events e
+              LEFT JOIN entity_visibility ev ON ev.project_id=e.camp_id AND ev.player_id=$3 AND ev.entity_type='event' AND ev.entity_id=e.e_id
+              WHERE e.camp_id=$1 AND e.e_id=m.entity_id AND e.archived_at IS NULL AND COALESCE(ev.visible, e.visibility_mode='all_players')
+            )
+            ELSE false
+          END
+        )
+      ORDER BY m.layer, m.z_index, m.marker_id`,
+    [projectId, mapId, playerId],
+  );
+  return result.rows;
+}
