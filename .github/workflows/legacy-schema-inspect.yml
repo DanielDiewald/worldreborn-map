@@ -11,4 +11,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Inspect legacy PostgreSQL schema
-        run: pg_restore --schema-only --no-owner --no-privileges --file=- web/worldreborn-before-foundation.dump
+        run: >-
+          docker run --rm
+          -v "$PWD:/work"
+          -w /work
+          postgres:18
+          pg_restore --schema-only --no-owner --no-privileges --file=- web/worldreborn-before-foundation.dump
