@@ -52,7 +52,7 @@ export default async function NpcDetailPage({ params }: { params: Promise<{ proj
         <span className="disabled">Timeline <small>bald</small></span>
         <span className="disabled">Karte <small>bald</small></span>
         <span className="disabled">Media <small>bald</small></span>
-        <span className="disabled">Spieler-Sichtbarkeit <small>bald</small></span>
+        <Link href={`/admin/projects/${projectId}/npcs/${npcId}/visibility`}>Spieler-Sichtbarkeit</Link>
       </nav>
 
       <form action={updateAction} className="npc-detail-grid">
@@ -102,8 +102,8 @@ export default async function NpcDetailPage({ params }: { params: Promise<{ proj
           <section className="panel-card coming-card">
             <span className="panel-kicker">PLAYER KNOWLEDGE</span>
             <h2>Spielerinformationen</h2>
-            <p>Pro-Spieler-Sichtbarkeit und Schein-Einträge sind im Datenmodell vorbereitet und werden hier später direkt verwaltet.</p>
-            <span className="coming-badge">Nächste MVP-Phase</span>
+            <p>Verwalte pro Spieler, ob dieser NPC verborgen, als echter Eintrag oder als individuelle Version erscheint.</p>
+            <Link className="button primary" href={`/admin/projects/${projectId}/npcs/${npcId}/visibility`}>Spieler-Sichtbarkeit öffnen</Link>
           </section>
         </aside>
       </form>
