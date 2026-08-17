@@ -4,7 +4,7 @@ import { listProjects } from "@/lib/projects";
 import { logoutAdmin } from "@/app/admin/actions";
 import { ProjectSwitcher } from "./project-switcher";
 
-type Section = "dashboard" | "npcs" | "players" | "projects";
+type Section = "dashboard" | "npcs" | "gods" | "groups" | "locations" | "players" | "audit" | "projects";
 
 type Props = {
   children: ReactNode;
@@ -21,7 +21,7 @@ function Icon({ name }: { name: "home" | "map" | "timeline" | "person" | "god" |
     map: <><path d="m3 6 6-3 6 3 6-3v15l-6 3-6-3-6 3Z"/><path d="M9 3v15M15 6v15"/></>,
     timeline: <><path d="M5 4v16"/><path d="M5 7h6M5 12h10M5 17h7"/><circle cx="5" cy="7" r="1"/><circle cx="5" cy="12" r="1"/><circle cx="5" cy="17" r="1"/></>,
     person: <><circle cx="12" cy="8" r="4"/><path d="M4.5 21a7.5 7.5 0 0 1 15 0"/></>,
-    god: <><path d="M12 3 9.5 8H4l4.3 3.5L6.5 17 12 13.7 17.5 17l-1.8-5.5L20 8h-5.5Z"/></>,
+    god: <path d="M12 3 9.5 8H4l4.3 3.5L6.5 17 12 13.7 17.5 17l-1.8-5.5L20 8h-5.5Z"/>,
     character: <><circle cx="12" cy="7" r="3.5"/><path d="M6 21v-3a6 6 0 0 1 12 0v3"/><path d="M9 12.5 12 15l3-2.5"/></>,
     group: <><circle cx="9" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M3 20a6 6 0 0 1 12 0M14 15a5 5 0 0 1 7 4.5"/></>,
     location: <><path d="M20 10c0 5-8 11-8 11S4 15 4 10a8 8 0 1 1 16 0Z"/><circle cx="12" cy="10" r="2.5"/></>,
@@ -50,75 +50,29 @@ export async function AdminShell({ children, projectId, projectName, section = "
   return (
     <div className="admin-shell">
       <aside className="admin-sidebar">
-        <Link href="/admin" className="admin-brand">
-          <span className="brand-mark">WR</span>
-          <span><strong>WorldReborn</strong><small>World Archive</small></span>
-        </Link>
-
-        {projectId ? (
-          <div className="sidebar-project">
-            <span className="sidebar-project-label">Aktive Welt</span>
-            <strong>{projectName ?? `Projekt #${projectId}`}</strong>
-            <span>Projekt #{projectId}</span>
-          </div>
-        ) : null}
-
+        <Link href="/admin" className="admin-brand"><span className="brand-mark">WR</span><span><strong>WorldReborn</strong><small>World Archive</small></span></Link>
+        {projectId ? <div className="sidebar-project"><span className="sidebar-project-label">Aktive Welt</span><strong>{projectName ?? `Projekt #${projectId}`}</strong><span>Projekt #{projectId}</span></div> : null}
         <nav className="admin-nav" aria-label="Admin Navigation">
-          <div className="nav-section">
-            <span className="nav-section-title">Übersicht</span>
+          <div className="nav-section"><span className="nav-section-title">Übersicht</span>
             <NavItem href={projectId ? base : "/admin"} icon="home" active={section === "dashboard" || section === "projects"}>{projectId ? "Dashboard" : "Projekte"}</NavItem>
-            <NavItem icon="map" disabled>Map</NavItem>
-            <NavItem icon="timeline" disabled>Timeline</NavItem>
+            <NavItem icon="map" disabled>Map</NavItem><NavItem icon="timeline" disabled>Timeline</NavItem>
           </div>
-
-          <div className="nav-section">
-            <span className="nav-section-title">World</span>
+          <div className="nav-section"><span className="nav-section-title">World</span>
             <NavItem href={projectId ? `${base}/npcs` : undefined} icon="person" active={section === "npcs"} disabled={!projectId}>NPCs</NavItem>
-            <NavItem icon="god" disabled>Götter</NavItem>
+            <NavItem href={projectId ? `${base}/gods` : undefined} icon="god" active={section === "gods"} disabled={!projectId}>Götter</NavItem>
             <NavItem icon="character" disabled>Spielercharaktere</NavItem>
-            <NavItem icon="group" disabled>Gruppen</NavItem>
-            <NavItem icon="location" disabled>Orte</NavItem>
+            <NavItem href={projectId ? `${base}/groups` : undefined} icon="group" active={section === "groups"} disabled={!projectId}>Gruppen</NavItem>
+            <NavItem href={projectId ? `${base}/locations` : undefined} icon="location" active={section === "locations"} disabled={!projectId}>Orte</NavItem>
             <NavItem icon="link" disabled>Beziehungen</NavItem>
           </div>
-
-          <div className="nav-section">
-            <span className="nav-section-title">Wissen</span>
-            <NavItem icon="tree" disabled>Stammbaum</NavItem>
-            <NavItem icon="graph" disabled>Relationship Graph</NavItem>
-            <NavItem icon="media" disabled>Media</NavItem>
-          </div>
-
-          <div className="nav-section">
-            <span className="nav-section-title">Spieler</span>
-            <NavItem href={projectId ? `${base}/players` : undefined} icon="players" active={section === "players"} disabled={!projectId}>Players</NavItem>
-            <NavItem icon="shield" disabled>Permissions</NavItem>
-          </div>
-
-          <div className="nav-section">
-            <span className="nav-section-title">System</span>
-            <NavItem href="/admin" icon="world">Welten wechseln</NavItem>
-            <NavItem icon="settings" disabled>Project Settings</NavItem>
-          </div>
+          <div className="nav-section"><span className="nav-section-title">Wissen</span><NavItem icon="tree" disabled>Stammbaum</NavItem><NavItem icon="graph" disabled>Relationship Graph</NavItem><NavItem icon="media" disabled>Media</NavItem></div>
+          <div className="nav-section"><span className="nav-section-title">Spieler</span><NavItem href={projectId ? `${base}/players` : undefined} icon="players" active={section === "players"} disabled={!projectId}>Players</NavItem><NavItem icon="shield" disabled>Permissions</NavItem></div>
+          <div className="nav-section"><span className="nav-section-title">System</span><NavItem href="/admin" icon="world">Welten wechseln</NavItem><NavItem href={projectId ? `${base}/audit` : undefined} icon="shield" active={section === "audit"} disabled={!projectId}>Audit Log</NavItem><NavItem icon="settings" disabled>Project Settings</NavItem></div>
         </nav>
-
-        <div className="sidebar-footer">
-          <span className="sidebar-admin-avatar">A</span>
-          <div><strong>Administrator</strong><span>Volle Sichtbarkeit</span></div>
-          <form action={logoutAdmin}><button type="submit" className="logout-icon" title="Abmelden" aria-label="Abmelden">↗</button></form>
-        </div>
+        <div className="sidebar-footer"><span className="sidebar-admin-avatar">A</span><div><strong>Administrator</strong><span>Volle Sichtbarkeit</span></div><form action={logoutAdmin}><button type="submit" className="logout-icon" title="Abmelden" aria-label="Abmelden">↗</button></form></div>
       </aside>
-
       <div className="admin-workspace">
-        <header className="admin-topbar">
-          <div className="topbar-context">
-            <span className="topbar-eyebrow">{eyebrow ?? (projectName ? "WorldReborn / Welt" : "WorldReborn")}</span>
-            <strong>{title ?? projectName ?? "Administration"}</strong>
-          </div>
-          <div className="topbar-actions">
-            <ProjectSwitcher projects={projects.map((p) => ({ id: p.id, name: p.name }))} currentProjectId={projectId} />
-            <span className="admin-mode-pill"><span /> Admin Mode</span>
-          </div>
-        </header>
+        <header className="admin-topbar"><div className="topbar-context"><span className="topbar-eyebrow">{eyebrow ?? (projectName ? "WorldReborn / Welt" : "WorldReborn")}</span><strong>{title ?? projectName ?? "Administration"}</strong></div><div className="topbar-actions"><ProjectSwitcher projects={projects.map((p) => ({ id: p.id, name: p.name }))} currentProjectId={projectId}/><span className="admin-mode-pill"><span/> Admin Mode</span></div></header>
         <main className="admin-content">{children}</main>
       </div>
     </div>
