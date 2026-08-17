@@ -12,6 +12,11 @@ import {
 
 const positiveId = z.number().int().positive();
 
+export type PlayerCodeState = {
+  code: string | null;
+  error: string | null;
+};
+
 export async function createPlayerAction(projectId: number, formData: FormData) {
   await requireAdminSession();
   positiveId.parse(projectId);
@@ -25,8 +30,8 @@ export async function createPlayerAction(projectId: number, formData: FormData) 
 export async function issuePlayerCodeAction(
   projectId: number,
   playerId: number,
-  _previousState: { code: string | null; error: string | null },
-) {
+  _previousState: PlayerCodeState,
+): Promise<PlayerCodeState> {
   await requireAdminSession();
   positiveId.parse(projectId);
   positiveId.parse(playerId);
