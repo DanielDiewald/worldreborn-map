@@ -2,13 +2,9 @@ import "server-only";
 
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
+import { requireDatabaseUrl } from "./environment";
 
-const connectionString = process.env.DATABASE_URL;
-
-if (!connectionString) {
-  throw new Error("DATABASE_URL is required");
-}
-
+const connectionString = requireDatabaseUrl();
 const globalForDb = globalThis as unknown as { worldRebornPool?: Pool };
 
 export const pool =
