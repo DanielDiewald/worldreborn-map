@@ -1,0 +1,17 @@
+import Link from "next/link";
+import { notFound } from "next/navigation";
+import { AdminShell } from "@/components/admin/admin-shell";
+import { requireAdminSession } from "@/lib/auth/session";
+import { listGods } from "@/lib/entities/gods";
+import { getProject } from "@/lib/projects";
+import { createGodAction } from "./actions";
+
+export default async function GodsPage({ params }: { params: Promise<{ projectId: string }> }) {
+  await requireAdminSession();
+  const projectId=Number.parseInt((await params).projectId,10); if(!Number.isSafeInteger(projectId)||projectId<=0) notFound();
+  const [project,gods]=await Promise.all([getProject(projectId),listGods(projectId)]); if(!project) notFound();
+  return <AdminShell projectId={projectId} projectName={project.name} section="gods" eyebrow={`${project.name} / World`} title="Götter">
+    <div className="page-heading compact-heading"><div><div className="breadcrumb"><Link href={`/admin/projects/${projectId}`}>{project.name}</Link><span>/</span><strong>Götter</strong></div><h1>Pantheon & Gottheiten</h1><p>Jede Gottheit bleibt dieselbe kanonische Person über <code>npcs.n_id</code>.</p></div><details className="create-dropdown"><summary className="button primary">＋ Gottheit</summary><div className="create-popover"><form action={createGodAction.bind(null,projectId)} className="stack"><label>Name<input name="name" required/></label><label>Göttlicher Titel<input name="godTitle"/></label><label>Domain<input name="domain"/></label><label>Fraktion/Pantheon<input name="faction"/></label><label>Öffentliche Beschreibung<textarea name="publicDescription"/></label><label>Admin-Notizen<textarea name="adminNotes"/></label><label>Sichtbarkeit<select name="visibilityMode"><option value="admin_only">Admin only</option><option value="all_players">Alle Spieler</option><option value="selected_players">Ausgewählte</option></select></label><button className="primary">Gottheit anlegen</button></form></div></details></div>
+    <section className="panel-card"><div className="table-meta"><span><strong>{gods.length}</strong> Gottheiten</span></div>{gods.length===0?<div className="empty-state large"><strong>Keine Gottheiten</strong></div>:<div className="table-scroll"><table className="entity-table"><thead><tr><th>Name</th><th>Titel</th><th>Domain</th><th>Fraktion</th><th>Sichtbarkeit</th><th/></tr></thead><tbody>{gods.map((god)=><tr key={god.god_id}><td><strong>{god.name}</strong><br/><small className="muted">NPC #{god.npc_id}</small></td><td>{god.title}</td><td>{god.domain}</td><td>{god.faction}</td><td>{god.visibility_mode}</td><td><Link className="table-action" href={`/admin/projects/${projectId}/gods/${god.god_id}`}>→</Link></td></tr>)}</tbody></table></div>}</section>
+  </AdminShell>;
+}
