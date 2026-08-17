@@ -1,0 +1,6 @@
+import { PlayerShell } from "@/components/player-shell";
+import { requirePlayerSession } from "@/lib/auth/player-session";
+import { getPlayerContext } from "@/lib/player-view";
+import { listVisibleLocations } from "@/lib/player-world";
+
+export default async function PlayerLocationsPage(){const session=await requirePlayerSession();const [context,locations]=await Promise.all([getPlayerContext(session.projectId,session.playerId),listVisibleLocations(session.projectId,session.playerId)]);if(!context)return null;return <PlayerShell projectName={context.project_name} playerName={context.player_name}><div className="page-heading compact-heading"><div><span className="eyebrow">World / Locations</span><h1>Bekannte Orte</h1></div></div><section className="entity-card-grid">{locations.map((location)=><article className="panel-card" key={location.id}><span className="soft-label">{location.location_type||"Ort"}</span><h2>{location.name}</h2>{location.parent_name?<small className="muted">Teil von {location.parent_name}</small>:null}<p>{location.description||"Keine weiteren bekannten Informationen."}</p>{location.population?<small>Population: {location.population}</small>:null}</article>)}</section></PlayerShell>;}
