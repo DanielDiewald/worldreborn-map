@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  assignFamilyParentRouteLanes,
   buildFamilyGenerations,
   collectFamilyBranchNodes,
+  findFamilyDescendantLine,
   findFamilyMainLine,
   layoutFamilyTree,
+  resolveFamilyMainLine,
 } from "../src/lib/family-tree-layout";
 
 const people = [
@@ -38,6 +41,12 @@ test("main line follows the longest ancestor-to-descendant chain through the foc
   assert.deepEqual(mainLine, [1, 2, 5, 6]);
 });
 
+test("manual main line overrides automatic sibling choice only when it is a valid parent-child chain", () => {
+  assert.deepEqual(resolveFamilyMainLine(people, edges, [1, 2, 4], 2), [1, 2, 4]);
+  assert.deepEqual(resolveFamilyMainLine(people, edges, [1, 3, 4], 2), [1, 2, 5, 6]);
+  assert.deepEqual(findFamilyDescendantLine(people, edges, 2), [2, 5, 6]);
+});
+
 test("side branches can be expanded without pulling main-line nodes into the branch", () => {
   const mainLine = new Set([1, 2, 5, 6]);
   const branch = collectFamilyBranchNodes(2, mainLine, edges);
@@ -54,5 +63,25 @@ test("layout gives merging parent rows extra horizontal space and stable vertica
   assert.equal(parentA.generation, parentB.generation);
   assert.ok(child.y > parentA.y);
   assert.ok(Math.abs(parentA.x - parentB.x) >= 280);
-  assert.ok(layout.width >= 1380);
+  assert.ok(layout.width >= 1500);
+});
+
+test("short disconnected branches start lower so their youngest generation aligns with the main line", () => {
+  const extendedPeople = [...people, { personId: 7, name: "Short root" }, { personId: 8, name: "Short child" }];
+  const extendedEdges = [...edges, { a: 7, b: 8, code: "parent", directed: true }];
+  const visible = new Set(extendedPeople.map((person) => person.personId));
+  const layout = layoutFamilyTree(extendedPeople, extendedEdges, visible, [1, 2, 5, 6]);
+  assert.equal(layout.positions.get(7)?.generation, 2);
+  assert.equal(layout.positions.get(8)?.generation, 3);
+  assert.equal(layout.positions.get(8)?.y, layout.positions.get(6)?.y);
+});
+
+test("overlapping parent routes get separate lanes so unrelated families never look connected", () => {
+  const lanes = assignFamilyParentRouteLanes([
+    { childId: 10, generation: 5, startX: 100, endX: 900 },
+    { childId: 11, generation: 5, startX: 500, endX: 1200 },
+    { childId: 12, generation: 5, startX: 1250, endX: 1450 },
+  ]);
+  assert.notEqual(lanes.get(10), lanes.get(11));
+  assert.equal(lanes.get(10), lanes.get(12));
 });
