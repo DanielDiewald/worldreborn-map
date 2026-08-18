@@ -31,7 +31,7 @@ export default async function FamilyTreeDetailPage({ params }: { params: Promise
       <div className="page-heading compact-heading">
         <div>
           <h1>{graph.tree.name || `Stammbaum #${treeRef}`}</h1>
-          <p>{graph.tree.subtitle || graph.tree.description || "Genealogischer Stammbaum mit ältesten Generationen oben, fokussierter Hauptlinie und ausklappbaren Seitenzweigen."}</p>
+          <p>{graph.tree.subtitle || graph.tree.description || "Genealogischer Stammbaum mit ältesten Generationen oben, fokussierter und bearbeitbarer Hauptlinie sowie ausklappbaren Seitenzweigen."}</p>
         </div>
         <div className="heading-actions"><Link className="button" href={`/admin/projects/${projectId}/relationships`}>Beziehungen bearbeiten</Link></div>
       </div>
@@ -59,7 +59,7 @@ export default async function FamilyTreeDetailPage({ params }: { params: Promise
         <span><i /> Eltern / Kinder</span>
         <span><i className={styles.partner} /> Partner</span>
         <span>{graph.people.length} Personen · {graph.edges.length} Familienkanten</span>
-        <span>Im Baum horizontal und vertikal scrollen</span>
+        <span>Scrollen und zoomen direkt im Stammbaum</span>
       </div>
 
       {graph.people.length === 0 ? (
@@ -72,6 +72,7 @@ export default async function FamilyTreeDetailPage({ params }: { params: Promise
           rootPersonId={rootPersonId}
           named={named}
           treeId={treeRef}
+          savedMainLinePersonIds={graph.mainLinePersonIds}
         />
       )}
     </AdminShell>
