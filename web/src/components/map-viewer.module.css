@@ -83,6 +83,35 @@
   pointer-events: none;
 }
 
+.leafletGlyph {
+  width: 32px !important;
+  height: 32px !important;
+  margin: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+}
+
+.leafletGlyph span {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border: 2px solid rgba(245, 226, 161, .9);
+  border-radius: 50% 50% 50% 8px;
+  transform: rotate(-45deg);
+  background: rgba(23, 23, 27, .95);
+  color: #f2d778;
+  box-shadow: 0 2px 8px rgba(0,0,0,.38);
+  font-weight: 700;
+}
+
+.leafletGlyph span > i {
+  display: block;
+  transform: rotate(45deg);
+  font-style: normal;
+  line-height: 1;
+}
+
 .error {
   margin: 0;
 }
