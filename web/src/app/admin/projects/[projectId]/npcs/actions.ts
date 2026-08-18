@@ -4,11 +4,11 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { z } from "zod";
 import { requireAdminSession } from "@/lib/auth/session";
-import { getProjectCalendar, savePersonFantasyDate } from "@/lib/calendar";
+import { savePersonFantasyDate } from "@/lib/calendar";
 import { archiveNpc, createNpc, getNpc, updateNpc } from "@/lib/entities/npcs";
 import { parseFantasyDateFields } from "@/lib/fantasy-calendar";
 import { resolveEntityImageSource, setEntityImageReference } from "@/lib/media";
-import { savePersonDeathMetadata } from "@/lib/person-death";
+import { clearPersonDeathDate, savePersonDeathMetadata } from "@/lib/person-death";
 import { getProject } from "@/lib/projects";
 
 const npcSchema = z.object({
@@ -47,10 +47,7 @@ function dateValues(formData:FormData,prefix:string){return Object.fromEntries([
 
 async function saveLifeFields(projectId:number,personId:number,alive:boolean,formData:FormData){
   await savePersonDeathMetadata(projectId,personId,alive,formData.get("deathCauseCode"),formData.get("deathCauseDetail"));
-  if(alive){
-    if(await getProjectCalendar(projectId))await savePersonFantasyDate(projectId,personId,"death",null);
-    return;
-  }
+  if(alive){await clearPersonDeathDate(projectId,personId);return;}
   if(formData.has("deathPrecision"))await savePersonFantasyDate(projectId,personId,"death",parseFantasyDateFields(dateValues(formData,"death"),"death"));
 }
 
