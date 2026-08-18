@@ -64,7 +64,8 @@ export async function searchProjectEntities({ projectId, query = "", types, limi
          ))
          AND ($7::int IS NULL OR NOT EXISTS(
               SELECT 1 FROM family_tree_members ftm
-               WHERE ftm.family_tree_id=$7 AND ftm.person_id=n.n_id
+              JOIN family_trees ft ON ft.family_tree_id=ftm.family_tree_id
+               WHERE ft.project_id=$1 AND ftm.family_tree_id=$7 AND ftm.person_id=n.n_id
          ))
       UNION ALL
       SELECT 'group'::text,
@@ -110,9 +111,6 @@ export async function searchProjectEntities({ projectId, query = "", types, limi
 
 export async function getProjectEntityOption(projectId:number,entityType:SearchEntityType,entityId:number){
   if(!Number.isSafeInteger(entityId)||entityId<=0)return null;
-  const rows=await searchProjectEntities({projectId,types:[entityType],limit:25});
-  const inFirstPage=rows.find((row)=>row.entityId===entityId);
-  if(inFirstPage)return inFirstPage;
   const result=await pool.query<EntitySearchResult>(`
     SELECT x."entityType",x."entityId",x.name,x.kind,x.subtitle,x.image FROM (
       SELECT 'person'::text AS "entityType",n.n_id::int AS "entityId",n.name,
