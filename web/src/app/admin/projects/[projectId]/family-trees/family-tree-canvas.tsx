@@ -50,9 +50,21 @@ type Props = {
   savedMainLinePersonIds: number[];
 };
 
+type ResolvedFamilyUnit = {
+  key: string;
+  routeId: number;
+  generation: number;
+  parentIds: number[];
+  parents: Array<{ id: number; pos: FamilyTreePosition }>;
+  children: Array<{ id: number; pos: FamilyTreePosition; edges: TreeEdge[] }>;
+  startX: number;
+  endX: number;
+};
+
 const MIN_ZOOM = 0.35;
 const MAX_ZOOM = 1.25;
 const ZOOM_STEP = 0.1;
+const SIBLING_CODES = new Set(["sibling", "twin"]);
 
 function clampZoom(value: number) {
   return Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Math.round(value * 100) / 100));
@@ -68,6 +80,10 @@ function validImage(value: string) {
 
 function edgeKey(edge: TreeEdge) {
   return `${edge.code}-${edge.a}-${edge.b}-${edge.source}`;
+}
+
+function pairKey(a: number, b: number) {
+  return a < b ? `${a}:${b}` : `${b}:${a}`;
 }
 
 export function FamilyTreeCanvas({ projectId, people, edges, rootPersonId, named, treeId, savedMainLinePersonIds }: Props) {
@@ -238,93 +254,148 @@ export function FamilyTreeCanvas({ projectId, people, edges, rootPersonId, named
     });
   };
 
+  // A genealogy is rendered as family units, not as one long route per child.
+  // Children with the same known parent set share one family hub and one sibling bus.
   const parentGroups = new Map<number, TreeEdge[]>();
-  const partnerAndOther: TreeEdge[] = [];
   for (const edge of visibleEdges) {
     if (isFamilyParentEdge(edge)) parentGroups.set(edge.b, [...(parentGroups.get(edge.b) ?? []), edge]);
-    else partnerAndOther.push(edge);
   }
 
-  const resolvedParentGroups = [...parentGroups.entries()].map(([childId, group]) => {
-    const child = layout.positions.get(childId);
-    if (!child) return null;
-    const resolved = group
-      .map((edge) => ({ edge, parent: layout.positions.get(edge.a) }))
-      .filter((item): item is { edge: TreeEdge; parent: FamilyTreePosition } => Boolean(item.parent))
-      .sort((left, right) => left.parent.x - right.parent.x);
-    if (!resolved.length) return null;
-    const childX = child.x + FAMILY_NODE_WIDTH / 2;
-    const xs = [childX, ...resolved.map(({ parent }) => parent.x + FAMILY_NODE_WIDTH / 2)];
-    return { childId, child, resolved, childX, startX: Math.min(...xs), endX: Math.max(...xs) };
-  }).filter((group): group is NonNullable<typeof group> => Boolean(group));
+  const rawFamilyUnits = new Map<string, { generation: number; parentIds: number[]; childIds: number[]; childEdges: Map<number, TreeEdge[]> }>();
+  for (const [childId, childParentEdges] of parentGroups) {
+    const childPos = layout.positions.get(childId);
+    if (!childPos) continue;
+    const parentIds = [...new Set(childParentEdges.map((edge) => edge.a))].sort((a, b) => a - b);
+    if (!parentIds.length || parentIds.some((id) => !layout.positions.has(id))) continue;
+    const key = `${childPos.generation}|${parentIds.join(",")}`;
+    const existing = rawFamilyUnits.get(key) ?? { generation: childPos.generation, parentIds, childIds: [], childEdges: new Map<number, TreeEdge[]>() };
+    existing.childIds.push(childId);
+    existing.childEdges.set(childId, childParentEdges);
+    rawFamilyUnits.set(key, existing);
+  }
 
-  const routeLanes = assignFamilyParentRouteLanes(resolvedParentGroups.map<FamilyParentRoute>((group) => ({
-    childId: group.childId,
-    generation: group.child.generation,
-    startX: group.startX,
-    endX: group.endX,
+  const familyUnits: ResolvedFamilyUnit[] = [...rawFamilyUnits.entries()].map(([key, unit]) => {
+    const parents = unit.parentIds
+      .map((id) => ({ id, pos: layout.positions.get(id) }))
+      .filter((item): item is { id: number; pos: FamilyTreePosition } => Boolean(item.pos));
+    const children = [...new Set(unit.childIds)]
+      .map((id) => ({ id, pos: layout.positions.get(id), edges: unit.childEdges.get(id) ?? [] }))
+      .filter((item): item is { id: number; pos: FamilyTreePosition; edges: TreeEdge[] } => Boolean(item.pos))
+      .sort((a, b) => a.pos.x - b.pos.x || a.id - b.id);
+    const centers = [
+      ...parents.map(({ pos }) => pos.x + FAMILY_NODE_WIDTH / 2),
+      ...children.map(({ pos }) => pos.x + FAMILY_NODE_WIDTH / 2),
+    ];
+    return {
+      key,
+      routeId: Math.min(...children.map((child) => child.id)),
+      generation: unit.generation,
+      parentIds: unit.parentIds,
+      parents,
+      children,
+      startX: Math.min(...centers),
+      endX: Math.max(...centers),
+    };
+  }).filter((unit) => unit.parents.length > 0 && unit.children.length > 0);
+
+  const routeLanes = assignFamilyParentRouteLanes(familyUnits.map<FamilyParentRoute>((unit) => ({
+    childId: unit.routeId,
+    generation: unit.generation,
+    startX: unit.startX,
+    endX: unit.endX,
   })));
 
-  const parentSvg = resolvedParentGroups.map(({ childId, child, resolved, childX }) => {
-    const childTop = child.y;
-    const laneIndex = routeLanes.get(childId) ?? 0;
-    const maxParentBottom = Math.max(...resolved.map(({ parent }) => parent.y + FAMILY_NODE_HEIGHT));
-    const laneY = Math.max(maxParentBottom + 24, childTop - 48 - laneIndex * 20);
+  const coParentPairs = new Set<string>();
+  const siblingPairsFromParentage = new Set<string>();
+  for (const unit of familyUnits) {
+    for (let left = 0; left < unit.parentIds.length; left += 1) {
+      for (let right = left + 1; right < unit.parentIds.length; right += 1) coParentPairs.add(pairKey(unit.parentIds[left], unit.parentIds[right]));
+    }
+    for (let left = 0; left < unit.children.length; left += 1) {
+      for (let right = left + 1; right < unit.children.length; right += 1) siblingPairsFromParentage.add(pairKey(unit.children[left].id, unit.children[right].id));
+    }
+  }
 
-    if (resolved.length === 1) {
-      const { edge, parent } = resolved[0];
-      const parentX = parent.x + FAMILY_NODE_WIDTH / 2;
-      const parentBottom = parent.y + FAMILY_NODE_HEIGHT;
-      const main = mainPairs.has(`${edge.a}:${edge.b}`);
-      return (
-        <g key={`parent-group-${childId}`}>
-          <path d={`M ${parentX} ${parentBottom} V ${laneY} H ${childX} V ${childTop}`} className={main ? styles.mainParentEdge : styles.parentEdge} />
-          <circle cx={childX} cy={laneY} r="3" className={main ? styles.mainJunctionDot : styles.junctionDot} />
-          {edge.code !== "parent" ? <text x={(parentX + childX) / 2} y={laneY - 9} textAnchor="middle" className={styles.edgeLabel}>{edge.label}</text> : null}
-        </g>
-      );
+  const familySvg = familyUnits.map((unit) => {
+    const laneIndex = routeLanes.get(unit.routeId) ?? 0;
+    const parentXs = unit.parents.map(({ pos }) => pos.x + FAMILY_NODE_WIDTH / 2);
+    const childXs = unit.children.map(({ pos }) => pos.x + FAMILY_NODE_WIDTH / 2);
+    const parentBottom = Math.max(...unit.parents.map(({ pos }) => pos.y + FAMILY_NODE_HEIGHT));
+    const childTop = Math.min(...unit.children.map(({ pos }) => pos.y));
+    const gap = Math.max(80, childTop - parentBottom);
+    let parentJoinY = parentBottom + Math.max(28, Math.min(52, gap * .3)) + laneIndex * 12;
+    let childBusY = childTop - Math.max(34, Math.min(56, gap * .3)) - laneIndex * 10;
+    if (childBusY - parentJoinY < 26) {
+      const middle = (parentBottom + childTop) / 2;
+      parentJoinY = middle - 13;
+      childBusY = middle + 13;
     }
 
-    const parentXs = resolved.map(({ parent }) => parent.x + FAMILY_NODE_WIDTH / 2);
-    const minX = Math.min(...parentXs);
-    const maxX = Math.max(...parentXs);
-    const hasMain = resolved.some(({ edge }) => mainPairs.has(`${edge.a}:${edge.b}`));
+    const parentMinX = Math.min(...parentXs);
+    const parentMaxX = Math.max(...parentXs);
+    const hubX = unit.parents.length > 1 ? (parentMinX + parentMaxX) / 2 : parentXs[0];
+    const childBusMinX = Math.min(hubX, ...childXs);
+    const childBusMaxX = Math.max(hubX, ...childXs);
+    const unitHasMain = unit.children.some((child) => child.edges.some((edge) => mainPairs.has(`${edge.a}:${edge.b}`)));
+
     return (
-      <g key={`parent-group-${childId}`}>
-        <path d={`M ${minX} ${laneY} H ${maxX}`} className={styles.parentJunction} />
-        {resolved.map(({ edge, parent }) => {
-          const parentX = parent.x + FAMILY_NODE_WIDTH / 2;
-          const parentBottom = parent.y + FAMILY_NODE_HEIGHT;
-          const main = mainPairs.has(`${edge.a}:${edge.b}`);
+      <g key={`family-unit-${unit.key}`}>
+        {unit.parents.length > 1 ? <path d={`M ${parentMinX} ${parentJoinY} H ${parentMaxX}`} className={styles.parentJunction} /> : null}
+        {unit.parents.map(({ id, pos }) => {
+          const parentX = pos.x + FAMILY_NODE_WIDTH / 2;
+          const parentIsMain = unit.children.some((child) => child.edges.some((edge) => edge.a === id && mainPairs.has(`${edge.a}:${edge.b}`)));
+          return <path key={`family-parent-${unit.key}-${id}`} d={`M ${parentX} ${pos.y + FAMILY_NODE_HEIGHT} V ${parentJoinY}`} className={parentIsMain ? styles.mainParentEdge : styles.parentEdge} />;
+        })}
+        <circle cx={hubX} cy={parentJoinY} r="3.5" className={unitHasMain ? styles.mainJunctionDot : styles.junctionDot} />
+        <path d={`M ${hubX} ${parentJoinY} V ${childBusY}`} className={unitHasMain ? styles.mainParentEdge : styles.parentEdge} />
+        {childBusMaxX - childBusMinX > 1 ? <path d={`M ${childBusMinX} ${childBusY} H ${childBusMaxX}`} className={styles.parentJunction} /> : null}
+        <circle cx={hubX} cy={childBusY} r="3" className={unitHasMain ? styles.mainJunctionDot : styles.junctionDot} />
+        {unit.children.map((child) => {
+          const childX = child.pos.x + FAMILY_NODE_WIDTH / 2;
+          const childIsMain = child.edges.some((edge) => mainPairs.has(`${edge.a}:${edge.b}`));
+          const specialEdge = child.edges.find((edge) => edge.code !== "parent");
           return (
-            <g key={edgeKey(edge)}>
-              <path d={`M ${parentX} ${parentBottom} V ${laneY}`} className={main ? styles.mainParentEdge : styles.parentEdge} />
-              {edge.code !== "parent" ? <text x={parentX + 8} y={laneY - 9} textAnchor="start" className={styles.edgeLabel}>{edge.label}</text> : null}
+            <g key={`family-child-${unit.key}-${child.id}`}>
+              <path d={`M ${childX} ${childBusY} V ${child.pos.y}`} className={childIsMain ? styles.mainParentEdge : styles.parentEdge} />
+              <circle cx={childX} cy={childBusY} r="2.7" className={childIsMain ? styles.mainJunctionDot : styles.junctionDot} />
+              {specialEdge ? <text x={childX + 8} y={child.pos.y - 10} textAnchor="start" className={styles.edgeLabel}>{specialEdge.label}</text> : null}
             </g>
           );
         })}
-        <path d={`M ${childX} ${laneY} V ${childTop}`} className={hasMain ? styles.mainParentEdge : styles.parentEdge} />
-        <circle cx={childX} cy={laneY} r="3.5" className={hasMain ? styles.mainJunctionDot : styles.junctionDot} />
       </g>
     );
   });
 
-  const lateralSvg = partnerAndOther.map((edge, index) => {
+  const nonParentEdges = visibleEdges.filter((edge) => !isFamilyParentEdge(edge));
+  const partnerEdges = nonParentEdges.filter((edge) => FAMILY_PARTNER_CODES.has(edge.code) && !coParentPairs.has(pairKey(edge.a, edge.b)));
+  const siblingEdges = nonParentEdges.filter((edge) => SIBLING_CODES.has(edge.code) && (edge.code === "twin" || !siblingPairsFromParentage.has(pairKey(edge.a, edge.b))));
+  const otherKinshipEdges = nonParentEdges.filter((edge) => !FAMILY_PARTNER_CODES.has(edge.code) && !SIBLING_CODES.has(edge.code));
+
+  // Partners are connected side-to-side. They never use the lower parent/child routing area.
+  const partnerSvg = partnerEdges.map((edge) => {
+    const a = layout.positions.get(edge.a);
+    const b = layout.positions.get(edge.b);
+    if (!a || !b) return null;
+    const left = a.x <= b.x ? a : b;
+    const right = a.x <= b.x ? b : a;
+    const y1 = left.y + FAMILY_NODE_HEIGHT / 2;
+    const y2 = right.y + FAMILY_NODE_HEIGHT / 2;
+    const x1 = left.x + FAMILY_NODE_WIDTH;
+    const x2 = right.x;
+    const midX = (x1 + x2) / 2;
+    const path = Math.abs(y1 - y2) < 2 ? `M ${x1} ${y1} H ${x2}` : `M ${x1} ${y1} C ${midX} ${y1}, ${midX} ${y2}, ${x2} ${y2}`;
+    return <g key={edgeKey(edge)}><path d={path} className={styles.partnerEdge} /><text x={midX} y={(y1 + y2) / 2 - 8} textAnchor="middle" className={styles.edgeLabel}>{edge.label}</text></g>;
+  });
+
+  // Siblings and other lateral kinship are routed above cards. A sibling line can therefore never look like a parent bus.
+  const kinshipSvg = [...siblingEdges, ...otherKinshipEdges].map((edge, index) => {
     const a = layout.positions.get(edge.a);
     const b = layout.positions.get(edge.b);
     if (!a || !b) return null;
     const ax = a.x + FAMILY_NODE_WIDTH / 2;
     const bx = b.x + FAMILY_NODE_WIDTH / 2;
-    const aBottom = a.y + FAMILY_NODE_HEIGHT;
-    const bBottom = b.y + FAMILY_NODE_HEIGHT;
-    const laneY = Math.max(aBottom, bBottom) + 24 + (index % 4) * 12;
-    const partner = FAMILY_PARTNER_CODES.has(edge.code);
-    return (
-      <g key={edgeKey(edge)}>
-        <path d={`M ${ax} ${aBottom} V ${laneY} H ${bx} V ${bBottom}`} className={partner ? styles.partnerEdge : styles.otherEdge} />
-        <text x={(ax + bx) / 2} y={laneY - 8} textAnchor="middle" className={styles.edgeLabel}>{edge.label}</text>
-      </g>
-    );
+    const laneY = Math.min(a.y, b.y) - 20 - (index % 5) * 12;
+    return <g key={edgeKey(edge)}><path d={`M ${ax} ${a.y} V ${laneY} H ${bx} V ${b.y}`} className={styles.otherEdge} /><text x={(ax + bx) / 2} y={laneY - 7} textAnchor="middle" className={styles.edgeLabel}>{edge.label}</text></g>;
   });
 
   const visibleNodes = people.filter((person) => visibleIds.has(person.personId));
@@ -402,8 +473,9 @@ export function FamilyTreeCanvas({ projectId, people, edges, rootPersonId, named
           })}
 
           <svg className={styles.edges} width={layout.width} height={layout.height} aria-hidden="true">
-            {parentSvg}
-            {lateralSvg}
+            {familySvg}
+            {partnerSvg}
+            {kinshipSvg}
           </svg>
 
           {visibleNodes.map((node) => {
@@ -416,12 +488,7 @@ export function FamilyTreeCanvas({ projectId, people, edges, rootPersonId, named
             const removable = named && typeof treeId === "number" && !root && !editingMainLine;
             const removeAction = removable ? removeFamilyTreeMemberAction.bind(null, projectId, treeId, node.personId) : null;
             return (
-              <article
-                key={node.personId}
-                data-tree-node
-                className={`${styles.node} ${main ? styles.mainNode : styles.branchNode} ${root ? styles.rootNode : ""}`}
-                style={{ left: pos.x, top: pos.y }}
-              >
+              <article key={node.personId} data-tree-node className={`${styles.node} ${main ? styles.mainNode : styles.branchNode} ${root ? styles.rootNode : ""}`} style={{ left: pos.x, top: pos.y }}>
                 <Link href={personHref(projectId, node)} className={styles.nodeLink}>
                   <div className={styles.nodeHead}>
                     <span className={styles.avatar}>{validImage(node.image) ? <img src={node.image} alt="" /> : node.name.slice(0, 1).toUpperCase()}</span>
@@ -431,31 +498,21 @@ export function FamilyTreeCanvas({ projectId, people, edges, rootPersonId, named
                     </span>
                   </div>
                 </Link>
-
                 <div className={styles.nodeBadges}>
                   {main ? <span className={styles.mainBadge}>{editingMainLine ? "Hauptlinie · Vorschau" : "Hauptlinie"}</span> : <span>Seitenzweig</span>}
                   {root ? <span>Root</span> : null}
                   {node.roleLabel && node.roleLabel !== "Root" ? <span>{node.roleLabel}</span> : null}
                   {node.branchLabel ? <span>{node.branchLabel}</span> : null}
                 </div>
-
                 <div className={styles.nodeActions}>
-                  {!editingMainLine && main && branchCount > 0 && !showAll ? (
-                    <button type="button" className={styles.branchToggle} onClick={() => toggleBranch(node.personId)}>
-                      {branchOpen ? "− Seitenzweige" : `+ ${branchCount} Zweig${branchCount === 1 ? "" : "e"}`}
-                    </button>
-                  ) : null}
+                  {!editingMainLine && main && branchCount > 0 && !showAll ? <button type="button" className={styles.branchToggle} onClick={() => toggleBranch(node.personId)}>{branchOpen ? "− Seitenzweige" : `+ ${branchCount} Zweig${branchCount === 1 ? "" : "e"}`}</button> : null}
                   {removeAction ? <form action={removeAction}><button className={styles.removeButton}>Entfernen</button></form> : null}
                 </div>
               </article>
             );
           })}
 
-          {!editingMainLine && !showAll && disconnectedHidden > 0 ? (
-            <div className={styles.disconnectedHint}>
-              {disconnectedHidden} weitere Person{disconnectedHidden === 1 ? "" : "en"} liegen in getrennten Familienlinien. <button type="button" onClick={() => setShowAll(true)}>Alle anzeigen</button>
-            </div>
-          ) : null}
+          {!editingMainLine && !showAll && disconnectedHidden > 0 ? <div className={styles.disconnectedHint}>{disconnectedHidden} weitere Person{disconnectedHidden === 1 ? "" : "en"} liegen in getrennten Familienlinien. <button type="button" onClick={() => setShowAll(true)}>Alle anzeigen</button></div> : null}
         </div>
       </div>
     </div>
