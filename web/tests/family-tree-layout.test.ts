@@ -76,6 +76,30 @@ test("short disconnected branches start lower so their youngest generation align
   assert.equal(layout.positions.get(8)?.y, layout.positions.get(6)?.y);
 });
 
+test("side ancestors stay above the branch they lead to instead of being placed alphabetically", () => {
+  const anchoredPeople = [
+    { personId: 1, name: "Main ancestor" },
+    { personId: 2, name: "Main heir" },
+    { personId: 3, name: "Shared descendant" },
+    { personId: 4, name: "A side ancestor" },
+    { personId: 5, name: "A side parent" },
+  ];
+  const anchoredEdges = [
+    { a: 1, b: 2, code: "parent", directed: true },
+    { a: 2, b: 3, code: "parent", directed: true },
+    { a: 5, b: 3, code: "parent", directed: true },
+    { a: 4, b: 5, code: "parent", directed: true },
+  ];
+  const layout = layoutFamilyTree(anchoredPeople, anchoredEdges, new Set(anchoredPeople.map((person) => person.personId)), [1, 2, 3]);
+  const mainAncestor = layout.positions.get(1);
+  const sideAncestor = layout.positions.get(4);
+  const mainParent = layout.positions.get(2);
+  const sideParent = layout.positions.get(5);
+  assert.ok(mainAncestor && sideAncestor && mainParent && sideParent);
+  assert.ok(sideParent.x > mainParent.x);
+  assert.ok(sideAncestor.x > mainAncestor.x);
+});
+
 test("overlapping parent routes get separate lanes so unrelated families never look connected", () => {
   const lanes = assignFamilyParentRouteLanes([
     { childId: 10, generation: 5, startX: 100, endX: 900 },
