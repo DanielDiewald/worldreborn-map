@@ -36,6 +36,6 @@ export async function getMyCharacter(projectId:number,playerId:number){const r=a
  FROM chars a JOIN users u ON u.user_id=a.user_id AND u.camp_id=$1
  JOIN npcs n ON n.n_id=a.n_id AND n.camp_id=u.camp_id
  JOIN charakters c ON c.n_id=n.n_id JOIN locations l ON l.loc_id=c.loc_id AND l.camp_id=n.camp_id
- WHERE a.user_id=$2 AND n.archived_at IS NULL`,[projectId,playerId]);if(r.rowCount>1)throw new Error("Player character uniqueness invariant violated.");return r.rows[0]??null;}
+ WHERE a.user_id=$2 AND n.archived_at IS NULL`,[projectId,playerId]);if((r.rowCount??0)>1)throw new Error("Player character uniqueness invariant violated.");return r.rows[0]??null;}
 
 export async function listVisibleMaps(projectId:number){const r=await pool.query<{map_id:string;name:string;map_type:string;tile_url:string|null;image_path:string|null;min_zoom:number;max_zoom:number;center_lat:number|null;center_lng:number|null;bounds:unknown;config:Record<string,unknown>;is_primary:boolean}>("SELECT map_id,name,map_type,tile_url,image_path,min_zoom,max_zoom,center_lat,center_lng,bounds,config,is_primary FROM project_maps WHERE project_id=$1 ORDER BY is_primary DESC,map_id",[projectId]);return r.rows;}
