@@ -15,7 +15,6 @@ jobs:
       run:
         working-directory: web
     env:
-      DATABASE_URL: postgresql://build:build@127.0.0.1:65432/worldreborn_build
       ADMIN_USERNAME: admin
       ADMIN_PASSWORD: ci-only-password
     steps:
@@ -29,7 +28,10 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       - run: npm test
-      - run: npm run build
+      - name: Build
+        run: npm run build
+        env:
+          DATABASE_URL: postgresql://build:build@127.0.0.1:65432/worldreborn_build
 
   legacy-db:
     runs-on: ubuntu-latest
