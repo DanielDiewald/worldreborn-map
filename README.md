@@ -1,36 +1,35 @@
 # WorldReborn
 
-WorldReborn is being evolved from the existing static WorldReborn/Aetheris Leaflet map into a self-hosted worldbuilding and campaign-management application. The migration is intentionally additive: the legacy map assets, PostgreSQL IDs, relationships, and existing data remain authoritative and are not replaced by demo data.
+WorldReborn evolves the existing Aetheris/WorldReborn map into a self-hosted worldbuilding and campaign-management application without replacing the authoritative legacy data. Legacy table rows, IDs, map assets, relationship labels and worldbuilding content remain preserved.
 
-## Current implementation status
+## Canonical person model
 
-This foundation implements the first part of the MVP:
+The most important domain rule is documented in [`docs/data-model.md`](docs/data-model.md):
 
-- architecture and database migration documentation;
-- a reversible additive PostgreSQL foundation migration;
-- Next.js/TypeScript application under `web/` without replacing the legacy GitHub Pages files;
-- server-side admin login and opaque database-backed sessions;
-- login rate limiting;
-- project/world selection backed by the existing `campaigns` table;
-- project-isolated NPC list/create/edit/archive backed by PostgreSQL;
-- centralized player visibility/variant service foundation;
-- Aetheris legacy map configuration plus a tile-serving API;
-- idempotent import of the markers that are currently hard coded in the legacy `index.html`;
-- health endpoint.
+- `npcs` is the shared **person base**;
+- `npcs.n_id` is the canonical person ID;
+- `charakters` is the normal Character/NPC subtype;
+- `gods` is the God subtype;
+- `chars` assigns a Character person to a `users` player;
+- `char_id` and `g_id` are subtype-row IDs, never universal person IDs;
+- generic person references are persisted as `person + n_id`.
 
-Player login, the full map editor, media upload, timeline, family tree, relationship graph, and the remaining CRUD areas are subsequent MVP phases described in `docs/architecture.md`.
-
-## Repository layout
-
-The legacy map stays at repository root (`index.html`, `map/`, `icons/`, `scripts/`). The new application is isolated in `web/`. Database changes are in `migrations/`; design decisions are in `docs/`.
+For the supplied Aetheris dump the acceptance baseline is 130 persons = 114 Character/NPC persons + 16 Gods, with 0 Player Characters before new/test data.
 
 ## Requirements
 
-- Node.js compatible with Next.js 16
+- Node.js 24 for the CI/reference environment
 - npm
-- PostgreSQL containing the existing WorldReborn schema/data
+- PostgreSQL 17 or a client/server combination able to restore the supplied custom archive
+- a verified database backup before applying migrations
 
-Do not expose PostgreSQL directly to the browser. All credentials and secrets belong in environment variables.
+## Repository layout
+
+- legacy map/site assets: repository root, `map/`, `icons/`, `scripts/`
+- Next.js application: `web/`
+- additive/reversible database migrations: `migrations/`
+- architecture/data-model documentation: `docs/`
+- legacy acceptance fixture: `worldreborn-before-foundation.dump`
 
 ## Environment
 
@@ -39,80 +38,90 @@ cd web
 cp .env.example .env.local
 ```
 
-Configure at least:
+At minimum configure:
 
 ```dotenv
-DATABASE_URL=postgresql://postgres:postgres@DATABASE_HOST:5432/worldreborn
+DATABASE_URL=postgresql://worldreborn:worldreborn@127.0.0.1:5432/worldreborn
 ADMIN_USERNAME=admin
-ADMIN_PASSWORD=admin
+ADMIN_PASSWORD=development-only-password
 ```
 
-`ADMIN_PASSWORD=admin` is development-only. Production should use `ADMIN_PASSWORD_HASH` with an Argon2id hash and should not keep a plaintext admin password in environment configuration longer than necessary.
+Use `ADMIN_PASSWORD_HASH`/production secret management for production. Never commit credentials. If the web process cannot resolve `../map`, set `LEGACY_MAP_ROOT` to the absolute legacy tile directory.
 
-If the web process is launched from a directory where `../map` does not point to the legacy tile root, set `LEGACY_MAP_ROOT` to the absolute path of the repository's `map/` directory.
-
-## Database backup first
-
-Before applying any migration, create and verify a backup. The supplied migration does not delete legacy rows or change existing IDs, but a backup is still mandatory operational practice.
-
-Example:
-
-```bash
-pg_dump "$DATABASE_URL" --format=custom --file=worldreborn-before-foundation.dump
-```
-
-## Install and migrate
+## Install, migrate and audit
 
 ```bash
 cd web
-npm install
+npm ci
 npm run db:migrate
-npm run import:legacy-map
+npm run db:audit
 npm run dev
 ```
 
-The migration configures campaign `camp_id = 1` as the existing Aetheris project and points its primary tile map at the legacy map endpoint. The marker import is idempotent by `source_key` and only links a marker to an NPC when exactly one existing NPC name matches; it does not create fake NPCs to force a match.
+`npm run db:audit` is read-only. It reports structural failures as `ERROR` and tolerated historical data-quality conditions as `WARNING`. In particular, `groups.members != known memberships` is expected to be a warning because those values represent different concepts.
 
-## Admin login
+The CI workflow restores `worldreborn-before-foundation.dump` with PostgreSQL 17, verifies the exact pre-migration baseline, applies migrations, runs the read-only audit, then executes lint, typecheck, tests and the production build.
 
-Open `/admin/login`. With the development `.env.local` above, the credentials are `admin` / `admin`. The password is verified on the server with Argon2id; the browser receives only an HTTP-only session cookie containing a random opaque token. The database stores a SHA-256 hash of that session token.
+## Migration and rollback
 
-## Player login
+Apply all pending additive migrations:
 
-The player-code schema and permission/variant foundation are included, but the `/player` login UI and issuance workflow are intentionally not claimed as complete in this first implementation slice. Those are Phase 3/4 items and must use hashed access codes and server-side authorization before being exposed.
+```bash
+cd web
+npm run db:migrate
+```
 
-## Legacy map
+Roll back the latest migration:
 
-The original tile tree and icons are retained. Aetheris is seeded with:
+```bash
+npm run db:rollback
+```
 
-- map type: tile;
-- tile URL: `/api/legacy-map/{z}/{x}/{y}.jpeg`;
-- min zoom: 3;
-- max zoom: 6;
-- no-wrap legacy metadata.
+Do not edit a migration that may already have been applied. Corrections are added as later migrations. `0004_person_identity_normalization.sql` logs old/new generic person references so its rollback can restore the old namespace without numerically guessing `char_id`, `g_id` or `n_id`.
 
-The legacy markers are imported with:
+Never reset sequences with `setval(sequence, count(*))`; historical gaps are valid.
+
+## Legacy data rules
+
+Do not mass-clean historical worldbuilding data. Preserve values such as trailing/double whitespace, `unknown`, `noimage`, `no notes yet`, the common `2000-01-01` birthday placeholder, fantasy ages, legacy HTML, external URLs and original relationship labels. Normalize only for safe comparison/matching.
+
+`groups.members` is the estimated/total organization size. Known named members live in `group_memberships`; adding/removing a membership must not rewrite `groups.members`.
+
+Legacy HTML is untrusted content and must be sanitized before rendering. Legacy images may be HTTPS URLs, known relative paths or placeholders; malformed values must fail safely rather than being interpreted as filesystem paths or media IDs.
+
+## Maps
+
+The Aetheris legacy tile tree remains intact. Database-backed maps support tile/image map records and map markers. Person markers use `entity_type='person'` and `entity_id=n_id`; the visual marker role can still distinguish NPC, God or Character.
+
+The legacy marker import remains available:
 
 ```bash
 cd web
 npm run import:legacy-map
 ```
 
-After the map UI is migrated to the database-backed marker API, the old hard-coded markers can stop being used by the application without deleting the source history or tile assets.
+Name matching is only a lookup aid; after an unambiguous match the real entity ID is stored.
+
+## Player knowledge and security
+
+Player-facing data is filtered on the server before serialization. Person visibility and variants use `person + n_id`; `canPlayerViewPerson(projectId, playerId, nId)` is the canonical person visibility check.
+
+The application uses server-side sessions, hashed player access codes, project-scoped database queries, upload validation and authorized media delivery. Mutating routes/actions must retain origin/CSRF protection, project isolation and generic client-safe errors. Never expose SQL details, secrets or hidden entity IDs to players.
 
 ## Development checks
 
-After dependencies are installed:
-
 ```bash
+cd web
+npm ci
 npm run lint
 npm run typecheck
+npm test
 npm run build
 ```
 
-A database connection is required for runtime routes and server-rendered admin pages. The health endpoint is `/api/health` and returns a generic 503 response on database failure without exposing stack traces.
+Database-backed integration tests run when `DATABASE_URL` is available. The GitHub Actions `Quality` workflow supplies a restored PostgreSQL 17 legacy database and therefore runs the full migration acceptance path.
 
-## Production build
+## Production
 
 ```bash
 cd web
@@ -121,39 +130,10 @@ npm run build
 npm start
 ```
 
-Run behind HTTPS and a reverse proxy. Set production secrets through the deployment environment, not Git. If using the standalone build outside the repository layout, configure `LEGACY_MAP_ROOT` or package the legacy map assets alongside the service.
+Run behind HTTPS and a reverse proxy. Keep uploads outside executable/public paths and serve them only through authorized delivery endpoints. Configure production secrets through the deployment environment.
 
-## Storage / images
+## Documentation
 
-Existing external image URLs remain valid. The migration adds a general `media` table for future uploads. New upload handling is not yet enabled in this foundation; when enabled it must validate real MIME type, enforce size limits, randomize internal file names, prevent path traversal, and keep files non-executable. A storage adapter can later target local or S3-compatible storage.
-
-## Migration and rollback
-
-Detailed schema analysis and commands are in `docs/database-migration.md`.
-
-Apply:
-
-```bash
-cd web
-npm run db:migrate
-```
-
-Rollback the foundation additions:
-
-```bash
-cd web
-npm run db:rollback
-```
-
-The rollback removes structures introduced by this migration but does not delete legacy tables or legacy rows. As with all schema changes, restore from the verified pre-migration backup if operational validation fails.
-
-## Security model
-
-Project context is part of every relevant service query. Player-facing data must be filtered server-side before it is serialized. `entity_visibility` expresses explicit access, while `player_entity_variants` provides per-player overrides/decoys. The central service in `web/src/lib/permissions.ts` is the starting point for `canPlayerViewEntity(...)` and `getEntityForPlayer(...)`; future map, timeline, search, relationships, and family-tree endpoints must call the same authorization layer rather than hiding secret data in React components.
-
-## Architecture
-
-See:
-
-- `docs/architecture.md`
-- `docs/database-migration.md`
+- [`docs/data-model.md`](docs/data-model.md)
+- [`docs/architecture.md`](docs/architecture.md)
+- [`docs/database-migration.md`](docs/database-migration.md)

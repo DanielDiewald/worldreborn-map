@@ -1,117 +1,37 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { AdminShell } from "@/components/admin/admin-shell";
+import { CharacterLifeStatusInput } from "@/components/character-life-status-input";
+import { ConfirmAction } from "@/components/confirm-action";
+import { EntityPicker } from "@/components/entity-picker";
+import { FantasyDateInput } from "@/components/fantasy-date-input";
+import { ImageSourceInput } from "@/components/image-source-input";
+import { SubmitButton } from "@/components/submit-button";
 import { requireAdminSession } from "@/lib/auth/session";
+import { calendarStatus, personChronology } from "@/lib/calendar";
+import { deathCauseLabel } from "@/lib/death-causes";
 import { getNpc } from "@/lib/entities/npcs";
 import { getProject } from "@/lib/projects";
 import { archiveNpcAction, updateNpcAction } from "../actions";
 
-function visibilityLabel(mode: string) {
-  if (mode === "all_players") return "Alle Spieler";
-  if (mode === "selected_players") return "Ausgewählte Spieler";
-  return "Nur Admin";
-}
+function visibilityLabel(mode:string){return mode==="all_players"?"Alle Spieler":mode==="selected_players"?"Ausgewählte Spieler":"Nur Admin";}
+function meaningful(value:string|null|undefined){return Boolean(value&&value.trim()&&!['unknown','no notes yet'].includes(value.trim().toLowerCase()));}
 
-export default async function NpcDetailPage({ params }: { params: Promise<{ projectId: string; npcId: string }> }) {
-  await requireAdminSession();
-  const raw = await params;
-  const projectId = Number.parseInt(raw.projectId, 10);
-  const npcId = Number.parseInt(raw.npcId, 10);
-  if (!Number.isSafeInteger(projectId) || !Number.isSafeInteger(npcId) || projectId <= 0 || npcId <= 0) notFound();
-
-  const [project, npc] = await Promise.all([getProject(projectId), getNpc(projectId, npcId)]);
-  if (!project || !npc) notFound();
-
-  const updateAction = updateNpcAction.bind(null, projectId, npcId);
-  const archiveAction = archiveNpcAction.bind(null, projectId, npcId);
-
-  return (
-    <AdminShell projectId={projectId} projectName={project.name} section="npcs" eyebrow={`${project.name} / NPCs`} title={npc.name}>
-      <div className="breadcrumb"><Link href={`/admin/projects/${projectId}`}>{project.name}</Link><span>/</span><Link href={`/admin/projects/${projectId}/npcs`}>NPCs</Link><span>/</span><strong>{npc.name}</strong></div>
-
-      <section className="entity-hero">
-        <div className="entity-avatar hero-avatar">
-          {npc.image && npc.image !== "noimage" ? <img src={npc.image} alt="" /> : npc.name.slice(0, 1).toUpperCase()}
-        </div>
-        <div className="entity-hero-main">
-          <span className="page-kicker">NPC #{npc.nId}</span>
-          <h1>{npc.name}</h1>
-          <p>{[npc.title, npc.species, npc.profession].filter(Boolean).join(" · ") || "Noch keine Charakterdetails hinterlegt"}</p>
-          <div className="hero-tags">
-            <span className="soft-label">{npc.gender || "unknown"}</span>
-            <span className={`visibility-pill ${npc.visibilityMode}`}>{visibilityLabel(npc.visibilityMode)}</span>
-          </div>
-        </div>
-        <Link href={`/admin/projects/${projectId}/npcs`} className="button ghost">← Zur NPC-Liste</Link>
-      </section>
-
-      <nav className="entity-tabs" aria-label="NPC Bereiche">
-        <span className="active">Übersicht</span>
-        <span className="disabled">Beziehungen <small>bald</small></span>
-        <span className="disabled">Familie <small>bald</small></span>
-        <span className="disabled">Timeline <small>bald</small></span>
-        <span className="disabled">Karte <small>bald</small></span>
-        <span className="disabled">Media <small>bald</small></span>
-        <span className="disabled">Spieler-Sichtbarkeit <small>bald</small></span>
-      </nav>
-
-      <form action={updateAction} className="npc-detail-grid">
-        <div className="stack detail-main">
-          <section className="panel-card edit-section">
-            <div className="panel-heading"><div><span className="panel-kicker">IDENTITÄT</span><h2>Grundinformationen</h2></div><span className="record-id">DB-ID #{npc.nId}</span></div>
-            <div className="field-grid two">
-              <label>Name<input name="name" maxLength={100} defaultValue={npc.name} required /></label>
-              <label>Titel<input name="title" maxLength={120} defaultValue={npc.title ?? ""} placeholder="z. B. Lord, Königin, Erzmagier" /></label>
-              <label>Spezies / Race<input name="species" maxLength={80} defaultValue={npc.species ?? ""} /></label>
-              <label>Beruf / Rolle<input name="profession" maxLength={120} defaultValue={npc.profession ?? ""} /></label>
-              <label>Geschlecht<input name="gender" maxLength={10} defaultValue={npc.gender} /></label>
-              <label>Bild-URL<input name="image" maxLength={4000} defaultValue={npc.image === "noimage" ? "" : npc.image} /></label>
-            </div>
-          </section>
-
-          <section className="panel-card edit-section">
-            <div className="panel-heading"><div><span className="panel-kicker">SPIELER-WISSEN</span><h2>Öffentliche Beschreibung</h2></div><span className="public-tag">Spielerfähig</span></div>
-            <p className="section-help">Dieser Text ist die Basis für Informationen, die später gezielt für Spieler freigeschaltet werden können.</p>
-            <textarea name="publicDescription" className="large-textarea" maxLength={100000} defaultValue={npc.publicDescription ?? ""} placeholder="Was darf grundsätzlich über diese Person bekannt sein?" />
-          </section>
-
-          <section className="panel-card edit-section secret-section">
-            <div className="panel-heading"><div><span className="panel-kicker">ADMIN ONLY</span><h2>Geheime Notizen</h2></div><span className="secret-tag">◆ Wahrheit</span></div>
-            <p className="section-help">Diese Informationen dürfen niemals ungeprüft an Spieler ausgeliefert werden. Bestehendes Legacy-HTML wird als Quelltext bewahrt.</p>
-            <textarea name="adminNotes" className="large-textarea" maxLength={100000} defaultValue={npc.adminNotes ?? npc.notes} />
-          </section>
-
-          <div className="sticky-savebar">
-            <div><strong>Änderungen speichern</strong><span>Die bestehende NPC-ID bleibt unverändert.</span></div>
-            <button className="primary" type="submit">Änderungen speichern</button>
-          </div>
-        </div>
-
-        <aside className="stack detail-side">
-          <section className="panel-card profile-summary">
-            <div className="panel-heading"><div><span className="panel-kicker">ÜBERSICHT</span><h2>Datensatz</h2></div></div>
-            <dl className="summary-list">
-              <div><dt>Projekt</dt><dd>{project.name}</dd></div>
-              <div><dt>NPC-ID</dt><dd>#{npc.nId}</dd></div>
-              <div><dt>Sichtbarkeit</dt><dd>{visibilityLabel(npc.visibilityMode)}</dd></div>
-              <div><dt>Spezies</dt><dd>{npc.species || "—"}</dd></div>
-              <div><dt>Beruf</dt><dd>{npc.profession || "—"}</dd></div>
-            </dl>
-          </section>
-
-          <section className="panel-card coming-card">
-            <span className="panel-kicker">PLAYER KNOWLEDGE</span>
-            <h2>Spielerinformationen</h2>
-            <p>Pro-Spieler-Sichtbarkeit und Schein-Einträge sind im Datenmodell vorbereitet und werden hier später direkt verwaltet.</p>
-            <span className="coming-badge">Nächste MVP-Phase</span>
-          </section>
-        </aside>
-      </form>
-
-      <section className="danger-zone">
-        <div><span className="panel-kicker">DANGER ZONE</span><h2>NPC archivieren</h2><p>Der Legacy-Datensatz und seine ID werden nicht gelöscht.</p></div>
-        <form action={archiveAction}><button className="danger" type="submit">NPC archivieren</button></form>
-      </section>
-    </AdminShell>
-  );
+export default async function NpcDetailPage({params}:{params:Promise<{projectId:string;npcId:string}>}){
+  await requireAdminSession();const raw=await params;const projectId=Number.parseInt(raw.projectId,10);const npcId=Number.parseInt(raw.npcId,10);if(!Number.isSafeInteger(projectId)||!Number.isSafeInteger(npcId)||projectId<=0||npcId<=0)notFound();
+  const [project,npc,chronology]=await Promise.all([getProject(projectId),getNpc(projectId,npcId),personChronology(projectId,npcId)]);if(!project||!npc)notFound();
+  const calendar=chronology.calendar;const calendarReady=calendar?calendarStatus(calendar).ready:false;const ageLabel=chronology.ageLabel||(npc.age>0?`${npc.age} Jahre (Legacy-Angabe)`:"Alter unbekannt");const legacySpecies=meaningful(npc.species)&&npc.species?.trim().toLowerCase()!==npc.race?.trim().toLowerCase()?npc.species:null;const causeLabel=deathCauseLabel(npc.deathCauseCode);const causeText=[causeLabel,npc.deathCauseDetail].filter(Boolean).join(" · ")||null;
+  return <AdminShell projectId={projectId} projectName={project.name} section="npcs" eyebrow={`${project.name} / NPCs`} title={npc.name}>
+    <div className="breadcrumb"><Link href={`/admin/projects/${projectId}`}>{project.name}</Link><span>/</span><Link href={`/admin/projects/${projectId}/npcs`}>NPCs</Link><span>/</span><strong>{npc.name}</strong></div>
+    <section className="entity-hero"><div className="entity-avatar hero-avatar">{npc.image&&npc.image!=="noimage"?<img src={npc.image} alt="" loading="lazy"/>:npc.name.slice(0,1).toUpperCase()}</div><div className="entity-hero-main"><span className="page-kicker">Person #{npc.nId} · Character-Subtype #{npc.charId}</span><h1>{npc.name}</h1><p>{[npc.title,npc.race,npc.className,npc.profession].filter(meaningful).join(" · ")}</p><div className="hero-tags"><span className="soft-label">NPC / Character</span><span className="soft-label">{npc.alive?"Lebendig":"Verstorben"}</span><span className="soft-label">{ageLabel}</span>{chronology.lifeLabel?<span className="soft-label">{chronology.lifeLabel}</span>:null}{!npc.alive&&causeText?<span className="soft-label">{causeText}</span>:null}<span className={`visibility-pill ${npc.visibilityMode}`}>{visibilityLabel(npc.visibilityMode)}</span></div></div></section>
+    <form action={updateNpcAction.bind(null,projectId,npcId)} className="npc-detail-grid"><div className="stack detail-main">
+      <section className="panel-card edit-section"><div className="panel-heading"><div><span className="panel-kicker">GEMEINSAME PERSON · NPCS</span><h2>Identität & Basisprofil</h2></div><span className="record-id">n_id #{npc.nId}</span></div><p className="section-help">Gemeinsame Personendaten. Race/Spezies, Klasse, Ort und Chronologie gehören bewusst nicht hierher.</p><div className="field-grid two"><label>Name<input name="name" defaultValue={npc.name} required/></label><label>Personen-Titel<input name="title" defaultValue={npc.title??""}/></label><label>Beruf / Profession<input name="profession" defaultValue={npc.profession??""}/></label><label>Geschlecht<input name="gender" defaultValue={npc.gender}/></label></div><ImageSourceInput current={npc.image} label="Bild / Porträt"/>{legacySpecies?<div className="notice warning"><strong>Legacy-Species:</strong> {legacySpecies}. Dieser Wert wird nicht mehr editiert; kanonisch ist <code>charakters.race</code>. Der Migrationsaudit entscheidet Konflikte nicht automatisch.</div>:null}</section>
+      <section className="panel-card edit-section"><div className="panel-heading"><div><span className="panel-kicker">CHARACTER SUBTYPE · CHARAKTERS</span><h2>Character-Daten</h2></div><span className="record-id">char_id #{npc.charId}</span></div><p className="section-help"><code>charakters.race</code> ist die kanonische Race/Spezies-Angabe. Legacy-<code>age</code>/<code>birthday</code> werden bei normalen Edits nicht mehr überschrieben.</p><div className="field-grid two"><EntityPicker projectId={projectId} name="locationId" types={["location"]} label="Ort" required allowClear={false} initialValue={String(npc.locId)} initialLabel={npc.location} initialKind="Location" placeholder="Location suchen …"/><label>Race / Spezies<input name="race" defaultValue={npc.race} required/></label><label>Klasse<input name="className" defaultValue={npc.className}/></label><label><input name="follower" type="checkbox" defaultChecked={npc.follower}/> Follower</label></div></section>
+      <section className="panel-card edit-section"><div className="panel-heading"><div><span className="panel-kicker">WELTZEIT & LEBENSSTATUS</span><h2>Geburt, Tod & Alter</h2></div><strong>{ageLabel}</strong></div>{calendar&&calendarReady?<FantasyDateInput prefix="birth" label="Geburtsdatum" months={calendar.months} beforeEraLabel={calendar.beforeEraLabel} afterEraLabel={calendar.afterEraLabel} hasYearZero={calendar.hasYearZero} value={chronology.birth}/>:<div className="empty-state"><strong>Weltkalender zuerst konfigurieren</strong><p>Legacy age: {npc.age||"—"} · Legacy birthday: {npc.birthday||"—"}</p><Link className="button" href={`/admin/projects/${projectId}/settings/calendar`}>Weltkalender öffnen</Link></div>}<CharacterLifeStatusInput defaultAlive={npc.alive} calendar={calendar&&calendarReady?calendar:null} deathDate={chronology.death} deathCauseCode={npc.deathCauseCode} deathCauseDetail={npc.deathCauseDetail}/><p className="section-help">Bei verstorbenen Personen wird das Alter bis zum Todesdatum berechnet. Das Todesdatum wird außerdem automatisch in Stammbäumen als Lebensspanne berücksichtigt.</p></section>
+      <section className="panel-card edit-section"><div className="panel-heading"><div><span className="panel-kicker">SPIELER-WISSEN · NPCS</span><h2>Öffentliche Beschreibung</h2></div></div><textarea name="publicDescription" className="large-textarea" defaultValue={npc.publicDescription??""}/></section>
+      <section className="panel-card edit-section secret-section"><div className="panel-heading"><div><span className="panel-kicker">ADMIN ONLY · NPCS</span><h2>Geheime Notizen</h2></div></div><textarea name="adminNotes" className="large-textarea" defaultValue={npc.adminNotes??npc.notes}/></section>
+      <div className="sticky-savebar"><div><strong>Änderungen speichern</strong><span>Person, Character-Subtype und Fantasy-Chronologie bleiben klar getrennt.</span></div><SubmitButton className="primary" pendingLabel="Speichere NPC …">Speichern</SubmitButton></div>
+    </div><aside className="stack detail-side"><section className="panel-card profile-summary"><div className="panel-heading"><div><span className="panel-kicker">IDENTITÄT</span><h2>Datensatz</h2></div></div><dl className="summary-list"><div><dt>Person-ID</dt><dd>#{npc.nId}</dd></div><div><dt>Character-Subtype</dt><dd>#{npc.charId}</dd></div><div><dt>Status</dt><dd>{npc.alive?"Lebendig":"Verstorben"}</dd></div>{!npc.alive&&chronology.deathLabel?<div><dt>Gestorben</dt><dd>{chronology.deathLabel}</dd></div>:null}{!npc.alive&&causeText?<div><dt>Todesursache</dt><dd>{causeText}</dd></div>:null}<div><dt>Ort</dt><dd>{npc.location}</dd></div><div><dt>Race / Spezies</dt><dd>{npc.race}</dd></div><div><dt>Alter</dt><dd>{ageLabel}</dd></div><div><dt>Sichtbarkeit</dt><dd>{visibilityLabel(npc.visibilityMode)}</dd></div></dl></section><section className="panel-card profile-summary"><div className="panel-heading"><div><span className="panel-kicker">VERKNÜPFUNGEN</span><h2>Hinzufügen & verwalten</h2></div></div><div className="stack"><Link className="button primary" href={`/admin/projects/${projectId}/relationships?personId=${npc.nId}&create=1`}>＋ Beziehung hinzufügen</Link><Link className="button" href={`/admin/projects/${projectId}/relationships?personId=${npc.nId}`}>Beziehungen verwalten</Link><Link className="button" href={`/admin/projects/${projectId}/groups?personId=${npc.nId}`}>＋ Gruppe zuordnen</Link><Link className="button" href={`/admin/projects/${projectId}/family-trees?personId=${npc.nId}`}>＋ Zu Stammbaum</Link><Link className="button" href={`/admin/projects/${projectId}/family-trees/all`}>Im Gesamtgraph anzeigen</Link></div></section><Link className="button primary" href={`/admin/projects/${projectId}/npcs/${npcId}/visibility`}>Spieler-Sichtbarkeit</Link></aside></form>
+    <section className="danger-zone"><div><span className="panel-kicker">DANGER ZONE</span><h2>Person archivieren</h2><p>Legacy-Zeilen werden nicht physisch gelöscht.</p></div><ConfirmAction action={archiveNpcAction.bind(null,projectId,npcId)} title={`${npc.name} archivieren?`} description="Die Person verschwindet aus aktiven Listen. Legacy-Zeilen und historische Daten bleiben erhalten." triggerLabel="Archivieren…" confirmLabel="Person archivieren" triggerClassName="button danger"/></section>
+  </AdminShell>;
 }

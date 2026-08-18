@@ -1,0 +1,16 @@
+"use server";
+
+import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
+import { requireAdminSession } from "@/lib/auth/session";
+import { archiveGroup, createGroup, getGroup, removeGroupMembership, setGroupMembership, updateGroup } from "@/lib/entities/groups";
+import { resolveEntityImageSource, setEntityImageReference } from "@/lib/media";
+
+function values(formData:FormData,image:string){return{name:formData.get("name"),image,notes:formData.get("notes")||undefined,motto:formData.get("motto")||undefined,locationId:formData.get("locationId"),groupType:formData.get("groupType")||undefined,visibilityMode:formData.get("visibilityMode")||"admin_only"};}
+function refresh(projectId:number,groupId:number){revalidatePath(`/admin/projects/${projectId}/groups/${groupId}`);revalidatePath(`/admin/projects/${projectId}/groups`);}
+export async function createGroupAction(projectId:number,formData:FormData){await requireAdminSession();const source=await resolveEntityImageSource(projectId,formData,{title:String(formData.get("name")??"Gruppe")});const id=await createGroup(projectId,values(formData,source.image));if(source.uploaded)await setEntityImageReference(projectId,"group",id,source);redirect(`/admin/projects/${projectId}/groups/${id}`);}
+export async function updateGroupAction(projectId:number,groupId:number,formData:FormData){await requireAdminSession();const current=await getGroup(projectId,groupId);if(!current)throw new Error("Group not found in this project.");const source=await resolveEntityImageSource(projectId,formData,{current:String(current.image??""),entityType:"group",entityId:groupId,title:String(current.name)});await updateGroup(projectId,groupId,values(formData,source.image));if(source.uploaded||source.removed||source.image!==current.image)await setEntityImageReference(projectId,"group",groupId,source);refresh(projectId,groupId);}
+export async function setGroupMembershipAction(projectId:number,groupId:number,personId:number,formData:FormData){await requireAdminSession();await setGroupMembership({projectId,groupId,entityType:"person",entityId:personId,role:String(formData.get("role")??"")||undefined,rank:String(formData.get("rank")??"")||undefined,status:String(formData.get("status")??"active"),isLeader:formData.get("isLeader")==="on",startDisplay:String(formData.get("startDisplay")??"")||undefined,endDisplay:String(formData.get("endDisplay")??"")||undefined,notes:String(formData.get("membershipNotes")??"")||undefined});refresh(projectId,groupId);}
+export async function addGroupMembershipAction(projectId:number,groupId:number,formData:FormData){const personId=Number(formData.get("personId"));if(!Number.isSafeInteger(personId)||personId<=0)throw new Error("Bitte eine Person wählen.");return setGroupMembershipAction(projectId,groupId,personId,formData);}
+export async function removeGroupMembershipAction(projectId:number,groupId:number,personId:number){await requireAdminSession();await removeGroupMembership({projectId,groupId,entityType:"person",entityId:personId});refresh(projectId,groupId);}
+export async function archiveGroupAction(projectId:number,groupId:number){await requireAdminSession();await archiveGroup(projectId,groupId);redirect(`/admin/projects/${projectId}/groups`);}

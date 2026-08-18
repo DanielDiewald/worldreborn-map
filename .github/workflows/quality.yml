@@ -1,0 +1,84 @@
+name: Quality
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: quality-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    env:
+      ADMIN_USERNAME: admin
+      ADMIN_PASSWORD: ci-only-password
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - name: Build
+        run: npm run build
+        env:
+          DATABASE_URL: postgresql://build:build@127.0.0.1:65432/worldreborn_build
+
+  legacy-db:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: worldreborn
+          POSTGRES_USER: worldreborn
+          POSTGRES_PASSWORD: worldreborn
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U worldreborn -d worldreborn"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    defaults:
+      run:
+        working-directory: web
+    env:
+      DATABASE_URL: postgresql://worldreborn:worldreborn@127.0.0.1:5432/worldreborn
+      ADMIN_USERNAME: admin
+      ADMIN_PASSWORD: ci-only-password
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - name: Require supplied legacy dump
+        run: |
+          if [ ! -f worldreborn-before-foundation.dump ]; then
+            echo "::error::Required legacy dump worldreborn-before-foundation.dump is not present in the repository checkout. Restore/migration acceptance cannot be verified without the supplied archive."
+            exit 1
+          fi
+      - name: Restore legacy dump with PostgreSQL 17
+        run: |
+          CID="$(docker ps --filter ancestor=postgres:17 --format '{{.ID}}' | head -n 1)"
+          test -n "$CID"
+          docker exec -i "$CID" pg_restore -U worldreborn -d worldreborn --no-owner --no-privileges < worldreborn-before-foundation.dump
+      - name: Verify legacy baseline before migrations
+        run: |
+          CID="$(docker ps --filter ancestor=postgres:17 --format '{{.ID}}' | head -n 1)"
+          docker exec -i "$CID" psql -v ON_ERROR_STOP=1 -U worldreborn -d worldreborn < scripts/legacy-baseline.sql
+      - run: npm run db:migrate
+      - run: npm run db:audit
+      - run: npm test
