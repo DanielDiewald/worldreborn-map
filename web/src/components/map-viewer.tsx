@@ -137,7 +137,10 @@ function ensureLeaflet(): Promise<LeafletApi> {
   return new Promise((resolve, reject) => {
     const existing = document.querySelector<HTMLScriptElement>(`script[src="${LEAFLET_JS}"]`);
     const script = existing ?? document.createElement("script");
-    const done = () => (window.L ? resolve(window.L) : reject(new Error("Leaflet konnte nicht geladen werden.")));
+    const done = () => {
+      if (window.L) resolve(window.L);
+      else reject(new Error("Leaflet konnte nicht geladen werden."));
+    };
     script.addEventListener("load", done, { once: true });
     script.addEventListener("error", () => reject(new Error("Leaflet konnte nicht geladen werden.")), { once: true });
     if (!existing) {
@@ -202,8 +205,9 @@ function MarkerEditor({
   onCancel: () => void;
 }) {
   const deleteDialog = useRef<HTMLDialogElement>(null);
-  const initialVisibility = (marker?.visibility_mode ?? "admin_only") as MarkerPayload["visibilityMode"];
-  const [visibility, setVisibility] = useState<MarkerPayload["visibilityMode"]>(initialVisibility);
+  const [visibility, setVisibility] = useState<MarkerPayload["visibilityMode"]>(
+    (marker?.visibility_mode ?? "admin_only") as MarkerPayload["visibilityMode"],
+  );
   const supportedEntity = marker?.entity_type && ["person", "group", "location", "event"].includes(marker.entity_type);
   const currentPoint = marker ? markerPosition(marker) : draftPoint ? [draftPoint.lat, draftPoint.lng] as [number, number] : null;
   const currentTypeKnown = marker ? MARKER_TYPES.some(([value]) => value === marker.marker_type) : true;
@@ -250,7 +254,7 @@ function MarkerEditor({
     });
   };
 
-  return <form className={styles.editor} onSubmit={submit} key={marker ? `marker-${marker.marker_id}` : `draft-${draftPoint?.lat}-${draftPoint?.lng}`}>
+  return <form className={styles.editor} onSubmit={submit}>
     <div className={styles.sideHeader}>
       <div>
         <span className="panel-kicker">{marker ? "MARKER BEARBEITEN" : "NEUER MARKER"}</span>
@@ -344,7 +348,7 @@ export function MapViewer({
   const [selectedMarkerId, setSelectedMarkerId] = useState<string | null>(null);
   const [addMode, setAddMode] = useState(false);
   const [draftPoint, setDraftPoint] = useState<LeafletPoint | null>(null);
-  const [mapReady, setMapReady] = useState(false);
+  const [mapRevision, setMapRevision] = useState(0);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
@@ -360,12 +364,14 @@ export function MapViewer({
       .filter(Boolean)
       .some((value) => String(value).toLocaleLowerCase("de").includes(normalizedQuery));
   }), [markers, normalizedQuery, typeFilter, visibleLayers]);
-  const selectedMarker = useMemo(() => selectedMarkerId ? markers.find((marker)=>String(marker.marker_id)===selectedMarkerId) ?? null : null, [markers, selectedMarkerId]);
+  const selectedMarker = useMemo(
+    () => selectedMarkerId ? markers.find((marker)=>String(marker.marker_id)===selectedMarkerId) ?? null : null,
+    [markers, selectedMarkerId],
+  );
 
   useEffect(() => {
     let active = true;
-    setMapReady(false);
-    setError(null);
+    const markerInstances = markerInstancesRef.current;
     ensureLeaflet().then((L) => {
       if (!active || !elementRef.current) return;
       const simple = mapConfig.mapType === "image";
@@ -386,27 +392,32 @@ export function MapViewer({
           maxZoom: mapConfig.maxZoom,
           noWrap: Boolean(mapConfig.config.no_wrap ?? mapConfig.config.noWrap ?? true),
         }).addTo(map);
-        map.setView([mapConfig.centerLat ?? 0, mapConfig.centerLng ?? 0], Math.max(mapConfig.minZoom, Math.min(mapConfig.maxZoom, 3)));
+        map.setView(
+          [mapConfig.centerLat ?? 0, mapConfig.centerLng ?? 0],
+          Math.max(mapConfig.minZoom, Math.min(mapConfig.maxZoom, 3)),
+        );
       }
 
-      setMapReady(true);
+      setMapRevision((current) => current + 1);
       window.setTimeout(() => map.invalidateSize(), 0);
-    }).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "Karte konnte nicht geladen werden."));
+    }).catch((reason: unknown) => {
+      if (active) setError(reason instanceof Error ? reason.message : "Karte konnte nicht geladen werden.");
+    });
 
     return () => {
       active = false;
-      markerInstancesRef.current.forEach((marker) => marker.remove());
-      markerInstancesRef.current.clear();
-      leafletMapRef.current?.remove();
+      markerInstances.forEach((marker) => marker.remove());
+      markerInstances.clear();
+      const map = leafletMapRef.current;
+      if (map) map.remove();
       leafletMapRef.current = null;
       leafletApiRef.current = null;
-      setMapReady(false);
     };
   }, [mapConfig]);
 
   useEffect(() => {
     const map = leafletMapRef.current;
-    if (!map || !mapReady || !admin) return;
+    if (!map || mapRevision === 0 || !admin) return;
     const handler = (event: { latlng: LeafletPoint }) => {
       if (!addMode) return;
       setSelectedMarkerId(null);
@@ -415,22 +426,24 @@ export function MapViewer({
     };
     map.on("click", handler);
     return () => map.off("click", handler);
-  }, [addMode, admin, mapConfig.mapType, mapReady]);
+  }, [addMode, admin, mapConfig.mapType, mapRevision]);
 
   useEffect(() => {
     const L = leafletApiRef.current;
     const map = leafletMapRef.current;
-    if (!L || !map || !mapReady) return;
+    if (!L || !map || mapRevision === 0) return;
 
-    markerInstancesRef.current.forEach((instance) => instance.remove());
-    markerInstancesRef.current.clear();
+    const previousInstances = markerInstancesRef.current;
+    previousInstances.forEach((instance) => instance.remove());
+    const instances = new Map<string, LeafletMarker>();
+    markerInstancesRef.current = instances;
 
     for (const marker of visibleMarkers) {
       const position = markerPosition(marker);
       if (!position) continue;
       const id = String(marker.marker_id);
       const instance = L.marker(position, { draggable: admin, zIndexOffset: marker.z_index }).addTo(map);
-      markerInstancesRef.current.set(id, instance);
+      instances.set(id, instance);
       instance.bindTooltip(marker.label, { direction: "top" });
       instance.on("click", () => setSelectedMarkerId(id));
 
@@ -451,6 +464,7 @@ export function MapViewer({
         entity.textContent = `↳ ${marker.entity_label}${marker.entity_kind ? ` · ${marker.entity_kind}` : ""}`;
         popup.append(entity);
       }
+
       if (admin && projectId) {
         const href = entityHref(projectId, marker);
         if (href) {
@@ -498,7 +512,12 @@ export function MapViewer({
       }
       instance.bindPopup(popup);
     }
-  }, [admin, mapConfig.mapId, mapReady, projectId, visibleMarkers]);
+
+    return () => {
+      instances.forEach((instance) => instance.remove());
+      instances.clear();
+    };
+  }, [admin, mapConfig.mapId, mapRevision, projectId, visibleMarkers]);
 
   const refreshMarkers = async () => {
     if (!admin || !projectId) return;
@@ -538,7 +557,9 @@ export function MapViewer({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      if (!response.ok) throw new Error(await responseMessage(response, editing ? "Marker konnte nicht gespeichert werden." : "Marker konnte nicht angelegt werden."));
+      if (!response.ok) {
+        throw new Error(await responseMessage(response, editing ? "Marker konnte nicht gespeichert werden." : "Marker konnte nicht angelegt werden."));
+      }
       let createdId: string | null = null;
       if (!editing) {
         const result = await response.json() as { markerId?: string | number };
@@ -579,10 +600,11 @@ export function MapViewer({
 
   const focusMarker = (marker: MapMarker) => {
     const position = markerPosition(marker);
-    if (!position || !leafletMapRef.current) return;
+    const map = leafletMapRef.current;
+    if (!position || !map) return;
     setSelectedMarkerId(String(marker.marker_id));
     setDraftPoint(null);
-    leafletMapRef.current.panTo(position);
+    map.panTo(position);
     markerInstancesRef.current.get(String(marker.marker_id))?.openPopup();
   };
 
@@ -610,18 +632,23 @@ export function MapViewer({
       const bounds = parseBounds(mapConfig.bounds) ?? [[0,0],[1000,1000]];
       map.fitBounds(bounds, { padding: [20,20] });
     } else {
-      map.setView([mapConfig.centerLat ?? 0, mapConfig.centerLng ?? 0], Math.max(mapConfig.minZoom, Math.min(mapConfig.maxZoom, 3)));
+      map.setView(
+        [mapConfig.centerLat ?? 0, mapConfig.centerLng ?? 0],
+        Math.max(mapConfig.minZoom, Math.min(mapConfig.maxZoom, 3)),
+      );
     }
   };
 
   const toggleLayer = (layer: string) => setVisibleLayers((current) => {
     const next = new Set(current);
-    if (next.has(layer)) next.delete(layer); else next.add(layer);
+    if (next.has(layer)) next.delete(layer);
+    else next.add(layer);
     return next;
   });
 
-  const showAllLayers = () => setVisibleLayers(new Set(layers));
-  const hideAllLayers = () => setVisibleLayers(new Set());
+  const editorKey = selectedMarker
+    ? `marker-${selectedMarker.marker_id}`
+    : `draft-${draftPoint?.lat ?? "none"}-${draftPoint?.lng ?? "none"}`;
 
   return <div className={styles.workspace}>
     <div className={styles.mapColumn}>
@@ -643,7 +670,7 @@ export function MapViewer({
       <div className={styles.layerBar}>
         <strong>Layer</strong>
         {layers.map((layer)=><label key={layer} className={styles.layerToggle}><input type="checkbox" checked={visibleLayers.has(layer)} onChange={()=>toggleLayer(layer)}/><span>{layer}</span></label>)}
-        {layers.length>1?<><button type="button" className="button ghost" onClick={showAllLayers}>Alle</button><button type="button" className="button ghost" onClick={hideAllLayers}>Keine</button></>:null}
+        {layers.length>1?<><button type="button" className="button ghost" onClick={()=>setVisibleLayers(new Set(layers))}>Alle</button><button type="button" className="button ghost" onClick={()=>setVisibleLayers(new Set())}>Keine</button></>:null}
       </div>
 
       {error ? <p className={`form-error ${styles.error}`} role="alert">{error}</p> : null}
@@ -672,6 +699,7 @@ export function MapViewer({
 
       {admin && projectId && (selectedMarker || draftPoint) ? <section className="panel-card">
         <MarkerEditor
+          key={editorKey}
           projectId={projectId}
           mapConfig={mapConfig}
           marker={selectedMarker}
