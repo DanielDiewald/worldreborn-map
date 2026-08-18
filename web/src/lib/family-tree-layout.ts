@@ -1,6 +1,7 @@
 export type FamilyLayoutNode = { personId: number; name: string };
 export type FamilyLayoutEdge = { a: number; b: number; code: string; directed: boolean };
 export type FamilyTreePosition = { x: number; y: number; generation: number };
+export type FamilyParentRoute = { childId: number; generation: number; startX: number; endX: number };
 
 export const FAMILY_PARENT_CODES = new Set(["parent", "adoptive_parent", "step_parent", "guardian"]);
 export const FAMILY_PARTNER_CODES = new Set(["spouse", "romantic", "ex_partner", "engaged", "widowed_from"]);
@@ -8,10 +9,10 @@ const SAME_GENERATION_CODES = new Set([...FAMILY_PARTNER_CODES, "sibling", "twin
 
 export const FAMILY_NODE_WIDTH = 280;
 export const FAMILY_NODE_HEIGHT = 138;
-export const FAMILY_ROW_GAP = 286;
-const SIDE_PADDING = 150;
-const TOP_PADDING = 92;
-const BASE_COLUMN_GAP = 138;
+export const FAMILY_ROW_GAP = 310;
+const SIDE_PADDING = 170;
+const TOP_PADDING = 108;
+const BASE_COLUMN_GAP = 150;
 
 export function isFamilyParentEdge(edge: FamilyLayoutEdge) {
   return edge.directed && FAMILY_PARENT_CODES.has(edge.code);
@@ -49,9 +50,21 @@ function pathWins(candidate: number[], current: number[]) {
   return candidate.join(":") < current.join(":");
 }
 
-export function buildFamilyGenerations(nodes: FamilyLayoutNode[], edges: FamilyLayoutEdge[]) {
+function parentMaps(nodes: FamilyLayoutNode[], edges: FamilyLayoutEdge[]) {
   const ids = new Set(nodes.map((node) => node.personId));
   const parentEdges = edges.filter((edge) => ids.has(edge.a) && ids.has(edge.b) && isFamilyParentEdge(edge));
+  const parents = new Map<number, number[]>();
+  const children = new Map<number, number[]>();
+  for (const edge of parentEdges) {
+    parents.set(edge.b, [...(parents.get(edge.b) ?? []), edge.a]);
+    children.set(edge.a, [...(children.get(edge.a) ?? []), edge.b]);
+  }
+  for (const values of [...parents.values(), ...children.values()]) values.sort((a, b) => a - b);
+  return { ids, parentEdges, parents, children };
+}
+
+export function buildFamilyGenerations(nodes: FamilyLayoutNode[], edges: FamilyLayoutEdge[]) {
+  const { ids, parentEdges } = parentMaps(nodes, edges);
   const parentsByChild = new Map<number, number[]>();
   for (const edge of parentEdges) parentsByChild.set(edge.b, [...(parentsByChild.get(edge.b) ?? []), edge.a]);
 
@@ -104,17 +117,28 @@ export function buildFamilyGenerations(nodes: FamilyLayoutNode[], edges: FamilyL
   return result;
 }
 
-export function findFamilyMainLine(nodes: FamilyLayoutNode[], edges: FamilyLayoutEdge[], focusPersonId?: number | null) {
-  const ids = new Set(nodes.map((node) => node.personId));
-  const parentEdges = edges.filter((edge) => ids.has(edge.a) && ids.has(edge.b) && isFamilyParentEdge(edge));
-  const parents = new Map<number, number[]>();
-  const children = new Map<number, number[]>();
-  for (const edge of parentEdges) {
-    parents.set(edge.b, [...(parents.get(edge.b) ?? []), edge.a]);
-    children.set(edge.a, [...(children.get(edge.a) ?? []), edge.b]);
-  }
-  for (const values of [...parents.values(), ...children.values()]) values.sort((a, b) => a - b);
+export function findFamilyDescendantLine(nodes: FamilyLayoutNode[], edges: FamilyLayoutEdge[], startPersonId: number) {
+  const { ids, children } = parentMaps(nodes, edges);
+  if (!ids.has(startPersonId)) return [];
+  const memo = new Map<number, number[]>();
+  const visit = (id: number, active = new Set<number>()): number[] => {
+    const cached = memo.get(id);
+    if (cached) return cached;
+    if (active.has(id)) return [id];
+    const nextActive = new Set(active).add(id);
+    let best = [id];
+    for (const child of children.get(id) ?? []) {
+      const candidate = [id, ...visit(child, nextActive)];
+      if (pathWins(candidate, best)) best = candidate;
+    }
+    memo.set(id, best);
+    return best;
+  };
+  return visit(startPersonId);
+}
 
+export function findFamilyMainLine(nodes: FamilyLayoutNode[], edges: FamilyLayoutEdge[], focusPersonId?: number | null) {
+  const { ids, parents, children } = parentMaps(nodes, edges);
   const ancestorMemo = new Map<number, number[]>();
   const ancestorPath = (id: number, active = new Set<number>()): number[] => {
     const memo = ancestorMemo.get(id);
@@ -161,9 +185,23 @@ export function findFamilyMainLine(nodes: FamilyLayoutNode[], edges: FamilyLayou
   return best;
 }
 
-function adjacency(edges: FamilyLayoutEdge[]) {
+export function resolveFamilyMainLine(
+  nodes: FamilyLayoutNode[],
+  edges: FamilyLayoutEdge[],
+  preferredIds: number[] | null | undefined,
+  focusPersonId?: number | null,
+) {
+  const ids = new Set(nodes.map((node) => node.personId));
+  const parentPairs = new Set(edges.filter(isFamilyParentEdge).map((edge) => `${edge.a}:${edge.b}`));
+  const preferred = [...new Set(preferredIds ?? [])].filter((id) => ids.has(id));
+  if (preferred.length > 0 && preferred.every((id, index) => index === 0 || parentPairs.has(`${preferred[index - 1]}:${id}`))) return preferred;
+  return findFamilyMainLine(nodes, edges, focusPersonId);
+}
+
+function adjacency(edges: FamilyLayoutEdge[], ids?: Set<number>) {
   const map = new Map<number, Set<number>>();
   for (const edge of edges) {
+    if (ids && (!ids.has(edge.a) || !ids.has(edge.b))) continue;
     const a = map.get(edge.a) ?? new Set<number>();
     const b = map.get(edge.b) ?? new Set<number>();
     a.add(edge.b);
@@ -189,6 +227,42 @@ export function collectFamilyBranchNodes(anchorId: number, mainLine: Set<number>
   return result;
 }
 
+function alignShortDisconnectedBranches(
+  generation: Map<number, number>,
+  visibleIds: Set<number>,
+  edges: FamilyLayoutEdge[],
+  mainLine: Set<number>,
+) {
+  const result = new Map(generation);
+  const links = adjacency(edges, visibleIds);
+  const visited = new Set<number>();
+  const mainGenerations = [...mainLine].filter((id) => visibleIds.has(id)).map((id) => generation.get(id) ?? 0);
+  const mainBottom = mainGenerations.length ? Math.max(...mainGenerations) : Math.max(0, ...[...visibleIds].map((id) => generation.get(id) ?? 0));
+
+  for (const start of visibleIds) {
+    if (visited.has(start)) continue;
+    const component: number[] = [];
+    const queue = [start];
+    visited.add(start);
+    for (let cursor = 0; cursor < queue.length; cursor += 1) {
+      const id = queue[cursor];
+      component.push(id);
+      for (const next of links.get(id) ?? []) {
+        if (!visited.has(next)) {
+          visited.add(next);
+          queue.push(next);
+        }
+      }
+    }
+    if (component.some((id) => mainLine.has(id))) continue;
+    const componentBottom = Math.max(...component.map((id) => generation.get(id) ?? 0));
+    const shift = Math.max(0, mainBottom - componentBottom);
+    if (!shift) continue;
+    for (const id of component) result.set(id, (generation.get(id) ?? 0) + shift);
+  }
+  return result;
+}
+
 function centerMainLine(row: FamilyLayoutNode[], mainLine: Set<number>) {
   const main = row.filter((node) => mainLine.has(node.personId));
   if (main.length === 0) return row;
@@ -197,16 +271,38 @@ function centerMainLine(row: FamilyLayoutNode[], mainLine: Set<number>) {
   return [...side.slice(0, middle), ...main, ...side.slice(middle)];
 }
 
+export function assignFamilyParentRouteLanes(routes: FamilyParentRoute[]) {
+  const result = new Map<number, number>();
+  const byGeneration = new Map<number, FamilyParentRoute[]>();
+  for (const route of routes) byGeneration.set(route.generation, [...(byGeneration.get(route.generation) ?? []), route]);
+
+  for (const generationRoutes of byGeneration.values()) {
+    const laneEnds: number[] = [];
+    for (const route of [...generationRoutes].sort((a, b) => a.startX - b.startX || a.endX - b.endX || a.childId - b.childId)) {
+      let lane = laneEnds.findIndex((end) => route.startX > end + 28);
+      if (lane === -1) {
+        lane = laneEnds.length;
+        laneEnds.push(route.endX);
+      } else {
+        laneEnds[lane] = route.endX;
+      }
+      result.set(route.childId, lane);
+    }
+  }
+  return result;
+}
+
 export function layoutFamilyTree(
   allNodes: FamilyLayoutNode[],
   edges: FamilyLayoutEdge[],
   visibleIds: Set<number>,
   mainLineIds: number[],
 ) {
-  const generation = buildFamilyGenerations(allNodes, edges);
+  const baseGeneration = buildFamilyGenerations(allNodes, edges);
   const visibleNodes = allNodes.filter((node) => visibleIds.has(node.personId));
   const visibleSet = new Set(visibleNodes.map((node) => node.personId));
   const mainLine = new Set(mainLineIds);
+  const generation = alignShortDisconnectedBranches(baseGeneration, visibleSet, edges, mainLine);
   const nodeById = new Map(visibleNodes.map((node) => [node.personId, node]));
   const rows = new Map<number, FamilyLayoutNode[]>();
   for (const node of visibleNodes) {
@@ -263,7 +359,7 @@ export function layoutFamilyTree(
     let width = row.length * FAMILY_NODE_WIDTH;
     for (let index = 0; index < row.length - 1; index += 1) {
       const pressure = (mergePressure.get(row[index].personId) ?? 0) + (mergePressure.get(row[index + 1].personId) ?? 0);
-      width += BASE_COLUMN_GAP + Math.min(132, pressure * 26);
+      width += BASE_COLUMN_GAP + Math.min(150, pressure * 30);
     }
     return width;
   };
@@ -275,7 +371,7 @@ export function layoutFamilyTree(
     widths.set(rowId, width);
     widest = Math.max(widest, width);
   }
-  const width = Math.max(1380, widest + SIDE_PADDING * 2);
+  const width = Math.max(1500, widest + SIDE_PADDING * 2);
   const positions = new Map<number, FamilyTreePosition>();
 
   for (const rowId of sortedGenerations) {
@@ -289,7 +385,7 @@ export function layoutFamilyTree(
       x += FAMILY_NODE_WIDTH;
       if (index < row.length - 1) {
         const pressure = (mergePressure.get(node.personId) ?? 0) + (mergePressure.get(row[index + 1].personId) ?? 0);
-        x += BASE_COLUMN_GAP + Math.min(132, pressure * 26);
+        x += BASE_COLUMN_GAP + Math.min(150, pressure * 30);
       }
     }
 
@@ -313,6 +409,6 @@ export function layoutFamilyTree(
   }
 
   const maxGeneration = sortedGenerations.length ? Math.max(...sortedGenerations) : 0;
-  const height = Math.max(680, TOP_PADDING + maxGeneration * FAMILY_ROW_GAP + FAMILY_NODE_HEIGHT + 150);
+  const height = Math.max(720, TOP_PADDING + maxGeneration * FAMILY_ROW_GAP + FAMILY_NODE_HEIGHT + 170);
   return { positions, width, height, generations: generation, shownGenerations: sortedGenerations, nodeById };
 }
