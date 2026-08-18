@@ -62,9 +62,10 @@ type ResolvedFamilyUnit = {
   endX: number;
 };
 
-const MIN_ZOOM = 0.35;
-const MAX_ZOOM = 1.25;
+const MIN_ZOOM = 0.1;
+const MAX_ZOOM = 2;
 const ZOOM_STEP = 0.1;
+const WHEEL_ZOOM_STEP = 0.05;
 const SIBLING_CODES = new Set(["sibling", "twin"]);
 const INTERACTIVE_SELECTOR = "a,button,input,select,textarea,summary,label,form";
 
@@ -82,10 +83,6 @@ function validImage(value: string) {
 
 function edgeKey(edge: TreeEdge) {
   return `${edge.code}-${edge.a}-${edge.b}-${edge.source}`;
-}
-
-function pairKey(a: number, b: number) {
-  return a < b ? `${a}:${b}` : `${b}:${a}`;
 }
 
 function collectBranchMap(mainLine: number[], edges: TreeEdge[]) {
@@ -137,6 +134,7 @@ export function FamilyTreeCanvas({ projectId, people, edges, rootPersonId, named
   const [expandedAnchors, setExpandedAnchors] = useState<Set<number>>(() => new Set());
   const [showAll, setShowAll] = useState(false);
   const [zoom, setZoom] = useState(1);
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const [editingMainLine, setEditingMainLine] = useState(false);
   const [persistedMainLine, setPersistedMainLine] = useState<number[] | null>(() => savedMainLinePersonIds.length ? savedMainLinePersonIds : null);
   const [draftMainLine, setDraftMainLine] = useState<number[]>([]);
@@ -209,13 +207,38 @@ export function FamilyTreeCanvas({ projectId, people, edges, rootPersonId, named
     requestAnimationFrame(() => viewport.scrollTo({ left: 0, top: 0, behavior: "smooth" }));
   };
 
+  const toggleFullscreen = async () => {
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    if (document.fullscreenElement === viewport) await document.exitFullscreen();
+    else await viewport.requestFullscreen();
+  };
+
+  useEffect(() => {
+    const handleFullscreenChange = () => setIsFullscreen(document.fullscreenElement === viewportRef.current);
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+    return () => document.removeEventListener("fullscreenchange", handleFullscreenChange);
+  }, []);
+
   useEffect(() => {
     const viewport = viewportRef.current;
     if (!viewport) return;
     const handleWheel = (event: globalThis.WheelEvent) => {
-      if (!event.ctrlKey && !event.metaKey) return;
       event.preventDefault();
-      setZoom((current) => clampZoom(current + (event.deltaY < 0 ? ZOOM_STEP : -ZOOM_STEP)));
+      const rect = viewport.getBoundingClientRect();
+      const pointerX = event.clientX - rect.left;
+      const pointerY = event.clientY - rect.top;
+      setZoom((current) => {
+        const next = clampZoom(current + (event.deltaY < 0 ? WHEEL_ZOOM_STEP : -WHEEL_ZOOM_STEP));
+        if (next === current) return current;
+        const logicalX = (viewport.scrollLeft + pointerX) / current;
+        const logicalY = (viewport.scrollTop + pointerY) / current;
+        requestAnimationFrame(() => {
+          viewport.scrollLeft = Math.max(0, logicalX * next - pointerX);
+          viewport.scrollTop = Math.max(0, logicalY * next - pointerY);
+        });
+        return next;
+      });
     };
     viewport.addEventListener("wheel", handleWheel, { passive: false });
     return () => viewport.removeEventListener("wheel", handleWheel);
@@ -348,14 +371,11 @@ export function FamilyTreeCanvas({ projectId, people, edges, rootPersonId, named
       return {key,routeId:Math.min(...children.map((child) => child.id)),generation:unit.generation,parentIds:unit.parentIds,parents,children,startX:Math.min(...centers),endX:Math.max(...centers)};
     }).filter((unit) => unit.parents.length > 0 && unit.children.length > 0);
     const routeLanes = assignFamilyParentRouteLanes(familyUnits.map<FamilyParentRoute>((unit) => ({childId:unit.routeId,generation:unit.generation,startX:unit.startX,endX:unit.endX})));
-    const coParentPairs = new Set<string>();const siblingPairsFromParentage = new Set<string>();
-    for (const unit of familyUnits) {
-      for (let left = 0; left < unit.parentIds.length; left += 1) for (let right = left + 1; right < unit.parentIds.length; right += 1) coParentPairs.add(pairKey(unit.parentIds[left], unit.parentIds[right]));
-      for (let left = 0; left < unit.children.length; left += 1) for (let right = left + 1; right < unit.children.length; right += 1) siblingPairsFromParentage.add(pairKey(unit.children[left].id, unit.children[right].id));
-    }
     const nonParentEdges = visibleEdges.filter((edge) => !isFamilyParentEdge(edge));
-    const partnerEdges = nonParentEdges.filter((edge) => edge.category === "family" && FAMILY_PARTNER_CODES.has(edge.code) && !coParentPairs.has(pairKey(edge.a, edge.b)));
-    const siblingEdges = nonParentEdges.filter((edge) => edge.category === "family" && SIBLING_CODES.has(edge.code) && (edge.code === "twin" || !siblingPairsFromParentage.has(pairKey(edge.a, edge.b))));
+    // Explicit relationships are never hidden merely because the same pair is also implied by a family unit.
+    // A spouse between co-parents and an explicit sibling relation between children therefore remain visible.
+    const partnerEdges = nonParentEdges.filter((edge) => edge.category === "family" && FAMILY_PARTNER_CODES.has(edge.code));
+    const siblingEdges = nonParentEdges.filter((edge) => edge.category === "family" && SIBLING_CODES.has(edge.code));
     const otherRelationshipEdges = nonParentEdges.filter((edge) => !(edge.category === "family" && FAMILY_PARTNER_CODES.has(edge.code)) && !(edge.category === "family" && SIBLING_CODES.has(edge.code)));
     return {familyUnits,routeLanes,partnerEdges,siblingEdges,otherRelationshipEdges};
   }, [layout, visibleEdges, visibleStructuralEdges]);
@@ -389,15 +409,16 @@ export function FamilyTreeCanvas({ projectId, people, edges, rootPersonId, named
   const startOptions = useMemo(() => [...people].sort((a, b) => (baseGenerations.get(a.personId) ?? 0) - (baseGenerations.get(b.personId) ?? 0) || a.name.localeCompare(b.name) || a.personId - b.personId), [baseGenerations, people]);
 
   return (
-    <div className={styles.canvasShell} ref={viewportRef} tabIndex={0} aria-label="Interaktiver Stammbaum. Ziehen zum Verschieben, Plus/Minus zum Zoomen, 0 für 100 Prozent, F zum Einpassen. Beim Überfahren einer Person werden direkte Beziehungen hervorgehoben." onKeyDown={handleKeyDown} onPointerDown={handlePointerDown} onPointerMove={handlePointerMove} onPointerUp={stopPan} onPointerCancel={stopPan}>
+    <div className={styles.canvasShell} ref={viewportRef} tabIndex={0} aria-label="Interaktiver Stammbaum. Mausrad zoomt, Ziehen verschiebt, Plus/Minus zoomt, 0 setzt 100 Prozent und F passt den Baum ein. Beim Überfahren einer Person werden direkte Beziehungen hervorgehoben." onKeyDown={handleKeyDown} onPointerDown={handlePointerDown} onPointerMove={handlePointerMove} onPointerUp={stopPan} onPointerCancel={stopPan}>
       <div className={styles.canvasControls}>
-        <div className={styles.canvasStatus}><strong>Hauptlinie</strong><span>{mainLine.length} Personen</span><span>{persistedMainLine?.length ? "manuell" : "automatisch"}</span><span>{hiddenCount ? `${hiddenCount} ausgeblendet` : "alle sichtbar"}</span>{hoveredPersonId!=null?<span>{hoveredNeighbors.size} direkte Verbindung{hoveredNeighbors.size===1?"":"en"}</span>:null}</div>
+        <div className={styles.canvasStatus}><strong>Hauptlinie</strong><span>{mainLine.length} Personen</span><span>{visibleEdges.length} Beziehungen sichtbar</span><span>{persistedMainLine?.length ? "manuell" : "automatisch"}</span><span>{hiddenCount ? `${hiddenCount} ausgeblendet` : "alle sichtbar"}</span>{hoveredPersonId!=null?<span>{hoveredNeighbors.size} direkte Verbindung{hoveredNeighbors.size===1?"":"en"}</span>:null}</div>
         <div className={styles.canvasButtons}>
           {!editingMainLine ? <button type="button" className="button ghost" onClick={() => { setShowAll(false); setExpandedAnchors(new Set()); }}>Nur Hauptlinie</button> : null}
           {!editingMainLine ? <button type="button" className="button ghost" onClick={() => setShowAll(true)} disabled={showAll || people.length === visibleIds.size}>Alle Zweige</button> : null}
           {named && !editingMainLine ? <button type="button" className="button ghost" onClick={beginMainLineEdit}>✎ Hauptlinie bearbeiten</button> : null}
           <span className={styles.zoomControls}><button type="button" aria-label="Herauszoomen" onClick={() => setZoom((current) => clampZoom(current - ZOOM_STEP))} disabled={zoom <= MIN_ZOOM}>−</button><button type="button" className={styles.zoomValue} onClick={() => setZoom(1)} title="Zoom auf 100 % zurücksetzen">{Math.round(zoom * 100)}%</button><button type="button" aria-label="Hineinzoomen" onClick={() => setZoom((current) => clampZoom(current + ZOOM_STEP))} disabled={zoom >= MAX_ZOOM}>+</button><button type="button" onClick={fitTree}>Einpassen</button></span>
           <button type="button" className="button ghost" onClick={() => scrollToOldest()}>↑ Älteste Generation</button>
+          <button type="button" className="button ghost" onClick={toggleFullscreen} aria-pressed={isFullscreen}>{isFullscreen?"Vollbild schließen":"⛶ Vollbild"}</button>
         </div>
       </div>
 
