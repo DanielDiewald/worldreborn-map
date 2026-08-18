@@ -225,6 +225,58 @@ test("short side ancestry feeding a later main-line generation starts directly b
   assert.equal((layout.positions.get(901)?.y ?? 0) - (layout.positions.get(900)?.y ?? 0), 310);
 });
 
+test("bottom-up packing also compacts ancestors that belong to the selected main line", () => {
+  const compactPeople = [
+    { personId: 1, name: "Long root" },
+    { personId: 2, name: "Long 2" },
+    { personId: 3, name: "Long 3" },
+    { personId: 4, name: "Long parent" },
+    { personId: 5, name: "Shared child" },
+    { personId: 90, name: "Short main ancestor" },
+    { personId: 91, name: "Short main parent" },
+  ];
+  const compactEdges = [
+    { a: 1, b: 2, code: "parent", directed: true },
+    { a: 2, b: 3, code: "parent", directed: true },
+    { a: 3, b: 4, code: "parent", directed: true },
+    { a: 4, b: 5, code: "parent", directed: true },
+    { a: 90, b: 91, code: "parent", directed: true },
+    { a: 91, b: 5, code: "parent", directed: true },
+  ];
+  const layout = layoutFamilyTree(compactPeople, compactEdges, new Set(compactPeople.map((person) => person.personId)), [90, 91, 5]);
+  const ancestor = layout.positions.get(90);
+  const parent = layout.positions.get(91);
+  const child = layout.positions.get(5);
+  assert.ok(ancestor && parent && child);
+  assert.equal(parent.generation - ancestor.generation, 1);
+  assert.equal(child.generation - parent.generation, 1);
+  assert.equal(parent.y - ancestor.y, 310);
+  assert.equal(child.y - parent.y, 310);
+});
+
+test("visual rows remove empty chronology bands instead of rendering giant vertical gaps", () => {
+  const datedPeople = [
+    { personId: 1, name: "Main parent", birthYear: 100 },
+    { personId: 2, name: "Main child", birthYear: 200 },
+    { personId: 10, name: "Later branch parent", birthYear: 1000 },
+    { personId: 11, name: "Later branch child", birthYear: 1100 },
+  ];
+  const datedEdges = [
+    { a: 1, b: 2, code: "parent", directed: true },
+    { a: 10, b: 11, code: "parent", directed: true },
+  ];
+  const layout = layoutFamilyTree(datedPeople, datedEdges, new Set(datedPeople.map((person) => person.personId)), [1, 2]);
+  const mainChild = layout.positions.get(2);
+  const laterParent = layout.positions.get(10);
+  const laterChild = layout.positions.get(11);
+  assert.ok(mainChild && laterParent && laterChild);
+  assert.equal(laterParent.generation, mainChild.generation + 1);
+  assert.equal(laterChild.generation, laterParent.generation + 1);
+  assert.equal(laterParent.y - mainChild.y, 310);
+  assert.equal(laterChild.y - laterParent.y, 310);
+  assert.deepEqual(layout.shownGenerations, [0, 1, 2, 3]);
+});
+
 test("overlapping parent routes get separate lanes so unrelated families never look connected", () => {
   const lanes = assignFamilyParentRouteLanes([
     { childId: 10, generation: 5, startX: 100, endX: 900 },
