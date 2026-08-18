@@ -4,7 +4,7 @@ import { listProjects } from "@/lib/projects";
 import { logoutAdmin } from "@/app/admin/actions";
 import { ProjectSwitcher } from "./project-switcher";
 
-type Section = "dashboard" | "npcs" | "gods" | "groups" | "locations" | "relationships" | "family-trees" | "players" | "audit" | "projects";
+type Section = "dashboard" | "npcs" | "gods" | "characters" | "groups" | "locations" | "relationships" | "family-trees" | "timeline" | "media" | "calendar" | "players" | "audit" | "projects";
 
 type Props = {
   children: ReactNode;
@@ -55,19 +55,24 @@ export async function AdminShell({ children, projectId, projectName, section = "
         <nav className="admin-nav" aria-label="Admin Navigation">
           <div className="nav-section"><span className="nav-section-title">Übersicht</span>
             <NavItem href={projectId ? base : "/admin"} icon="home" active={section === "dashboard" || section === "projects"}>{projectId ? "Dashboard" : "Projekte"}</NavItem>
-            <NavItem icon="map" disabled>Map</NavItem><NavItem icon="timeline" disabled>Timeline</NavItem>
+            <NavItem icon="map" disabled>Map</NavItem>
+            <NavItem href={projectId ? `${base}/timeline` : undefined} icon="timeline" active={section === "timeline"} disabled={!projectId}>Timeline</NavItem>
           </div>
           <div className="nav-section"><span className="nav-section-title">World</span>
             <NavItem href={projectId ? `${base}/npcs` : undefined} icon="person" active={section === "npcs"} disabled={!projectId}>NPCs</NavItem>
             <NavItem href={projectId ? `${base}/gods` : undefined} icon="god" active={section === "gods"} disabled={!projectId}>Götter</NavItem>
-            <NavItem icon="character" disabled>Spielercharaktere</NavItem>
+            <NavItem href={projectId ? `${base}/characters` : undefined} icon="character" active={section === "characters"} disabled={!projectId}>Spielercharaktere</NavItem>
             <NavItem href={projectId ? `${base}/groups` : undefined} icon="group" active={section === "groups"} disabled={!projectId}>Gruppen</NavItem>
             <NavItem href={projectId ? `${base}/locations` : undefined} icon="location" active={section === "locations"} disabled={!projectId}>Orte</NavItem>
             <NavItem href={projectId ? `${base}/relationships` : undefined} icon="link" active={section === "relationships"} disabled={!projectId}>Beziehungen</NavItem>
           </div>
-          <div className="nav-section"><span className="nav-section-title">Wissen</span><NavItem href={projectId ? `${base}/family-trees` : undefined} icon="tree" active={section === "family-trees"} disabled={!projectId}>Stammbäume</NavItem><NavItem icon="graph" disabled>Relationship Graph</NavItem><NavItem icon="media" disabled>Media</NavItem></div>
+          <div className="nav-section"><span className="nav-section-title">Wissen</span>
+            <NavItem href={projectId ? `${base}/family-trees` : undefined} icon="tree" active={section === "family-trees"} disabled={!projectId}>Stammbäume</NavItem>
+            <NavItem href={projectId ? `${base}/relationship-graph` : undefined} icon="graph" disabled={!projectId}>Relationship Graph</NavItem>
+            <NavItem href={projectId ? `${base}/media` : undefined} icon="media" active={section === "media"} disabled={!projectId}>Media</NavItem>
+          </div>
           <div className="nav-section"><span className="nav-section-title">Spieler</span><NavItem href={projectId ? `${base}/players` : undefined} icon="players" active={section === "players"} disabled={!projectId}>Players</NavItem><NavItem icon="shield" disabled>Permissions</NavItem></div>
-          <div className="nav-section"><span className="nav-section-title">System</span><NavItem href="/admin" icon="world">Welten wechseln</NavItem><NavItem href={projectId ? `${base}/audit` : undefined} icon="shield" active={section === "audit"} disabled={!projectId}>Audit Log</NavItem><NavItem icon="settings" disabled>Project Settings</NavItem></div>
+          <div className="nav-section"><span className="nav-section-title">System</span><NavItem href="/admin" icon="world">Welten wechseln</NavItem><NavItem href={projectId ? `${base}/audit` : undefined} icon="shield" active={section === "audit"} disabled={!projectId}>Audit Log</NavItem><NavItem href={projectId ? `${base}/settings/calendar` : undefined} icon="settings" active={section === "calendar"} disabled={!projectId}>Weltkalender</NavItem></div>
         </nav>
         <div className="sidebar-footer"><span className="sidebar-admin-avatar">A</span><div><strong>Administrator</strong><span>Volle Sichtbarkeit</span></div><form action={logoutAdmin}><button type="submit" className="logout-icon" title="Abmelden" aria-label="Abmelden">↗</button></form></div>
       </aside>
