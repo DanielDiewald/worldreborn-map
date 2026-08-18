@@ -1,5 +1,10 @@
 BEGIN;
 
+DROP TRIGGER IF EXISTS trg_group_membership_legacy_sync ON public.group_memberships;
+DROP TRIGGER IF EXISTS trg_is_part_of_membership_sync ON public.is_part_of;
+DROP FUNCTION IF EXISTS public.worldreborn_sync_membership_to_is_part_of();
+DROP FUNCTION IF EXISTS public.worldreborn_sync_is_part_of_to_membership();
+
 DROP TRIGGER IF EXISTS trg_family_tree_members_project_scope ON public.family_tree_members;
 DROP TRIGGER IF EXISTS trg_family_trees_project_scope ON public.family_trees;
 DROP FUNCTION IF EXISTS public.worldreborn_validate_family_tree_member_scope();
