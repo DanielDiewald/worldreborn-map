@@ -3,78 +3,27 @@ import { notFound } from "next/navigation";
 import { AdminShell } from "@/components/admin/admin-shell";
 import { requireAdminSession } from "@/lib/auth/session";
 import { getFamilyTreeGraph, listFamilyTreePeople } from "@/lib/entities/family-trees";
+import { familyChronologyWarnings, getFamilyChronology } from "@/lib/family-chronology";
 import { getProject } from "@/lib/projects";
 import { FamilyTreeCanvas } from "../family-tree-canvas";
-import { addFamilyTreeMemberAction, refreshFamilyTreeAction } from "../actions";
+import { addFamilyTreeMemberAction, deleteFamilyTreeAction, refreshFamilyTreeAction, updateFamilyTreeAction } from "../actions";
 import styles from "../family-trees.module.css";
 
-export default async function FamilyTreeDetailPage({ params }: { params: Promise<{ projectId: string; treeId: string }> }) {
-  await requireAdminSession();
-  const raw = await params;
-  const projectId = Number.parseInt(raw.projectId, 10);
-  const treeRef = raw.treeId === "all" ? "all" as const : Number.parseInt(raw.treeId, 10);
-  if (!Number.isSafeInteger(projectId) || projectId <= 0 || (treeRef !== "all" && (!Number.isSafeInteger(treeRef) || treeRef <= 0))) notFound();
-
-  const [project, graph, peopleChoices] = await Promise.all([
-    getProject(projectId),
-    getFamilyTreeGraph(projectId, treeRef),
-    listFamilyTreePeople(projectId),
-  ]);
-  if (!project || !graph) notFound();
-
-  const rootPersonId = Number(graph.tree.root_person_id) || null;
-  const named = treeRef !== "all";
-
-  return (
-    <AdminShell projectId={projectId} projectName={project.name} section="family-trees" eyebrow={`${project.name} / Stammbäume`} title={graph.tree.name || `Stammbaum #${treeRef}`}>
-      <div className="breadcrumb"><Link href={`/admin/projects/${projectId}/family-trees`}>Stammbäume</Link><span>/</span><strong>{graph.tree.name || `Stammbaum #${treeRef}`}</strong></div>
-      <div className="page-heading compact-heading">
-        <div>
-          <h1>{graph.tree.name || `Stammbaum #${treeRef}`}</h1>
-          <p>{graph.tree.subtitle || graph.tree.description || "Genealogischer Stammbaum mit ältesten Generationen oben, fokussierter und bearbeitbarer Hauptlinie sowie ausklappbaren Seitenzweigen."}</p>
-        </div>
-        <div className="heading-actions"><Link className="button" href={`/admin/projects/${projectId}/relationships`}>Beziehungen bearbeiten</Link></div>
-      </div>
-
-      {named ? (
-        <div className={styles.toolbar}>
-          <section className={`panel-card ${styles.toolCard}`}>
-            <h2>Familienzweig synchronisieren</h2>
-            <p>Übernimmt alle über Family-Relationships verbundenen Verwandten der Root-Person. Im Canvas bleibt zunächst nur die Hauptlinie offen; Seitenzweige können gezielt aufgeklappt werden.</p>
-            <form action={refreshFamilyTreeAction.bind(null, projectId, treeRef)}><button className="primary">↻ Verbundene Familie ergänzen</button></form>
-          </section>
-          <section className={`panel-card ${styles.toolCard}`}>
-            <h2>Person hinzufügen</h2>
-            <form action={addFamilyTreeMemberAction.bind(null, projectId, treeRef)} className="stack">
-              <select name="personId" required><option value="">Person wählen …</option>{peopleChoices.map((person) => <option key={person.person_id} value={person.person_id}>{person.name} · {person.kind}</option>)}</select>
-              <div className="field-grid two"><input name="roleLabel" placeholder="Rolle im Tree" /><input name="branchLabel" placeholder="Branch / Linie" /></div>
-              <button>Hinzufügen</button>
-            </form>
-          </section>
-        </div>
-      ) : null}
-
-      <div className={styles.legend}>
-        <span><i className={styles.mainLegend} /> Hauptlinie</span>
-        <span><i /> Eltern / Kinder</span>
-        <span><i className={styles.partner} /> Partner</span>
-        <span>{graph.people.length} Personen · {graph.edges.length} Familienkanten</span>
-        <span>Scrollen und zoomen direkt im Stammbaum</span>
-      </div>
-
-      {graph.people.length === 0 ? (
-        <div className={`panel-card ${styles.empty}`}>Dieser Stammbaum enthält noch keine Personen.</div>
-      ) : (
-        <FamilyTreeCanvas
-          projectId={projectId}
-          people={graph.people}
-          edges={graph.edges}
-          rootPersonId={rootPersonId}
-          named={named}
-          treeId={treeRef}
-          savedMainLinePersonIds={graph.mainLinePersonIds}
-        />
-      )}
-    </AdminShell>
-  );
+export default async function FamilyTreeDetailPage({params}:{params:Promise<{projectId:string;treeId:string}>}){
+  await requireAdminSession();const raw=await params;const projectId=Number.parseInt(raw.projectId,10);const treeRef=raw.treeId==="all"?"all" as const:Number.parseInt(raw.treeId,10);if(!Number.isSafeInteger(projectId)||projectId<=0||(treeRef!=="all"&&(!Number.isSafeInteger(treeRef)||treeRef<=0)))notFound();
+  const [project,graph,peopleChoices]=await Promise.all([getProject(projectId),getFamilyTreeGraph(projectId,treeRef),listFamilyTreePeople(projectId)]);if(!project||!graph)notFound();
+  const chronology=await getFamilyChronology(projectId,graph.people.map((person)=>person.personId));const warnings=familyChronologyWarnings(graph.edges,chronology);const people=graph.people.map((person)=>{const life=chronology.get(person.personId)?.lifeLabel;return{...person,title:[person.title,life].filter(Boolean).join(" · ")||null};});const rootPersonId=Number(graph.tree.root_person_id)||null;const named=treeRef!=="all";
+  return <AdminShell projectId={projectId} projectName={project.name} section="family-trees" eyebrow={`${project.name} / Stammbäume`} title={graph.tree.name||`Stammbaum #${treeRef}`}>
+    <div className="breadcrumb"><Link href={`/admin/projects/${projectId}/family-trees`}>Stammbäume</Link><span>/</span><strong>{graph.tree.name||`Stammbaum #${treeRef}`}</strong></div>
+    <div className="page-heading compact-heading"><div><h1>{graph.tree.name||`Stammbaum #${treeRef}`}</h1><p>{graph.tree.subtitle||graph.tree.description||"Genealogischer Stammbaum. Parent→Child bleibt die Hierarchie; Fantasy-Lebensdaten ergänzen Anzeige und Plausibilitätsprüfung."}</p></div><div className="heading-actions"><Link className="button primary" href={`/admin/projects/${projectId}/relationships?create=1`}>＋ Familienbeziehung</Link><Link className="button" href={`/admin/projects/${projectId}/relationships`}>Beziehungen verwalten</Link></div></div>
+    {warnings.length?<div className="notice warning"><strong>{warnings.length} Chronologie-Warnung{warnings.length===1?"":"en"}</strong><ul>{warnings.slice(0,12).map((warning,index)=><li key={`${warning.parentId}-${warning.childId}-${index}`}>{warning.message}</li>)}</ul>{warnings.length>12?<p>Weitere {warnings.length-12} Warnungen ausgeblendet.</p>:null}<p>Es wird nichts automatisch korrigiert.</p></div>:null}
+    {named?<div className={styles.toolbar}>
+      <section className={`panel-card ${styles.toolCard}`}><h2>Stammbaum bearbeiten</h2><form action={updateFamilyTreeAction.bind(null,projectId,treeRef)} className="stack"><label>Name<input name="name" defaultValue={graph.tree.name??""}/></label><label>Untertitel<input name="subtitle" defaultValue={graph.tree.subtitle??""}/></label><label>Beschreibung<textarea name="description" defaultValue={graph.tree.description??""}/></label><label>Root-Person<select name="rootPersonId" defaultValue={rootPersonId??""}><option value="">Keine Root</option>{peopleChoices.map((person)=><option key={person.person_id} value={person.person_id}>{person.name} · {person.kind}</option>)}</select></label><label>Sichtbarkeit<select name="visibilityMode" defaultValue={graph.tree.visibility_mode??"admin_only"}><option value="admin_only">Nur Admin</option><option value="all_players">Alle Spieler</option><option value="selected_players">Ausgewählte</option></select></label><button>Definition speichern</button></form></section>
+      <section className={`panel-card ${styles.toolCard}`}><h2>Familienzweig synchronisieren</h2><p>Übernimmt alle über Family-Relationships verbundenen Verwandten der Root-Person.</p><form action={refreshFamilyTreeAction.bind(null,projectId,treeRef)}><button className="primary">↻ Verbundene Familie ergänzen</button></form></section>
+      <section className={`panel-card ${styles.toolCard}`}><h2>Person hinzufügen</h2><form action={addFamilyTreeMemberAction.bind(null,projectId,treeRef)} className="stack"><select name="personId" required><option value="">Person wählen …</option>{peopleChoices.map((person)=><option key={person.person_id} value={person.person_id}>{person.name} · {person.kind}</option>)}</select><div className="field-grid two"><input name="roleLabel" placeholder="Rolle im Tree"/><input name="branchLabel" placeholder="Branch / Linie"/></div><button>Hinzufügen</button></form></section>
+    </div>:null}
+    <div className={styles.legend}><span><i className={styles.mainLegend}/> Hauptlinie</span><span><i/> Eltern / Kinder</span><span><i className={styles.partner}/> Partner</span><span>{people.length} Personen · {graph.edges.length} Familienkanten</span><span>Fantasy-Lebensdaten werden in der Personenzeile mitgeführt</span></div>
+    {people.length===0?<div className={`panel-card ${styles.empty}`}>Dieser Stammbaum enthält noch keine Personen.</div>:<FamilyTreeCanvas projectId={projectId} people={people} edges={graph.edges} rootPersonId={rootPersonId} named={named} treeId={treeRef} savedMainLinePersonIds={graph.mainLinePersonIds}/>} 
+    {named?<section className="danger-zone"><div><h2>Stammbaum löschen</h2><p>Nur die benannte Tree-Definition und Memberships werden gelöscht. Kanonische Relationships bleiben erhalten.</p></div><form action={deleteFamilyTreeAction.bind(null,projectId,treeRef)}><details><summary className="button danger">Stammbaum löschen…</summary><button className="danger">Löschen bestätigen</button></details></form></section>:null}
+  </AdminShell>;
 }
