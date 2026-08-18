@@ -2,6 +2,7 @@ import "server-only";
 
 import { z } from "zod";
 import { pool } from "@/lib/db";
+import { clampPagination, paginatedResult, type Pagination } from "@/lib/pagination";
 
 const npcInputSchema = z.object({
   name: z.string().trim().min(1).max(100),
@@ -24,12 +25,11 @@ const npcInputSchema = z.object({
 export type NpcInput = z.input<typeof npcInputSchema>;
 export type NpcListFilters = { query?: string; visibility?: "admin_only" | "all_players" | "selected_players" };
 
-async function assertLocation(projectId:number,locationId:number){
-  const result=await pool.query("SELECT 1 FROM locations WHERE camp_id=$1 AND loc_id=$2 AND archived_at IS NULL",[projectId,locationId]);
-  if(result.rowCount!==1)throw new Error("Location does not belong to this project.");
-}
+type NpcRow={
+  nId:number;charId:number;campId:number;name:string;gender:string;image:string;notes:string;publicDescription:string|null;adminNotes:string|null;title:string|null;species:string|null;profession:string|null;visibilityMode:string;locId:number;location:string;race:string;alive:boolean;birthday:string;follower:boolean;className:string;age:number;
+};
 
-export async function listNpcs(projectId:number,filters:NpcListFilters={}){
+function npcFilter(projectId:number,filters:NpcListFilters){
   const values:unknown[]=[projectId];
   const where=["n.camp_id=$1","n.archived_at IS NULL"];
   if(filters.query?.trim()){
@@ -38,25 +38,37 @@ export async function listNpcs(projectId:number,filters:NpcListFilters={}){
     where.push(`(n.name ILIKE ${p} OR n.title ILIKE ${p} OR n.species ILIKE ${p} OR n.profession ILIKE ${p} OR c.race ILIKE ${p} OR c.class ILIKE ${p})`);
   }
   if(filters.visibility){values.push(filters.visibility);where.push(`n.visibility_mode=$${values.length}`);}
-  const result=await pool.query<{
-    nId:number;charId:number;campId:number;name:string;gender:string;image:string;notes:string;publicDescription:string|null;adminNotes:string|null;title:string|null;species:string|null;profession:string|null;visibilityMode:string;locId:number;location:string;race:string;alive:boolean;birthday:string;follower:boolean;className:string;age:number;
-  }>(`SELECT n.n_id AS "nId",c.char_id AS "charId",n.camp_id AS "campId",n.name,n.gender,n.image,n.notes,n.public_description AS "publicDescription",n.admin_notes AS "adminNotes",n.title,n.species,n.profession,n.visibility_mode AS "visibilityMode",c.loc_id AS "locId",l.name AS location,c.race,c.alive,c.birthday::text,c.follower,c.class AS "className",c.age
-       FROM npcs n
-       JOIN charakters c ON c.n_id=n.n_id
-       JOIN locations l ON l.loc_id=c.loc_id AND l.camp_id=n.camp_id
-      WHERE ${where.join(" AND ")}
-      ORDER BY n.name,n.n_id`,values);
+  return {values,where};
+}
+
+async function assertLocation(projectId:number,locationId:number){
+  const result=await pool.query("SELECT 1 FROM locations WHERE camp_id=$1 AND loc_id=$2 AND archived_at IS NULL",[projectId,locationId]);
+  if(result.rowCount!==1)throw new Error("Location does not belong to this project.");
+}
+
+const npcSelect=`SELECT n.n_id AS "nId",c.char_id AS "charId",n.camp_id AS "campId",n.name,n.gender,n.image,n.notes,n.public_description AS "publicDescription",n.admin_notes AS "adminNotes",n.title,n.species,n.profession,n.visibility_mode AS "visibilityMode",c.loc_id AS "locId",l.name AS location,c.race,c.alive,c.birthday::text,c.follower,c.class AS "className",c.age
+  FROM npcs n
+  JOIN charakters c ON c.n_id=n.n_id
+  JOIN locations l ON l.loc_id=c.loc_id AND l.camp_id=n.camp_id`;
+
+export async function listNpcs(projectId:number,filters:NpcListFilters={}){
+  const {values,where}=npcFilter(projectId,filters);
+  const result=await pool.query<NpcRow>(`${npcSelect} WHERE ${where.join(" AND ")} ORDER BY n.name,n.n_id`,values);
   return result.rows;
 }
 
+export async function listNpcsPaginated(projectId:number,filters:NpcListFilters,pagination:Pagination){
+  const {values,where}=npcFilter(projectId,filters);
+  const count=await pool.query<{total:number}>(`SELECT count(*)::int AS total FROM npcs n JOIN charakters c ON c.n_id=n.n_id WHERE ${where.join(" AND ")}`,values);
+  const total=count.rows[0]?.total??0;
+  const page=clampPagination(total,pagination);
+  const pageValues=[...values,page.limit,page.offset];
+  const rows=await pool.query<NpcRow>(`${npcSelect} WHERE ${where.join(" AND ")} ORDER BY n.name,n.n_id LIMIT $${pageValues.length-1} OFFSET $${pageValues.length}`,pageValues);
+  return paginatedResult(rows.rows,total,page);
+}
+
 export async function getNpc(projectId:number,npcId:number){
-  const result=await pool.query<{
-    nId:number;charId:number;campId:number;name:string;gender:string;image:string;notes:string;publicDescription:string|null;adminNotes:string|null;title:string|null;species:string|null;profession:string|null;visibilityMode:string;locId:number;location:string;race:string;alive:boolean;birthday:string;follower:boolean;className:string;age:number;
-  }>(`SELECT n.n_id AS "nId",c.char_id AS "charId",n.camp_id AS "campId",n.name,n.gender,n.image,n.notes,n.public_description AS "publicDescription",n.admin_notes AS "adminNotes",n.title,n.species,n.profession,n.visibility_mode AS "visibilityMode",c.loc_id AS "locId",l.name AS location,c.race,c.alive,c.birthday::text,c.follower,c.class AS "className",c.age
-       FROM npcs n
-       JOIN charakters c ON c.n_id=n.n_id
-       JOIN locations l ON l.loc_id=c.loc_id AND l.camp_id=n.camp_id
-      WHERE n.camp_id=$1 AND n.n_id=$2 AND n.archived_at IS NULL`,[projectId,npcId]);
+  const result=await pool.query<NpcRow>(`${npcSelect} WHERE n.camp_id=$1 AND n.n_id=$2 AND n.archived_at IS NULL`,[projectId,npcId]);
   return result.rows[0]??null;
 }
 
