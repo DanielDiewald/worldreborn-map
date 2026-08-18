@@ -137,6 +137,38 @@ test("a connected side branch keeps one side of the main line across all generat
   assert.notEqual(signs[0], 0);
 });
 
+test("a side lineage stays together when a main-line person is the bridge between its ancestors and descendants", () => {
+  const bridgePeople = [
+    { personId: 100, name: "Main ancestor" },
+    { personId: 101, name: "Main bridge" },
+    { personId: 102, name: "Main heir" },
+    { personId: 103, name: "Main descendant" },
+    { personId: 900, name: "Side great-grandparent" },
+    { personId: 901, name: "Side parent" },
+    { personId: 12, name: "Side child" },
+    { personId: 13, name: "Side grandchild" },
+  ];
+  const bridgeEdges = [
+    { a: 100, b: 101, code: "parent", directed: true },
+    { a: 101, b: 102, code: "parent", directed: true },
+    { a: 102, b: 103, code: "parent", directed: true },
+    { a: 900, b: 901, code: "parent", directed: true },
+    { a: 901, b: 101, code: "parent", directed: true },
+    { a: 101, b: 12, code: "parent", directed: true },
+    { a: 12, b: 13, code: "parent", directed: true },
+  ];
+  const layout = layoutFamilyTree(bridgePeople, bridgeEdges, new Set(bridgePeople.map((person) => person.personId)), [100, 101, 102, 103]);
+  const center = layout.width / 2;
+  const branchIds = [900, 901, 12, 13];
+  const signs = branchIds.map((id) => {
+    const position = layout.positions.get(id);
+    assert.ok(position);
+    return Math.sign(position.x + 140 - center);
+  });
+  assert.ok(signs.every((sign) => sign === signs[0]));
+  assert.notEqual(signs[0], 0);
+});
+
 test("overlapping parent routes get separate lanes so unrelated families never look connected", () => {
   const lanes = assignFamilyParentRouteLanes([
     { childId: 10, generation: 5, startX: 100, endX: 900 },
