@@ -217,6 +217,19 @@
   margin-top: 6px;
 }
 
+.dialog {
+  width: min(480px, calc(100vw - 32px));
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: 14px;
+  padding: 18px;
+  background: #17171b;
+  color: inherit;
+}
+
+.dialog::backdrop {
+  background: rgba(0,0,0,.66);
+}
+
 @media (max-width: 1050px) {
   .workspace {
     grid-template-columns: 1fr;
