@@ -4,10 +4,11 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { z } from "zod";
 import { requireAdminSession } from "@/lib/auth/session";
-import { savePersonFantasyDate } from "@/lib/calendar";
+import { getProjectCalendar, savePersonFantasyDate } from "@/lib/calendar";
 import { archiveNpc, createNpc, getNpc, updateNpc } from "@/lib/entities/npcs";
 import { parseFantasyDateFields } from "@/lib/fantasy-calendar";
 import { resolveEntityImageSource, setEntityImageReference } from "@/lib/media";
+import { savePersonDeathMetadata } from "@/lib/person-death";
 import { getProject } from "@/lib/projects";
 
 const npcSchema = z.object({
@@ -42,7 +43,16 @@ function readNpcForm(formData: FormData, image: string) {
   });
 }
 
-function dateValues(formData:FormData){return Object.fromEntries(["birthPrecision","birthEra","birthYear","birthMonth","birthDay"].map((key)=>[key,formData.get(key)]));}
+function dateValues(formData:FormData,prefix:string){return Object.fromEntries(["Precision","Era","Year","Month","Day"].map((suffix)=>[`${prefix}${suffix}`,formData.get(`${prefix}${suffix}`)]));}
+
+async function saveLifeFields(projectId:number,personId:number,alive:boolean,formData:FormData){
+  await savePersonDeathMetadata(projectId,personId,alive,formData.get("deathCauseCode"),formData.get("deathCauseDetail"));
+  if(alive){
+    if(await getProjectCalendar(projectId))await savePersonFantasyDate(projectId,personId,"death",null);
+    return;
+  }
+  if(formData.has("deathPrecision"))await savePersonFantasyDate(projectId,personId,"death",parseFantasyDateFields(dateValues(formData,"death"),"death"));
+}
 
 async function assertProject(projectId: number) {
   if (!Number.isSafeInteger(projectId) || projectId <= 0 || !(await getProject(projectId))) throw new Error("Invalid project context");
@@ -54,7 +64,8 @@ export async function createNpcAction(projectId: number, formData: FormData) {
   const parsed=readNpcForm(formData,source.image);if(!parsed.success)throw new Error("Invalid NPC input");
   const created=await createNpc(projectId,parsed.data);
   if(source.uploaded)await setEntityImageReference(projectId,"person",created.nId,source);
-  if(formData.has("birthPrecision"))await savePersonFantasyDate(projectId,created.nId,"birth",parseFantasyDateFields(dateValues(formData),"birth"));
+  if(formData.has("birthPrecision"))await savePersonFantasyDate(projectId,created.nId,"birth",parseFantasyDateFields(dateValues(formData,"birth"),"birth"));
+  await saveLifeFields(projectId,created.nId,parsed.data.alive,formData);
   redirect(`/admin/projects/${projectId}/npcs/${created.nId}`);
 }
 
@@ -65,7 +76,8 @@ export async function updateNpcAction(projectId: number, npcId: number, formData
   const parsed=readNpcForm(formData,source.image);if(!parsed.success)throw new Error("Invalid NPC input");
   const updated=await updateNpc(projectId,npcId,parsed.data);if(!updated)throw new Error("NPC not found in this project");
   if(source.uploaded||source.removed||source.image!==current.image)await setEntityImageReference(projectId,"person",npcId,source);
-  if(formData.has("birthPrecision"))await savePersonFantasyDate(projectId,npcId,"birth",parseFantasyDateFields(dateValues(formData),"birth"));
+  if(formData.has("birthPrecision"))await savePersonFantasyDate(projectId,npcId,"birth",parseFantasyDateFields(dateValues(formData,"birth"),"birth"));
+  await saveLifeFields(projectId,npcId,parsed.data.alive,formData);
   revalidatePath(`/admin/projects/${projectId}/npcs/${npcId}`);revalidatePath(`/admin/projects/${projectId}/npcs`);revalidatePath(`/admin/projects/${projectId}/family-trees`);
 }
 
