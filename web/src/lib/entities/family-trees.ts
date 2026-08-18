@@ -47,23 +47,23 @@ export async function updateFamilyTreeMainLine(projectId:number,treeId:number,pe
       const members=await client.query<{person_id:number}>("SELECT person_id FROM family_tree_members WHERE family_tree_id=$1 AND person_id=ANY($2::int[])",[treeId,ids]);
       if(members.rowCount!==ids.length)throw new Error("Jede Person der Hauptlinie muss Mitglied dieses Stammbaums sein.");
       if(ids.length>1){
-        const parents=ids.slice(0,-1);const children=ids.slice(1);
-        const validation=await client.query<{valid_count:number}>(`WITH requested(parent_id,child_id,ord) AS (
-          SELECT parent_id,child_id,ord::int FROM unnest($2::int[],$3::int[]) WITH ORDINALITY AS u(parent_id,child_id,ord)
+        const ancestors=ids.slice(0,-1);const descendants=ids.slice(1);
+        const validation=await client.query<{valid_count:number}>(`WITH requested(ancestor_id,descendant_id,ord) AS (
+          SELECT ancestor_id,descendant_id,ord::int FROM unnest($2::int[],$3::int[]) WITH ORDINALITY AS u(ancestor_id,descendant_id,ord)
         )
         SELECT count(*)::int AS valid_count FROM requested req
         WHERE EXISTS(
           SELECT 1 FROM relationships r JOIN relationship_types rt ON rt.relationship_type_id=r.relationship_type_id
           WHERE r.project_id=$1 AND r.entity_a_type='person' AND r.entity_b_type='person'
-            AND r.entity_a_id=req.parent_id AND r.entity_b_id=req.child_id
-            AND rt.code IN ('parent','adoptive_parent','step_parent','guardian')
+            AND r.entity_a_id=req.ancestor_id AND r.entity_b_id=req.descendant_id
+            AND rt.code IN ('parent','adoptive_parent','step_parent','guardian','ancestor')
         ) OR EXISTS(
           SELECT 1 FROM parent_child_relationships p
           JOIN npcs pa ON pa.n_id=p.parent_id
           JOIN npcs ch ON ch.n_id=p.child_id
-          WHERE pa.camp_id=$1 AND ch.camp_id=$1 AND p.parent_id=req.parent_id AND p.child_id=req.child_id
-        )`,[projectId,parents,children]);
-        if((validation.rows[0]?.valid_count??0)!==parents.length)throw new Error("Die Hauptlinie muss einer direkten Eltern-Kind-Kette folgen.");
+          WHERE pa.camp_id=$1 AND ch.camp_id=$1 AND p.parent_id=req.ancestor_id AND p.child_id=req.descendant_id
+        )`,[projectId,ancestors,descendants]);
+        if((validation.rows[0]?.valid_count??0)!==ancestors.length)throw new Error("Die Hauptlinie muss einer gerichteten Eltern-Kind- oder Vorfahre-Nachfahre-Kette folgen.");
       }
       await client.query("UPDATE family_trees SET metadata=jsonb_set(COALESCE(metadata,'{}'::jsonb),'{main_line_person_ids}',$3::jsonb,true),updated_at=now() WHERE project_id=$1 AND family_tree_id=$2",[projectId,treeId,JSON.stringify(ids)]);
     }else{
