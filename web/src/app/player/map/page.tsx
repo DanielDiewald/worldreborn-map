@@ -6,4 +6,39 @@ import { getVisibleMapMarkers } from "@/lib/maps";
 import { getPlayerContext } from "@/lib/player-view";
 import { listVisibleMaps } from "@/lib/player-world";
 
-export default async function PlayerMapPage({searchParams}:{searchParams:Promise<{mapId?:string}>}){const session=await requirePlayerSession();const [context,maps,search]=await Promise.all([getPlayerContext(session.projectId,session.playerId),listVisibleMaps(session.projectId),searchParams]);if(!context)return null;const requested=search.mapId?Number.parseInt(search.mapId,10):null;const selected=maps.find((m)=>Number(m.map_id)===requested)??maps.find((m)=>m.is_primary)??maps[0];if(!selected)return <PlayerShell projectName={context.project_name} playerName={context.player_name}><section className="panel-card empty-state large"><strong>Keine Karte verfügbar</strong></section></PlayerShell>;const markers=await getVisibleMapMarkers(session.projectId,Number(selected.map_id),session.playerId);const config={mapId:Number(selected.map_id),mapType:selected.map_type as "tile"|"image",tileUrl:selected.tile_url,imagePath:selected.image_path,minZoom:selected.min_zoom,maxZoom:selected.max_zoom,centerLat:selected.center_lat,centerLng:selected.center_lng,bounds:selected.bounds,config:selected.config};return <PlayerShell projectName={context.project_name} playerName={context.player_name}><div className="page-heading compact-heading"><div><span className="eyebrow">World / Map</span><h1>{selected.name}</h1><p>Die Karte enthält nur Marker, die für deinen Wissensstand freigegeben sind.</p></div></div><section className="panel-card"><MapViewer mapConfig={config} initialMarkers={markers}/></section>{maps.length>1?<section className="panel-card"><div className="row wrap-row">{maps.map((map)=><Link className="button ghost" key={map.map_id} href={`/player/map?mapId=${map.map_id}`}>{map.name}</Link>)}</div></section>:null}</PlayerShell>;}
+export default async function PlayerMapPage({searchParams}:{searchParams:Promise<{mapId?:string}>}){
+  const session=await requirePlayerSession();
+  const [context,maps,search]=await Promise.all([
+    getPlayerContext(session.projectId,session.playerId),
+    listVisibleMaps(session.projectId),
+    searchParams,
+  ]);
+  if(!context)return null;
+  const requested=search.mapId?Number.parseInt(search.mapId,10):null;
+  const selected=maps.find((map)=>Number(map.map_id)===requested)??maps.find((map)=>map.is_primary)??maps[0];
+  if(!selected){
+    return <PlayerShell projectName={context.project_name} playerName={context.player_name}>
+      <section className="panel-card empty-state large"><strong>Keine Karte verfügbar</strong></section>
+    </PlayerShell>;
+  }
+  const markers=await getVisibleMapMarkers(session.projectId,Number(selected.map_id),session.playerId);
+  const config={
+    mapId:Number(selected.map_id),
+    mapType:selected.map_type as "tile"|"image",
+    tileUrl:selected.tile_url,
+    imagePath:selected.image_path,
+    minZoom:selected.min_zoom,
+    maxZoom:selected.max_zoom,
+    centerLat:selected.center_lat,
+    centerLng:selected.center_lng,
+    bounds:selected.bounds,
+    config:selected.config,
+  };
+  return <PlayerShell projectName={context.project_name} playerName={context.player_name}>
+    <div className="page-heading compact-heading">
+      <div><span className="eyebrow">World / Map</span><h1>{selected.name}</h1><p>Die Karte enthält nur Marker, die für deinen Wissensstand freigegeben sind.</p></div>
+    </div>
+    <section className="panel-card"><MapViewer key={config.mapId} mapConfig={config} initialMarkers={markers}/></section>
+    {maps.length>1?<section className="panel-card"><div className="row wrap-row">{maps.map((map)=><Link className="button ghost" key={map.map_id} href={`/player/map?mapId=${map.map_id}`}>{map.name}</Link>)}</div></section>:null}
+  </PlayerShell>;
+}
