@@ -466,6 +466,85 @@ function enforceAdjacentParentGenerations(
   return result;
 }
 
+function alignSameGenerationFamilyComponents(
+  generation: Map<number, number>,
+  visibleIds: Set<number>,
+  edges: FamilyLayoutEdge[],
+  mainLine: Set<number>,
+) {
+  const sameGenerationEdges = edges.filter((edge) => visibleIds.has(edge.a) && visibleIds.has(edge.b) && SAME_GENERATION_CODES.has(edge.code));
+  if (!sameGenerationEdges.length) return generation;
+
+  // Parent-connected components have fixed internal offsets. Moving a whole component
+  // keeps every direct Parent→Child edge exactly one generation apart while allowing
+  // a spouse/sibling component to align with the generation it is attached to.
+  const parentUnion = new UnionFind([...visibleIds]);
+  for (const edge of edges) {
+    if (!visibleIds.has(edge.a) || !visibleIds.has(edge.b) || !isFamilyParentEdge(edge)) continue;
+    parentUnion.union(edge.a, edge.b);
+  }
+
+  const members = new Map<number, number[]>();
+  for (const id of visibleIds) {
+    const root = parentUnion.find(id);
+    members.set(root, [...(members.get(root) ?? []), id]);
+  }
+
+  const links = new Map<number, Array<{ id: number; delta: number }>>();
+  for (const edge of sameGenerationEdges) {
+    const rootA = parentUnion.find(edge.a);
+    const rootB = parentUnion.find(edge.b);
+    if (rootA === rootB) continue;
+    const delta = (generation.get(edge.a) ?? 0) - (generation.get(edge.b) ?? 0);
+    links.set(rootA, [...(links.get(rootA) ?? []), { id: rootB, delta }]);
+    links.set(rootB, [...(links.get(rootB) ?? []), { id: rootA, delta: -delta }]);
+  }
+  if (!links.size) return generation;
+  for (const values of links.values()) values.sort((a, b) => a.id - b.id || a.delta - b.delta);
+
+  const result = new Map(generation);
+  const visited = new Set<number>();
+  const roots = [...members.keys()].sort((a, b) => {
+    const aMain = (members.get(a) ?? []).some((id) => mainLine.has(id)) ? 0 : 1;
+    const bMain = (members.get(b) ?? []).some((id) => mainLine.has(id)) ? 0 : 1;
+    return aMain - bMain || a - b;
+  });
+
+  for (const start of roots) {
+    if (visited.has(start) || !(links.get(start)?.length)) continue;
+    const relative = new Map<number, number>([[start, 0]]);
+    const component: number[] = [];
+    const queue = [start];
+    visited.add(start);
+
+    for (let cursor = 0; cursor < queue.length; cursor += 1) {
+      const root = queue[cursor];
+      component.push(root);
+      const current = relative.get(root) ?? 0;
+      for (const link of links.get(root) ?? []) {
+        const expected = current + link.delta;
+        if (relative.has(link.id)) continue;
+        relative.set(link.id, expected);
+        visited.add(link.id);
+        queue.push(link.id);
+      }
+    }
+
+    const mainRoots = component.filter((root) => (members.get(root) ?? []).some((id) => mainLine.has(id)));
+    const referenceRoots = mainRoots.length ? mainRoots : component;
+    const offset = Math.round(median(referenceRoots.map((root) => -(relative.get(root) ?? 0))) ?? 0);
+    for (const root of component) {
+      const shift = (relative.get(root) ?? 0) + offset;
+      if (!shift) continue;
+      for (const id of members.get(root) ?? []) result.set(id, (result.get(id) ?? 0) + shift);
+    }
+  }
+
+  const minimum = Math.min(0, ...[...visibleIds].map((id) => result.get(id) ?? 0));
+  if (minimum < 0) for (const id of visibleIds) result.set(id, (result.get(id) ?? 0) - minimum);
+  return result;
+}
+
 function alignSideComponentsToMainBirthCohorts(
   nodes: FamilyLayoutNode[],
   edges: FamilyLayoutEdge[],
@@ -747,7 +826,8 @@ export function layoutFamilyTree(
   const bottomAligned = alignShortDisconnectedBranches(baseGeneration, visibleSet, structuralEdges, mainLine, allNodes);
   const cohortAligned = alignSideComponentsToMainBirthCohorts(allNodes, structuralEdges, bottomAligned, visibleSet, mainLine);
   const bottomUp = compactGenerationsBottomUp(cohortAligned, visibleSet, structuralEdges, mainLine);
-  const generation = enforceAdjacentParentGenerations(bottomUp, visibleSet, structuralEdges, mainLine);
+  const parentAligned = enforceAdjacentParentGenerations(bottomUp, visibleSet, structuralEdges, mainLine);
+  const generation = alignSameGenerationFamilyComponents(parentAligned, visibleSet, structuralEdges, mainLine);
   const nodeById = new Map(visibleNodes.map((node) => [node.personId, node]));
 
   const occupiedLogicalGenerations = [...new Set(visibleNodes.map((node) => generation.get(node.personId) ?? 0))].sort((a, b) => a - b);
