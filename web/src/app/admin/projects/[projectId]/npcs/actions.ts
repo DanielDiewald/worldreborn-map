@@ -16,6 +16,13 @@ const npcSchema = z.object({
   title: z.string().trim().max(120).optional(),
   species: z.string().trim().max(80).optional(),
   profession: z.string().trim().max(120).optional(),
+  locationId: z.coerce.number().int().positive(),
+  race: z.string().trim().max(40).optional(),
+  alive: z.boolean(),
+  birthday: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  follower: z.boolean(),
+  className: z.string().trim().max(50).optional(),
+  age: z.coerce.number().int().min(0).max(100000),
 });
 
 function readNpcForm(formData: FormData) {
@@ -28,6 +35,13 @@ function readNpcForm(formData: FormData) {
     title: formData.get("title") || undefined,
     species: formData.get("species") || undefined,
     profession: formData.get("profession") || undefined,
+    locationId: formData.get("locationId"),
+    race: formData.get("race") || undefined,
+    alive: formData.get("alive") === "on",
+    birthday: formData.get("birthday") || "2000-01-01",
+    follower: formData.get("follower") === "on",
+    className: formData.get("className") || undefined,
+    age: formData.get("age") || 0,
   });
 }
 
@@ -41,8 +55,7 @@ export async function createNpcAction(projectId: number, formData: FormData) {
   await requireAdminSession();
   await assertProject(projectId);
   const parsed = readNpcForm(formData);
-  if (!parsed.success) return;
-
+  if (!parsed.success) throw new Error("Invalid NPC input");
   const created = await createNpc(projectId, parsed.data);
   redirect(`/admin/projects/${projectId}/npcs/${created.nId}`);
 }
@@ -51,8 +64,7 @@ export async function updateNpcAction(projectId: number, npcId: number, formData
   await requireAdminSession();
   await assertProject(projectId);
   const parsed = readNpcForm(formData);
-  if (!parsed.success) return;
-
+  if (!parsed.success) throw new Error("Invalid NPC input");
   const updated = await updateNpc(projectId, npcId, parsed.data);
   if (!updated) throw new Error("NPC not found in this project");
   revalidatePath(`/admin/projects/${projectId}/npcs/${npcId}`);
