@@ -80,7 +80,7 @@ export default async function MapMarkersPage({params,searchParams}:{params:Promi
           <td>{marker.entity_label?<>{href?<Link href={href}><strong>{marker.entity_label}</strong></Link>:<strong>{marker.entity_label}</strong>}<small>{marker.entity_type} #{marker.entity_id}</small></>:<span className="muted">Nicht verknüpft</span>}</td>
           <td>{coordinates(marker)}</td>
           <td><span className={`visibility-pill ${marker.visibility_mode}`}>{marker.visibility_mode}</span></td>
-          <td><div className="row wrap-row"><Link className="button ghost" href={`/admin/projects/${projectId}/map?mapId=${mapId}`}>Auf Karte</Link><ConfirmAction action={deleteMapMarkerAction.bind(null,projectId,mapId,Number(marker.marker_id))} title={`Marker „${marker.label}“ löschen?`} description="Der Marker wird von der Karte entfernt. Die verknüpfte Lore-Entität bleibt unverändert." triggerLabel="Löschen…" confirmLabel="Marker löschen" triggerClassName="button danger" confirmClassName="danger"/></div></td>
+          <td><div className="row wrap-row"><Link className="button ghost" href={`/admin/projects/${projectId}/map?mapId=${mapId}`}>Map öffnen</Link><ConfirmAction action={deleteMapMarkerAction.bind(null,projectId,mapId,Number(marker.marker_id))} title={`Marker „${marker.label}“ löschen?`} description="Der Marker wird von der Karte entfernt. Die verknüpfte Lore-Entität bleibt unverändert." triggerLabel="Löschen…" confirmLabel="Marker löschen" triggerClassName="button danger" confirmClassName="danger"/></div></td>
         </tr>;
       })}</tbody></table></div>}
       <Pagination pathname={path} searchParams={common} page={markers.page} pageSize={markers.pageSize} total={markers.total} totalPages={markers.totalPages}/>
