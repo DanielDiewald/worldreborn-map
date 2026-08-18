@@ -11,6 +11,20 @@ concurrency:
 jobs:
   web:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: worldreborn
+          POSTGRES_USER: worldreborn
+          POSTGRES_PASSWORD: worldreborn
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U worldreborn -d worldreborn"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
     defaults:
       run:
         working-directory: web
@@ -25,7 +39,18 @@ jobs:
           node-version: 24
           cache: npm
           cache-dependency-path: web/package-lock.json
+      - name: Restore legacy dump with PostgreSQL 17
+        run: |
+          CID="$(docker ps --filter ancestor=postgres:17 --format '{{.ID}}' | head -n 1)"
+          test -n "$CID"
+          docker exec -i "$CID" pg_restore -U worldreborn -d worldreborn --no-owner --no-privileges < ../worldreborn-before-foundation.dump
+      - name: Verify legacy baseline before migrations
+        run: |
+          CID="$(docker ps --filter ancestor=postgres:17 --format '{{.ID}}' | head -n 1)"
+          docker exec -i "$CID" psql -v ON_ERROR_STOP=1 -U worldreborn -d worldreborn < scripts/legacy-baseline.sql
       - run: npm ci
+      - run: npm run db:migrate
+      - run: npm run db:audit
       - run: npm run lint
       - run: npm run typecheck
       - run: npm test
