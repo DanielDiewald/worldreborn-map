@@ -65,7 +65,9 @@ type LeafletApi = {
   map(element: HTMLElement, options?: Record<string, unknown>): LeafletMap;
   tileLayer(url: string, options?: Record<string, unknown>): { addTo(map: LeafletMap): unknown };
   imageOverlay(url: string, bounds: [[number, number], [number, number]]): { addTo(map: LeafletMap): unknown };
-  marker(position: [number, number], options?: Record<string, unknown>): LeafletMarker;
+  icon(options:{iconUrl:string;iconSize:[number,number];iconAnchor:[number,number];popupAnchor:[number,number]}): unknown;
+  divIcon(options:{html:string;className:string;iconSize:[number,number];iconAnchor:[number,number];popupAnchor:[number,number]}): unknown;
+  marker(position: [number, number], options?: {draggable?:boolean;zIndexOffset?:number;icon?:unknown}): LeafletMarker;
 };
 
 type MarkerPayload = {
@@ -292,7 +294,7 @@ function MarkerEditor({
 
     <label>Kurzbeschreibung<textarea name="shortDescription" rows={4} defaultValue={marker?.short_description ?? ""}/></label>
     <div className={styles.fieldGrid}>
-      <label>Icon/Pfad<input name="icon" maxLength={4000} defaultValue={marker?.icon ?? ""} placeholder="optional"/></label>
+      <label>Icon/Pfad<input name="icon" maxLength={4000} defaultValue={marker?.icon ?? ""} placeholder="optional · sonst Typ-Symbol"/></label>
       <label>Z-Index<input name="zIndex" type="number" min={-100000} max={100000} defaultValue={marker?.z_index ?? 0}/></label>
     </div>
 
@@ -444,7 +446,11 @@ export function MapViewer({
       const position = markerPosition(marker);
       if (!position) continue;
       const id = String(marker.marker_id);
-      const instance = L.marker(position, { draggable: admin, zIndexOffset: marker.z_index }).addTo(map);
+      const glyph=TYPE_GLYPHS[marker.marker_type]??"•";
+      const customIcon=marker.icon&&marker.icon!=="noimage"
+        ? L.icon({iconUrl:marker.icon,iconSize:[32,32],iconAnchor:[16,30],popupAnchor:[0,-28]})
+        : L.divIcon({html:`<span><i>${glyph}</i></span>`,className:styles.leafletGlyph,iconSize:[32,32],iconAnchor:[16,30],popupAnchor:[0,-28]});
+      const instance = L.marker(position, { draggable: admin, zIndexOffset: marker.z_index, icon: customIcon }).addTo(map);
       instances.set(id, instance);
       instance.bindTooltip(marker.label, { direction: "top" });
       instance.on("click", () => setSelectedMarkerId(id));
