@@ -38,7 +38,7 @@ export type NpcFilterOptions = {
 };
 
 type NpcRow={
-  nId:number;charId:number;campId:number;name:string;gender:string;image:string;imageMediaId:number|null;notes:string;publicDescription:string|null;adminNotes:string|null;title:string|null;species:string|null;profession:string|null;visibilityMode:string;locId:number;location:string;race:string;alive:boolean;birthday:string;follower:boolean;className:string;age:number;birthEra:"before"|"after"|null;birthYear:number|null;birthMonth:number|null;birthDay:number|null;birthPrecision:string|null;deathCauseCode:string|null;deathCauseDetail:string|null;
+  nId:number;charId:number;campId:number;name:string;gender:string;image:string;imageMediaId:number|null;notes:string;publicDescription:string|null;adminNotes:string|null;title:string|null;species:string|null;profession:string|null;visibilityMode:string;locId:number;location:string;race:string;alive:boolean;birthday:string;follower:boolean;className:string;age:number;birthEra:"before"|"after"|null;birthYear:number|null;birthMonth:number|null;birthDay:number|null;birthPrecision:string|null;deathEra:"before"|"after"|null;deathYear:number|null;deathMonth:number|null;deathDay:number|null;deathPrecision:string|null;deathCauseCode:string|null;deathCauseDetail:string|null;
 };
 
 function npcFilter(projectId:number,filters:NpcListFilters){
@@ -65,12 +65,14 @@ async function assertLocation(projectId:number,locationId:number){
 }
 
 const npcSelect=`SELECT n.n_id AS "nId",c.char_id AS "charId",n.camp_id AS "campId",n.name,n.gender,n.image,n.image_media_id AS "imageMediaId",n.notes,n.public_description AS "publicDescription",n.admin_notes AS "adminNotes",n.title,n.species,n.profession,n.visibility_mode AS "visibilityMode",c.loc_id AS "locId",l.name AS location,c.race,c.alive,c.birthday::text,c.follower,c.class AS "className",c.age,
-  fd.era AS "birthEra",fd.year AS "birthYear",fd.month AS "birthMonth",fd.day AS "birthDay",fd.precision AS "birthPrecision",
+  birth_fd.era AS "birthEra",birth_fd.year AS "birthYear",birth_fd.month AS "birthMonth",birth_fd.day AS "birthDay",birth_fd.precision AS "birthPrecision",
+  death_fd.era AS "deathEra",death_fd.year AS "deathYear",death_fd.month AS "deathMonth",death_fd.day AS "deathDay",death_fd.precision AS "deathPrecision",
   n.metadata->>'death_cause_code' AS "deathCauseCode",n.metadata->>'death_cause_detail' AS "deathCauseDetail"
   FROM npcs n
   JOIN charakters c ON c.n_id=n.n_id
   JOIN locations l ON l.loc_id=c.loc_id AND l.camp_id=n.camp_id
-  LEFT JOIN fantasy_dates fd ON fd.project_id=n.camp_id AND fd.entity_type='person' AND fd.entity_id=n.n_id AND fd.field_key='birth'`;
+  LEFT JOIN fantasy_dates birth_fd ON birth_fd.project_id=n.camp_id AND birth_fd.entity_type='person' AND birth_fd.entity_id=n.n_id AND birth_fd.field_key='birth'
+  LEFT JOIN fantasy_dates death_fd ON death_fd.project_id=n.camp_id AND death_fd.entity_type='person' AND death_fd.entity_id=n.n_id AND death_fd.field_key='death'`;
 
 export async function listNpcFilterOptions(projectId:number):Promise<NpcFilterOptions>{
   const [genders,races,classes]=await Promise.all([
