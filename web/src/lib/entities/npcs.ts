@@ -20,7 +20,22 @@ const npcInputSchema = z.object({
 });
 
 export type NpcInput = z.input<typeof npcInputSchema>;
-export type NpcListFilters = { query?: string; visibility?: "admin_only" | "all_players" | "selected_players" };
+export type NpcListFilters = {
+  query?: string;
+  visibility?: "admin_only" | "all_players" | "selected_players";
+  alive?: boolean;
+  follower?: boolean;
+  gender?: string;
+  locationId?: number;
+  race?: string;
+  className?: string;
+};
+
+export type NpcFilterOptions = {
+  genders: string[];
+  races: string[];
+  classes: string[];
+};
 
 type NpcRow={
   nId:number;charId:number;campId:number;name:string;gender:string;image:string;imageMediaId:number|null;notes:string;publicDescription:string|null;adminNotes:string|null;title:string|null;species:string|null;profession:string|null;visibilityMode:string;locId:number;location:string;race:string;alive:boolean;birthday:string;follower:boolean;className:string;age:number;birthEra:"before"|"after"|null;birthYear:number|null;birthMonth:number|null;birthDay:number|null;birthPrecision:string|null;
@@ -32,9 +47,15 @@ function npcFilter(projectId:number,filters:NpcListFilters){
   if(filters.query?.trim()){
     values.push(`%${filters.query.trim()}%`);
     const p=`$${values.length}`;
-    where.push(`(n.name ILIKE ${p} OR n.title ILIKE ${p} OR n.species ILIKE ${p} OR n.profession ILIKE ${p} OR c.race ILIKE ${p} OR c.class ILIKE ${p})`);
+    where.push(`(n.name ILIKE ${p} OR COALESCE(n.title,'') ILIKE ${p} OR COALESCE(n.species,'') ILIKE ${p} OR COALESCE(n.profession,'') ILIKE ${p} OR COALESCE(c.race,'') ILIKE ${p} OR COALESCE(c.class,'') ILIKE ${p})`);
   }
   if(filters.visibility){values.push(filters.visibility);where.push(`n.visibility_mode=$${values.length}`);}
+  if(typeof filters.alive==="boolean"){values.push(filters.alive);where.push(`c.alive=$${values.length}`);}
+  if(typeof filters.follower==="boolean"){values.push(filters.follower);where.push(`c.follower=$${values.length}`);}
+  if(filters.gender?.trim()){values.push(filters.gender.trim());where.push(`LOWER(COALESCE(n.gender,''))=LOWER($${values.length})`);}
+  if(Number.isSafeInteger(filters.locationId)&&Number(filters.locationId)>0){values.push(filters.locationId);where.push(`c.loc_id=$${values.length}`);}
+  if(filters.race?.trim()){values.push(filters.race.trim());where.push(`LOWER(COALESCE(c.race,''))=LOWER($${values.length})`);}
+  if(filters.className?.trim()){values.push(filters.className.trim());where.push(`LOWER(COALESCE(c.class,''))=LOWER($${values.length})`);}
   return {values,where};
 }
 
@@ -49,6 +70,15 @@ const npcSelect=`SELECT n.n_id AS "nId",c.char_id AS "charId",n.camp_id AS "camp
   JOIN charakters c ON c.n_id=n.n_id
   JOIN locations l ON l.loc_id=c.loc_id AND l.camp_id=n.camp_id
   LEFT JOIN fantasy_dates fd ON fd.project_id=n.camp_id AND fd.entity_type='person' AND fd.entity_id=n.n_id AND fd.field_key='birth'`;
+
+export async function listNpcFilterOptions(projectId:number):Promise<NpcFilterOptions>{
+  const [genders,races,classes]=await Promise.all([
+    pool.query<{value:string}>(`SELECT DISTINCT BTRIM(n.gender) AS value FROM npcs n JOIN charakters c ON c.n_id=n.n_id WHERE n.camp_id=$1 AND n.archived_at IS NULL AND NULLIF(BTRIM(n.gender),'') IS NOT NULL ORDER BY value LIMIT 100`,[projectId]),
+    pool.query<{value:string}>(`SELECT DISTINCT BTRIM(c.race) AS value FROM npcs n JOIN charakters c ON c.n_id=n.n_id WHERE n.camp_id=$1 AND n.archived_at IS NULL AND NULLIF(BTRIM(c.race),'') IS NOT NULL ORDER BY value LIMIT 200`,[projectId]),
+    pool.query<{value:string}>(`SELECT DISTINCT BTRIM(c.class) AS value FROM npcs n JOIN charakters c ON c.n_id=n.n_id WHERE n.camp_id=$1 AND n.archived_at IS NULL AND NULLIF(BTRIM(c.class),'') IS NOT NULL ORDER BY value LIMIT 200`,[projectId]),
+  ]);
+  return {genders:genders.rows.map((row)=>row.value),races:races.rows.map((row)=>row.value),classes:classes.rows.map((row)=>row.value)};
+}
 
 export async function listNpcs(projectId:number,filters:NpcListFilters={}){
   const {values,where}=npcFilter(projectId,filters);
