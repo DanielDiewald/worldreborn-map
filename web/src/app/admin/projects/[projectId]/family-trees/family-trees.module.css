@@ -40,7 +40,7 @@
   position: sticky;
   top: 10px;
   left: 10px;
-  z-index: 8;
+  z-index: 10;
   display: flex;
   width: max-content;
   max-width: calc(100vw - 110px);
@@ -51,7 +51,7 @@
   padding: 8px 10px;
   border: 1px solid #343a45;
   border-radius: 12px;
-  background: rgba(15, 18, 23, .9);
+  background: rgba(15, 18, 23, .92);
   box-shadow: 0 8px 24px rgba(0, 0, 0, .28);
   backdrop-filter: blur(14px);
 }
@@ -60,13 +60,90 @@
 .canvasButtons { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
 .canvasStatus strong { color: var(--gold-bright); font-size: 11px; }
 .canvasStatus span { padding: 4px 7px; border-radius: 999px; background: #191d24; color: var(--muted); font-size: 9px; }
-.canvasButtons button { min-height: 28px; padding: 4px 8px; font-size: 10px; }
+.canvasButtons > button { min-height: 28px; padding: 4px 8px; font-size: 10px; }
 .canvasButtons button:disabled { opacity: .45; cursor: default; }
+
+.zoomControls {
+  display: inline-flex;
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid #343a45;
+  border-radius: 9px;
+  background: #11151b;
+}
+
+.zoomControls button {
+  min-width: 30px;
+  min-height: 28px;
+  padding: 4px 7px;
+  border: 0;
+  border-right: 1px solid #2f3540;
+  border-radius: 0;
+  background: transparent;
+  color: #d8dde5;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.zoomControls button:last-child { border-right: 0; }
+.zoomControls button:hover:not(:disabled) { background: #1b2028; color: var(--gold-bright); }
+.zoomControls .zoomValue { min-width: 52px; color: #cdb574; }
+
+.mainLineEditor {
+  position: sticky;
+  top: 66px;
+  left: 10px;
+  z-index: 9;
+  display: grid;
+  width: min(780px, calc(100vw - 120px));
+  max-height: min(520px, 58vh);
+  gap: 12px;
+  margin: 10px;
+  padding: 14px;
+  overflow: auto;
+  border: 1px solid #5d5135;
+  border-radius: 14px;
+  background: rgba(16, 19, 24, .97);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, .42), inset 0 1px 0 rgba(255, 255, 255, .025);
+  backdrop-filter: blur(16px);
+}
+
+.mainLineEditorHead { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.mainLineEditorHead strong { color: var(--gold-bright); font-family: Georgia, serif; font-size: 17px; }
+.mainLineEditorHead p { max-width: 590px; margin: 4px 0 0; color: var(--muted); font-size: 10px; line-height: 1.45; }
+.mainLineStart { display: grid; grid-template-columns: 150px minmax(0, 1fr); align-items: center; gap: 10px; color: #aeb4bd; font-size: 10px; }
+.mainLineStart select { min-width: 0; }
+.mainLineChain { display: grid; gap: 7px; }
+.mainLineStep {
+  display: grid;
+  grid-template-columns: 58px minmax(160px, .8fr) minmax(220px, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid #2f3540;
+  border-radius: 10px;
+  background: #12161c;
+}
+.mainLineStep > span { color: #9b8962; font-size: 9px; text-transform: uppercase; }
+.mainLineStep > strong { min-width: 0; overflow: hidden; color: #e4e7eb; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.mainLineStep > label { display: grid; grid-template-columns: 68px minmax(0, 1fr); align-items: center; gap: 7px; color: var(--muted); font-size: 9px; }
+.mainLineStep select { min-width: 0; height: 30px; font-size: 10px; }
+.mainLineStep small { color: #6f7784; font-size: 9px; }
+.mainLineEditorActions { display: flex; gap: 8px; flex-wrap: wrap; }
+.mainLineEditorActions button { min-height: 31px; }
+.mainLineError { padding: 8px 10px; border: 1px solid #70484a; border-radius: 9px; background: rgba(112, 72, 74, .14); color: #e1b5b7; font-size: 10px; }
+
+.zoomSurface {
+  position: relative;
+  transform-origin: top left;
+}
 
 .canvas {
   position: relative;
-  min-width: 1380px;
-  min-height: 680px;
+  min-width: 1500px;
+  min-height: 720px;
+  transform-origin: top left;
 }
 
 .edges {
@@ -93,6 +170,8 @@
 .parentJunction { stroke: #8a7954; stroke-width: 2; }
 .partnerEdge { stroke: #9677a2; stroke-width: 2; stroke-dasharray: 7 5; }
 .otherEdge { stroke: #566174; stroke-width: 1.5; stroke-dasharray: 3 5; }
+.junctionDot { fill: #8a7954; stroke: #0d1014; stroke-width: 2; vector-effect: non-scaling-stroke; }
+.mainJunctionDot { fill: #d0ad62; stroke: #0d1014; stroke-width: 2; vector-effect: non-scaling-stroke; }
 .edgeLabel { fill: #aeb4bd; font-size: 9px; paint-order: stroke; stroke: #0d1014; stroke-width: 5px; stroke-linejoin: round; }
 
 .generationMarker {
@@ -151,7 +230,7 @@
 
 .nodeBadges span {
   flex: 0 0 auto;
-  max-width: 105px;
+  max-width: 125px;
   overflow: hidden;
   padding: 3px 6px;
   border: 1px solid #303743;
@@ -214,4 +293,8 @@
   .treeGrid { grid-template-columns: 1fr; }
   .canvasShell { height: 68vh; min-height: 520px; }
   .canvasControls { max-width: calc(100vw - 48px); align-items: flex-start; }
+  .mainLineEditor { top: 86px; width: calc(100vw - 48px); }
+  .mainLineStart { grid-template-columns: 1fr; }
+  .mainLineStep { grid-template-columns: 52px minmax(120px, 1fr); }
+  .mainLineStep > label { grid-column: 1 / -1; }
 }
