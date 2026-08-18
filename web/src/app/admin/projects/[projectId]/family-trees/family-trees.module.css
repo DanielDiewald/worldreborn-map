@@ -173,7 +173,9 @@
 .mainParentEdge,
 .parentJunction,
 .partnerEdge,
-.otherEdge {
+.otherEdge,
+.explicitFamilyEdge,
+.explicitRelationshipEdge {
   fill: none;
   vector-effect: non-scaling-stroke;
   stroke-linecap: round;
@@ -185,6 +187,8 @@
 .parentJunction { stroke: #8a7954; stroke-width: 2; }
 .partnerEdge { stroke: #9677a2; stroke-width: 2; stroke-dasharray: 7 5; }
 .otherEdge { stroke: #566174; stroke-width: 1.5; stroke-dasharray: 3 5; }
+.explicitFamilyEdge { stroke: #a88d5b; stroke-width: 1.7; stroke-dasharray: 2 4; opacity: .88; }
+.explicitRelationshipEdge { stroke: #6881aa; stroke-width: 1.7; stroke-dasharray: 7 4; opacity: .9; }
 .junctionDot { fill: #8a7954; stroke: #0d1014; stroke-width: 2; vector-effect: non-scaling-stroke; }
 .mainJunctionDot { fill: #d0ad62; stroke: #0d1014; stroke-width: 2; vector-effect: non-scaling-stroke; }
 .edgeLabel { fill: #aeb4bd; font-size: 9px; paint-order: stroke; stroke: #0d1014; stroke-width: 5px; stroke-linejoin: round; }
