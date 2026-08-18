@@ -4,7 +4,7 @@ import { listProjects } from "@/lib/projects";
 import { logoutAdmin } from "@/app/admin/actions";
 import { ProjectSwitcher } from "./project-switcher";
 
-type Section = "dashboard" | "npcs" | "gods" | "groups" | "locations" | "players" | "audit" | "projects";
+type Section = "dashboard" | "npcs" | "gods" | "groups" | "locations" | "relationships" | "family-trees" | "players" | "audit" | "projects";
 
 type Props = {
   children: ReactNode;
@@ -63,9 +63,9 @@ export async function AdminShell({ children, projectId, projectName, section = "
             <NavItem icon="character" disabled>Spielercharaktere</NavItem>
             <NavItem href={projectId ? `${base}/groups` : undefined} icon="group" active={section === "groups"} disabled={!projectId}>Gruppen</NavItem>
             <NavItem href={projectId ? `${base}/locations` : undefined} icon="location" active={section === "locations"} disabled={!projectId}>Orte</NavItem>
-            <NavItem icon="link" disabled>Beziehungen</NavItem>
+            <NavItem href={projectId ? `${base}/relationships` : undefined} icon="link" active={section === "relationships"} disabled={!projectId}>Beziehungen</NavItem>
           </div>
-          <div className="nav-section"><span className="nav-section-title">Wissen</span><NavItem icon="tree" disabled>Stammbaum</NavItem><NavItem icon="graph" disabled>Relationship Graph</NavItem><NavItem icon="media" disabled>Media</NavItem></div>
+          <div className="nav-section"><span className="nav-section-title">Wissen</span><NavItem href={projectId ? `${base}/family-trees` : undefined} icon="tree" active={section === "family-trees"} disabled={!projectId}>Stammbäume</NavItem><NavItem icon="graph" disabled>Relationship Graph</NavItem><NavItem icon="media" disabled>Media</NavItem></div>
           <div className="nav-section"><span className="nav-section-title">Spieler</span><NavItem href={projectId ? `${base}/players` : undefined} icon="players" active={section === "players"} disabled={!projectId}>Players</NavItem><NavItem icon="shield" disabled>Permissions</NavItem></div>
           <div className="nav-section"><span className="nav-section-title">System</span><NavItem href="/admin" icon="world">Welten wechseln</NavItem><NavItem href={projectId ? `${base}/audit` : undefined} icon="shield" active={section === "audit"} disabled={!projectId}>Audit Log</NavItem><NavItem icon="settings" disabled>Project Settings</NavItem></div>
         </nav>
