@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useRef, useState, useTransition, type WheelEvent } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import {
   FAMILY_NODE_HEIGHT,
   FAMILY_NODE_WIDTH,
@@ -83,10 +83,6 @@ export function FamilyTreeCanvas({ projectId, people, edges, rootPersonId, named
   const [mainLineError, setMainLineError] = useState<string | null>(null);
   const [savingMainLine, startMainLineTransition] = useTransition();
 
-  useEffect(() => {
-    setPersistedMainLine(savedMainLinePersonIds.length ? savedMainLinePersonIds : null);
-  }, [savedMainLinePersonIds]);
-
   const automaticMainLine = useMemo(() => resolveFamilyMainLine(people, edges, null, rootPersonId), [people, edges, rootPersonId]);
   const storedMainLine = useMemo(() => resolveFamilyMainLine(people, edges, persistedMainLine, rootPersonId), [people, edges, persistedMainLine, rootPersonId]);
   const mainLine = editingMainLine && draftMainLine.length ? draftMainLine : storedMainLine;
@@ -144,11 +140,17 @@ export function FamilyTreeCanvas({ projectId, people, edges, rootPersonId, named
     requestAnimationFrame(() => viewport.scrollTo({ left: 0, top: 0, behavior: "smooth" }));
   };
 
-  const handleWheel = (event: WheelEvent<HTMLDivElement>) => {
-    if (!event.ctrlKey && !event.metaKey) return;
-    event.preventDefault();
-    setZoom((current) => clampZoom(current + (event.deltaY < 0 ? ZOOM_STEP : -ZOOM_STEP)));
-  };
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    const handleWheel = (event: globalThis.WheelEvent) => {
+      if (!event.ctrlKey && !event.metaKey) return;
+      event.preventDefault();
+      setZoom((current) => clampZoom(current + (event.deltaY < 0 ? ZOOM_STEP : -ZOOM_STEP)));
+    };
+    viewport.addEventListener("wheel", handleWheel, { passive: false });
+    return () => viewport.removeEventListener("wheel", handleWheel);
+  }, []);
 
   useEffect(() => {
     if (centeredInitially.current || !mainLine.length) return;
@@ -330,7 +332,7 @@ export function FamilyTreeCanvas({ projectId, people, edges, rootPersonId, named
   const startOptions = [...people].sort((a, b) => (baseGenerations.get(a.personId) ?? 0) - (baseGenerations.get(b.personId) ?? 0) || a.name.localeCompare(b.name) || a.personId - b.personId);
 
   return (
-    <div className={styles.canvasShell} ref={viewportRef} onWheel={handleWheel}>
+    <div className={styles.canvasShell} ref={viewportRef}>
       <div className={styles.canvasControls}>
         <div className={styles.canvasStatus}>
           <strong>Hauptlinie</strong>
