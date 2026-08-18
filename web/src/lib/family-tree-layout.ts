@@ -12,7 +12,7 @@ export const FAMILY_NODE_HEIGHT = 138;
 export const FAMILY_ROW_GAP = 310;
 const SIDE_PADDING = 170;
 const TOP_PADDING = 108;
-const BASE_COLUMN_GAP = 150;
+const BASE_COLUMN_GAP = 190;
 
 type BranchSide = -1 | 1;
 
@@ -279,7 +279,15 @@ function compactSideAncestorsTowardAttachments(
 ) {
   const result = new Map(generation);
   const parentEdges = edges.filter((edge) => visibleIds.has(edge.a) && visibleIds.has(edge.b) && isFamilyParentEdge(edge));
-  const union = sameGenerationUnion(visibleIds, edges, parentEdges);
+
+  // For vertical compaction only explicit same-generation relations are bundled. Co-parents are deliberately NOT
+  // unioned here: one co-parent may be on the fixed main line while the other belongs to a short side ancestry that
+  // must still be allowed to move down to the child's actual generation.
+  const union = new UnionFind([...visibleIds]);
+  for (const edge of edges) {
+    if (visibleIds.has(edge.a) && visibleIds.has(edge.b) && SAME_GENERATION_CODES.has(edge.code)) union.union(edge.a, edge.b);
+  }
+
   const members = new Map<number, number[]>();
   for (const id of visibleIds) {
     const root = union.find(id);
@@ -301,8 +309,8 @@ function compactSideAncestorsTowardAttachments(
   const groupGeneration = (root: number) => Math.max(...(members.get(root) ?? []).map((id) => result.get(id) ?? 0));
   const roots = [...members.keys()];
 
-  // Long main-line ancestry may push the attachment generation far down while a short side ancestry still starts at 0.
-  // Shift only the side ancestry groups down to the latest legal generation directly before their earliest child.
+  // ALAP (as-late-as-possible) placement: every movable side generation is pulled down to one row before its
+  // earliest child. Repeating the pass propagates a late main-line attachment upward through the complete side chain.
   for (let pass = 0; pass < roots.length; pass += 1) {
     let changed = false;
     const ordered = [...roots].sort((a, b) => groupGeneration(b) - groupGeneration(a) || a - b);
@@ -603,13 +611,28 @@ export function layoutFamilyTree(
   };
 
   let widest = 0;
+  let centeredRequiredWidth = 0;
   for (const rowId of sortedGenerations) {
     const row = rows.get(rowId) ?? [];
     let rowWidth = row.length * FAMILY_NODE_WIDTH;
     for (let index = 0; index < row.length - 1; index += 1) rowWidth += rowGap(row[index], row[index + 1]);
     widest = Math.max(widest, rowWidth);
+
+    // When one main-line node is forced to the exact center, the wider side must fit on BOTH halves of the canvas.
+    // A plain total-row width is insufficient for asymmetric rows and previously caused right/left nodes to be
+    // clamped together near the edge.
+    const mainIndexes = row.map((node, index) => mainLine.has(node.personId) ? index : -1).filter((index) => index >= 0);
+    if (mainIndexes.length === 1) {
+      const mainIndex = mainIndexes[0];
+      let leftDistance = 0;
+      for (let index = mainIndex - 1; index >= 0; index -= 1) leftDistance += FAMILY_NODE_WIDTH + rowGap(row[index], row[index + 1]);
+      let rightDistance = 0;
+      for (let index = mainIndex + 1; index < row.length; index += 1) rightDistance += FAMILY_NODE_WIDTH + rowGap(row[index - 1], row[index]);
+      const sideExtent = Math.max(leftDistance, rightDistance) + FAMILY_NODE_WIDTH / 2;
+      centeredRequiredWidth = Math.max(centeredRequiredWidth, 2 * (SIDE_PADDING + sideExtent));
+    }
   }
-  const width = Math.max(1500, widest + SIDE_PADDING * 2);
+  const width = Math.max(1500, widest + SIDE_PADDING * 2, centeredRequiredWidth);
   const mainCenter = width / 2;
   const positions = new Map<number, FamilyTreePosition>();
 
