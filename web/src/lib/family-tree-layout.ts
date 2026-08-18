@@ -24,6 +24,10 @@ export function isFamilyPartnerEdge(edge: FamilyLayoutEdge) {
   return !edge.directed && FAMILY_PARTNER_CODES.has(edge.code);
 }
 
+export function isFamilyStructureEdge(edge: FamilyLayoutEdge) {
+  return isFamilyParentEdge(edge) || SAME_GENERATION_CODES.has(edge.code);
+}
+
 class UnionFind {
   private parent = new Map<number, number>();
 
@@ -98,8 +102,6 @@ function alignGenerationComponentsByBirthYear(
   const yearSpan = estimateGenerationYearSpan(nodes, parentEdges);
   if (yearSpan == null) return generation;
 
-  // A parent-connected component has a fixed internal generation structure. Birth years are used only to place whole
-  // components relative to each other, so no real Parent→Child edge can ever be broken by chronology alignment.
   const ids = nodes.map((node) => node.personId);
   const union = new UnionFind(ids);
   for (const edge of parentEdges) union.union(edge.a, edge.b);
@@ -110,9 +112,6 @@ function alignGenerationComponentsByBirthYear(
     members.set(root, [...(members.get(root) ?? []), node]);
   }
 
-  // For a component, birthYear - generation * span estimates the birth year of its generation-zero cohort.
-  // Comparing those baselines lets disconnected branches, spouse-only nodes and sibling-only nodes line up with the
-  // known chronology without assuming a hard-coded real-world generation length.
   const baselineByRoot = new Map<number, number>();
   for (const [root, component] of members) {
     const estimates = component.flatMap((node) => {
@@ -153,8 +152,6 @@ export function buildFamilyGenerations(nodes: FamilyLayoutNode[], edges: FamilyL
     }
   }
 
-  // Parent→child is authoritative for vertical depth. Lateral relations such as spouse/sibling must never collapse
-  // generations or create an artificial cycle before the genealogy has been laid out.
   const generation = new Map<number, number>();
   const queue = [...ids].filter((id) => (indegree.get(id) ?? 0) === 0).sort((a, b) => a - b);
   for (const id of queue) generation.set(id, 0);
@@ -170,7 +167,6 @@ export function buildFamilyGenerations(nodes: FamilyLayoutNode[], edges: FamilyL
     }
   }
 
-  // Keep malformed legacy cycles renderable, but exclude unresolved cycle nodes from the alignment propagation below.
   const resolved = new Set(generation.keys());
   for (const id of ids) if (!generation.has(id)) generation.set(id, 0);
 
@@ -180,9 +176,6 @@ export function buildFamilyGenerations(nodes: FamilyLayoutNode[], edges: FamilyL
     parentsByChild.set(edge.b, [...(parentsByChild.get(edge.b) ?? []), edge.a]);
   }
 
-  // Co-parents should share a compatible parent row. Raise the shallower parent to the deepest co-parent and then
-  // propagate that lift down the acyclic parent graph. This keeps family units aligned without letting spouse/sibling
-  // links override real ancestry.
   for (let pass = 0; pass < ids.size; pass += 1) {
     let changed = false;
     for (const parentIds of parentsByChild.values()) {
@@ -302,7 +295,7 @@ function adjacency(edges: FamilyLayoutEdge[], ids?: Set<number>) {
 }
 
 export function collectFamilyBranchNodes(anchorId: number, mainLine: Set<number>, edges: FamilyLayoutEdge[]) {
-  const links = adjacency(edges);
+  const links = adjacency(edges.filter(isFamilyStructureEdge));
   const result = new Set<number>();
   const queue = [...(links.get(anchorId) ?? [])].filter((id) => !mainLine.has(id));
   for (let cursor = 0; cursor < queue.length; cursor += 1) {
@@ -324,7 +317,7 @@ function alignShortDisconnectedBranches(
   nodes: FamilyLayoutNode[],
 ) {
   const result = new Map(generation);
-  const links = adjacency(edges, visibleIds);
+  const links = adjacency(edges.filter(isFamilyStructureEdge), visibleIds);
   const visited = new Set<number>();
   const mainGenerations = [...mainLine].filter((id) => visibleIds.has(id)).map((id) => generation.get(id) ?? 0);
   const mainBottom = mainGenerations.length
@@ -350,8 +343,6 @@ function alignShortDisconnectedBranches(
       }
     }
     if (component.some((id) => mainLine.has(id))) continue;
-    // If chronology already placed this component, keep that learned row instead of forcing its youngest member to
-    // the bottom of the main line. Components without usable birth years retain the established fallback behavior.
     if (birthYearAligned && component.some((id) => validBirthYear(nodeById.get(id)) != null)) continue;
     const componentBottom = Math.max(...component.map((id) => generation.get(id) ?? 0));
     const shift = Math.max(0, mainBottom - componentBottom);
@@ -370,8 +361,6 @@ function compactSideAncestorsTowardAttachments(
   const result = new Map(generation);
   const parentEdges = edges.filter((edge) => visibleIds.has(edge.a) && visibleIds.has(edge.b) && isFamilyParentEdge(edge));
 
-  // Lateral links only bundle nodes that are already genealogically compatible. A cross-main or cross-generation
-  // spouse/sibling link must not pin a side ancestry at the wrong height.
   const union = new UnionFind([...visibleIds]);
   for (const edge of edges) {
     if (!visibleIds.has(edge.a) || !visibleIds.has(edge.b) || !SAME_GENERATION_CODES.has(edge.code)) continue;
@@ -403,8 +392,6 @@ function compactSideAncestorsTowardAttachments(
   const groupGeneration = (root: number) => Math.max(...(members.get(root) ?? []).map((id) => result.get(id) ?? 0));
   const roots = [...members.keys()];
 
-  // ALAP (as-late-as-possible) placement: every movable side generation is pulled down to one row before its
-  // earliest child. Repeating the pass propagates a late main-line attachment upward through the complete side chain.
   for (let pass = 0; pass < roots.length; pass += 1) {
     let changed = false;
     const ordered = [...roots].sort((a, b) => groupGeneration(b) - groupGeneration(a) || a - b);
@@ -421,6 +408,89 @@ function compactSideAncestorsTowardAttachments(
     if (!changed) break;
   }
 
+  return result;
+}
+
+function alignSideComponentsToMainBirthCohorts(
+  nodes: FamilyLayoutNode[],
+  edges: FamilyLayoutEdge[],
+  generation: Map<number, number>,
+  visibleIds: Set<number>,
+  mainLine: Set<number>,
+) {
+  const nodeById = new Map(nodes.map((node) => [node.personId, node]));
+  const anchors = [...mainLine]
+    .filter((id) => visibleIds.has(id))
+    .flatMap((id) => {
+      const year = validBirthYear(nodeById.get(id));
+      return year == null ? [] : [{ id, year, generation: generation.get(id) ?? 0 }];
+    })
+    .sort((a, b) => a.year - b.year || a.generation - b.generation || a.id - b.id);
+  if (!anchors.length) return generation;
+
+  const parentEdges = edges.filter((edge) => visibleIds.has(edge.a) && visibleIds.has(edge.b) && isFamilyParentEdge(edge));
+  const yearSpan = estimateGenerationYearSpan(nodes, parentEdges);
+  const targetGeneration = (year: number) => {
+    if (anchors.length === 1) {
+      return yearSpan == null ? anchors[0].generation : Math.round(anchors[0].generation + (year - anchors[0].year) / yearSpan);
+    }
+    const interpolate = (left: typeof anchors[number], right: typeof anchors[number]) => {
+      const yearDelta = right.year - left.year;
+      if (yearDelta === 0) return Math.round((left.generation + right.generation) / 2);
+      return Math.round(left.generation + ((year - left.year) / yearDelta) * (right.generation - left.generation));
+    };
+    if (year <= anchors[0].year) return interpolate(anchors[0], anchors[1]);
+    if (year >= anchors[anchors.length - 1].year) return interpolate(anchors[anchors.length - 2], anchors[anchors.length - 1]);
+    for (let index = 0; index < anchors.length - 1; index += 1) {
+      if (year >= anchors[index].year && year <= anchors[index + 1].year) return interpolate(anchors[index], anchors[index + 1]);
+    }
+    return anchors.reduce((best, anchor) => Math.abs(anchor.year - year) < Math.abs(best.year - year) ? anchor : best).generation;
+  };
+
+  const offMain = [...visibleIds].filter((id) => !mainLine.has(id));
+  if (!offMain.length) return generation;
+  const offMainSet = new Set(offMain);
+  const union = new UnionFind(offMain);
+  for (const edge of parentEdges) if (offMainSet.has(edge.a) && offMainSet.has(edge.b)) union.union(edge.a, edge.b);
+
+  const members = new Map<number, number[]>();
+  for (const id of offMain) {
+    const root = union.find(id);
+    members.set(root, [...(members.get(root) ?? []), id]);
+  }
+
+  const result = new Map(generation);
+  for (const component of members.values()) {
+    const componentSet = new Set(component);
+    const shifts = component.flatMap((id) => {
+      const year = validBirthYear(nodeById.get(id));
+      if (year == null) return [];
+      return [targetGeneration(year) - (result.get(id) ?? 0)];
+    });
+    const wanted = median(shifts);
+    if (wanted == null) continue;
+
+    let minShift = Number.NEGATIVE_INFINITY;
+    let maxShift = Number.POSITIVE_INFINITY;
+    for (const edge of parentEdges) {
+      const aInside = componentSet.has(edge.a);
+      const bInside = componentSet.has(edge.b);
+      if (aInside === bInside) continue;
+      const parentGeneration = result.get(edge.a) ?? 0;
+      const childGeneration = result.get(edge.b) ?? 0;
+      if (aInside) maxShift = Math.min(maxShift, childGeneration - 1 - parentGeneration);
+      else minShift = Math.max(minShift, parentGeneration + 1 - childGeneration);
+    }
+
+    let shift = Math.round(wanted);
+    if (Number.isFinite(minShift)) shift = Math.max(shift, minShift);
+    if (Number.isFinite(maxShift)) shift = Math.min(shift, maxShift);
+    if (!shift) continue;
+    for (const id of component) result.set(id, (result.get(id) ?? 0) + shift);
+  }
+
+  const minimum = Math.min(0, ...[...visibleIds].map((id) => result.get(id) ?? 0));
+  if (minimum < 0) for (const id of visibleIds) result.set(id, (result.get(id) ?? 0) - minimum);
   return result;
 }
 
@@ -462,8 +532,6 @@ function stabilizeBranchSides(
     for (const next of familyNeighbors.get(id) ?? []) if (offMainSet.has(next)) branchUnion.union(id, next);
   }
 
-  // A selected main-line person can be the bridge inside one side lineage. Cross that one node, but never walk
-  // along the main spine itself, otherwise unrelated side families would collapse into one component.
   const incomingByMain = new Map<number, number[]>();
   const outgoingByMain = new Map<number, number[]>();
   for (const edge of parentEdges) {
@@ -582,8 +650,6 @@ function anchorFamilyPositions(
     ordered.forEach((node, index) => centerById.set(node.personId, packed[index]));
   };
 
-  // Descendant positions must be final before their ancestors are anchored. Repeating the bottom-up pass lets a
-  // whole short branch follow a child that itself moved during collision packing.
   for (let pass = 0; pass < 5; pass += 1) {
     for (const rowId of [...sortedGenerations].reverse()) {
       const row = rows.get(rowId) ?? [];
@@ -618,12 +684,14 @@ export function layoutFamilyTree(
   visibleIds: Set<number>,
   mainLineIds: number[],
 ) {
-  const baseGeneration = buildFamilyGenerations(allNodes, edges);
+  const structuralEdges = edges.filter(isFamilyStructureEdge);
+  const baseGeneration = buildFamilyGenerations(allNodes, structuralEdges);
   const visibleNodes = allNodes.filter((node) => visibleIds.has(node.personId));
   const visibleSet = new Set(visibleNodes.map((node) => node.personId));
   const mainLine = new Set(mainLineIds);
-  const bottomAligned = alignShortDisconnectedBranches(baseGeneration, visibleSet, edges, mainLine, allNodes);
-  const generation = compactSideAncestorsTowardAttachments(bottomAligned, visibleSet, edges, mainLine);
+  const bottomAligned = alignShortDisconnectedBranches(baseGeneration, visibleSet, structuralEdges, mainLine, allNodes);
+  const compacted = compactSideAncestorsTowardAttachments(bottomAligned, visibleSet, structuralEdges, mainLine);
+  const generation = alignSideComponentsToMainBirthCohorts(allNodes, structuralEdges, compacted, visibleSet, mainLine);
   const nodeById = new Map(visibleNodes.map((node) => [node.personId, node]));
   const rows = new Map<number, FamilyLayoutNode[]>();
   for (const node of visibleNodes) {
@@ -632,14 +700,14 @@ export function layoutFamilyTree(
   }
   for (const [rowId, row] of rows) rows.set(rowId, row.sort((a, b) => a.personId - b.personId));
 
-  const parentEdges = edges.filter((edge) => visibleSet.has(edge.a) && visibleSet.has(edge.b) && isFamilyParentEdge(edge));
+  const parentEdges = structuralEdges.filter((edge) => visibleSet.has(edge.a) && visibleSet.has(edge.b) && isFamilyParentEdge(edge));
   const parents = new Map<number, number[]>();
   const children = new Map<number, number[]>();
   for (const edge of parentEdges) {
     parents.set(edge.b, [...(parents.get(edge.b) ?? []), edge.a]);
     children.set(edge.a, [...(children.get(edge.a) ?? []), edge.b]);
   }
-  const familyNeighbors = adjacency(edges, visibleSet);
+  const familyNeighbors = adjacency(structuralEdges, visibleSet);
   const sortedGenerations = [...rows.keys()].sort((a, b) => a - b);
 
   const indexMap = () => {
@@ -712,9 +780,6 @@ export function layoutFamilyTree(
     for (let index = 0; index < row.length - 1; index += 1) rowWidth += rowGap(row[index], row[index + 1]);
     widest = Math.max(widest, rowWidth);
 
-    // When one main-line node is forced to the exact center, the wider side must fit on BOTH halves of the canvas.
-    // A plain total-row width is insufficient for asymmetric rows and previously caused right/left nodes to be
-    // clamped together near the edge.
     const mainIndexes = row.map((node, index) => mainLine.has(node.personId) ? index : -1).filter((index) => index >= 0);
     if (mainIndexes.length === 1) {
       const mainIndex = mainIndexes[0];
