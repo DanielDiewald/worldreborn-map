@@ -58,7 +58,8 @@ export function loadProjectEnvironment(cwd = process.cwd()) {
   const loaded: string[] = [];
 
   for (const filename of [".env", ".env.local"]) {
-    const envPath = path.resolve(cwd, filename);
+    // These runtime configuration files are intentionally outside Next's build trace.
+    const envPath = path.join(/*turbopackIgnore: true*/ cwd, filename);
 
     if (!existsSync(envPath)) {
       continue;
