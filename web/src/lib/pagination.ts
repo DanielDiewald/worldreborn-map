@@ -33,13 +33,13 @@ export function parsePagination(input: PaginationInput = {}, defaultPageSize: Pa
   return { page, pageSize, limit: pageSize, offset: (page - 1) * pageSize };
 }
 
+export function clampPagination(total: number, pagination: Pagination): Pagination {
+  const totalPages = Math.max(1, Math.ceil(total / pagination.pageSize));
+  const page = Math.min(Math.max(1, pagination.page), totalPages);
+  return { ...pagination, page, offset: (page - 1) * pagination.pageSize };
+}
+
 export function paginatedResult<T>(items: T[], total: number, pagination: Pagination): PaginatedResult<T> {
   const totalPages = Math.max(1, Math.ceil(total / pagination.pageSize));
-  return {
-    items,
-    total,
-    page: Math.min(pagination.page, totalPages),
-    pageSize: pagination.pageSize,
-    totalPages,
-  };
+  return { items, total, page: pagination.page, pageSize: pagination.pageSize, totalPages };
 }
