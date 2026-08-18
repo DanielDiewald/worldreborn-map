@@ -369,6 +369,129 @@ function stabilizeBranchSides(
   return sideByNode;
 }
 
+function anchorFamilyPositions(
+  positions: Map<number, FamilyTreePosition>,
+  rows: Map<number, FamilyLayoutNode[]>,
+  sortedGenerations: number[],
+  visibleSet: Set<number>,
+  mainLine: Set<number>,
+  branchSides: Map<number, BranchSide>,
+  children: Map<number, number[]>,
+  width: number,
+) {
+  const centerById = new Map<number, number>();
+  for (const [id, position] of positions) centerById.set(id, position.x + FAMILY_NODE_WIDTH / 2);
+  const mainCenter = width / 2;
+  const minCenterGap = FAMILY_NODE_WIDTH + BASE_COLUMN_GAP;
+  const minCenter = SIDE_PADDING + FAMILY_NODE_WIDTH / 2;
+  const maxCenter = width - SIDE_PADDING - FAMILY_NODE_WIDTH / 2;
+  const average = (values: number[]) => values.reduce((sum, value) => sum + value, 0) / values.length;
+
+  // Absolute X positions matter more than row order. Walk from descendants upward and place every off-main
+  // parent over the actual children it leads to. When a main-line person sits between a side ancestor and a side
+  // descendant, the off-main continuation below that exact main-line person becomes the anchor instead of the
+  // main spine's center. This is what keeps one lineage visually above the family block it belongs to.
+  for (let pass = 0; pass < 5; pass += 1) {
+    for (const rowId of [...sortedGenerations].reverse()) {
+      for (const node of rows.get(rowId) ?? []) {
+        if (mainLine.has(node.personId)) {
+          centerById.set(node.personId, mainCenter);
+          continue;
+        }
+        const directChildren = (children.get(node.personId) ?? []).filter((id) => visibleSet.has(id) && centerById.has(id));
+        if (!directChildren.length) continue;
+
+        const anchors: number[] = [];
+        for (const childId of directChildren) {
+          if (!mainLine.has(childId)) {
+            const center = centerById.get(childId);
+            if (center !== undefined) anchors.push(center);
+            continue;
+          }
+
+          const continuation = (children.get(childId) ?? [])
+            .filter((id) => visibleSet.has(id) && !mainLine.has(id) && centerById.has(id));
+          if (continuation.length) {
+            anchors.push(...continuation.map((id) => centerById.get(id)!).filter((value) => Number.isFinite(value)));
+          } else {
+            const center = centerById.get(childId);
+            if (center !== undefined) anchors.push(center);
+          }
+        }
+        if (anchors.length) centerById.set(node.personId, average(anchors));
+      }
+    }
+  }
+
+  // Re-pack every generation around those genealogical target centers. This preserves readable card spacing while
+  // allowing a branch to cross the old arbitrary side assignment when its real child anchor is on the other side.
+  for (const rowId of sortedGenerations) {
+    const row = rows.get(rowId) ?? [];
+    if (!row.length) continue;
+    const mainNodes = row.filter((node) => mainLine.has(node.personId));
+    const offMain = row.filter((node) => !mainLine.has(node.personId));
+
+    if (mainNodes.length) {
+      const left: FamilyLayoutNode[] = [];
+      const right: FamilyLayoutNode[] = [];
+      for (const node of offMain) {
+        const desired = centerById.get(node.personId) ?? mainCenter;
+        const oldPosition = positions.get(node.personId);
+        const oldCenter = oldPosition ? oldPosition.x + FAMILY_NODE_WIDTH / 2 : desired;
+        const side = desired < mainCenter
+          ? -1
+          : desired > mainCenter
+            ? 1
+            : oldCenter < mainCenter
+              ? -1
+              : oldCenter > mainCenter
+                ? 1
+                : branchSides.get(node.personId) ?? 1;
+        (side === -1 ? left : right).push(node);
+      }
+
+      left.sort((a, b) => (centerById.get(a.personId) ?? 0) - (centerById.get(b.personId) ?? 0) || a.personId - b.personId);
+      right.sort((a, b) => (centerById.get(a.personId) ?? 0) - (centerById.get(b.personId) ?? 0) || a.personId - b.personId);
+
+      let rightmostLeft = mainCenter - minCenterGap;
+      for (let index = left.length - 1; index >= 0; index -= 1) {
+        const node = left[index];
+        const desired = Math.min(centerById.get(node.personId) ?? rightmostLeft, rightmostLeft);
+        centerById.set(node.personId, Math.max(minCenter, desired));
+        rightmostLeft = (centerById.get(node.personId) ?? desired) - minCenterGap;
+      }
+
+      let leftmostRight = mainCenter + minCenterGap;
+      for (const node of right) {
+        const desired = Math.max(centerById.get(node.personId) ?? leftmostRight, leftmostRight);
+        centerById.set(node.personId, Math.min(maxCenter, desired));
+        leftmostRight = (centerById.get(node.personId) ?? desired) + minCenterGap;
+      }
+
+      for (const node of mainNodes) centerById.set(node.personId, mainCenter);
+    } else {
+      const ordered = [...offMain].sort((a, b) => (centerById.get(a.personId) ?? 0) - (centerById.get(b.personId) ?? 0) || a.personId - b.personId);
+      let previous = Number.NEGATIVE_INFINITY;
+      for (const node of ordered) {
+        const desired = Math.max(centerById.get(node.personId) ?? minCenter, previous + minCenterGap, minCenter);
+        centerById.set(node.personId, Math.min(maxCenter, desired));
+        previous = centerById.get(node.personId) ?? desired;
+      }
+      if (ordered.length) {
+        const overflow = (centerById.get(ordered[ordered.length - 1].personId) ?? maxCenter) - maxCenter;
+        if (overflow > 0) for (const node of ordered) centerById.set(node.personId, (centerById.get(node.personId) ?? 0) - overflow);
+      }
+    }
+
+    for (const node of row) {
+      const position = positions.get(node.personId);
+      const center = centerById.get(node.personId);
+      if (!position || center === undefined) continue;
+      positions.set(node.personId, { ...position, x: center - FAMILY_NODE_WIDTH / 2 });
+    }
+  }
+}
+
 export function layoutFamilyTree(
   allNodes: FamilyLayoutNode[],
   edges: FamilyLayoutEdge[],
@@ -532,6 +655,8 @@ export function layoutFamilyTree(
       });
     }
   }
+
+  anchorFamilyPositions(positions, rows, sortedGenerations, visibleSet, mainLine, branchSides, children, width);
 
   const maxGeneration = sortedGenerations.length ? Math.max(...sortedGenerations) : 0;
   const height = Math.max(720, TOP_PADDING + maxGeneration * FAMILY_ROW_GAP + FAMILY_NODE_HEIGHT + 170);
