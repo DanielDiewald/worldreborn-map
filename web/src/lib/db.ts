@@ -2,7 +2,7 @@ import "server-only";
 
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
-import { requireDatabaseUrl } from "./environment";
+import { requireDatabaseUrl } from "./database-url";
 
 const connectionString = requireDatabaseUrl();
 const globalForDb = globalThis as unknown as { worldRebornPool?: Pool };
