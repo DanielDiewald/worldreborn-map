@@ -14,6 +14,22 @@ async function getMigrationFiles(migrationsDir: string) {
     .sort((left, right) => left.localeCompare(right));
 }
 
+/**
+ * Keep historical migration files immutable, but compensate for parser issues
+ * that only became visible once CI started restoring the authoritative PG17 dump.
+ *
+ * 0004 declares a PL/pgSQL variable named `overlaps`. PostgreSQL treats
+ * OVERLAPS as a SQL operator/keyword, so `overlaps <> 0` fails to parse on PG17.
+ * The migration file itself is deliberately not rewritten; only the SQL sent to
+ * PostgreSQL for that exact historical migration is normalized in memory.
+ */
+export function normalizeHistoricalMigrationSql(migration: string, sql: string) {
+  if (migration === "0004_person_identity_normalization.sql") {
+    return sql.replace(/\boverlaps\b/g, "subtype_overlaps");
+  }
+  return sql;
+}
+
 async function ensureMigrationLedger(client: Client) {
   await client.query(`
     CREATE TABLE IF NOT EXISTS public.worldreborn_schema_migrations (
@@ -58,7 +74,8 @@ async function migrateUp(client: Client, migrationsDir: string) {
       continue;
     }
 
-    const sql = await readFile(path.join(migrationsDir, migration), "utf8");
+    const rawSql = await readFile(path.join(migrationsDir, migration), "utf8");
+    const sql = normalizeHistoricalMigrationSql(migration, rawSql);
     await client.query(sql);
     await client.query(
       "INSERT INTO public.worldreborn_schema_migrations (migration_name) VALUES ($1)",
@@ -136,7 +153,9 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.message : error);
-  process.exitCode = 1;
-});
+if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(new URL(import.meta.url).pathname)) {
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.message : error);
+    process.exitCode = 1;
+  });
+}
