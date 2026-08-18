@@ -83,14 +83,24 @@ export async function updateProjectMap(projectId:number,mapId:number,input:unkno
   const client=await pool.connect();
   try{
     await client.query("BEGIN");
-    const current=await client.query<{map_type:"tile"|"image";is_primary:boolean}>(
-      "SELECT map_type,is_primary FROM project_maps WHERE project_id=$1 AND map_id=$2 FOR UPDATE",
+    const current=await client.query<{
+      map_type:"tile"|"image";
+      bounds:unknown;
+      config:Record<string,unknown>|null;
+    }>(
+      "SELECT map_type,bounds,config FROM project_maps WHERE project_id=$1 AND map_id=$2 FOR UPDATE",
       [projectId,mapId],
     );
     if(current.rowCount!==1)throw new Error("Map not found in this project.");
-    if(current.rows[0].map_type!==data.mapType)throw new Error("Changing the map type of an existing map is not supported. Create a new map instead.");
+    const existing=current.rows[0];
+    if(existing.map_type!==data.mapType)throw new Error("Changing the map type of an existing map is not supported. Create a new map instead.");
 
-    const config=data.mapType==="tile"?{no_wrap:data.noWrap}:{width:data.width,height:data.height,crs:"simple"};
+    const previousConfig=existing.config??{};
+    const config=data.mapType==="tile"
+      ? {...previousConfig,no_wrap:data.noWrap}
+      : {...previousConfig,width:data.width,height:data.height,crs:"simple"};
+    const bounds=data.mapType==="image"?[[0,0],[data.height,data.width]]:existing.bounds;
+
     await client.query(
       `UPDATE project_maps
           SET name=$3,
@@ -114,7 +124,7 @@ export async function updateProjectMap(projectId:number,mapId:number,input:unkno
         data.maxZoom,
         data.mapType==="tile"?(data.centerLat??null):null,
         data.mapType==="tile"?(data.centerLng??null):null,
-        data.mapType==="image"?JSON.stringify([[0,0],[data.height,data.width]]):null,
+        bounds==null?null:JSON.stringify(bounds),
         JSON.stringify(config),
       ],
     );
