@@ -169,6 +169,36 @@ test("a side lineage stays together when a main-line person is the bridge betwee
   assert.notEqual(signs[0], 0);
 });
 
+test("side ancestors are horizontally anchored above the descendant family block they actually lead to", () => {
+  const anchoredPeople = [
+    { personId: 100, name: "Main 1" },
+    { personId: 101, name: "Main 2" },
+    { personId: 102, name: "Main 3" },
+    { personId: 103, name: "Main 4" },
+    { personId: 900, name: "Side grandparent" },
+    { personId: 901, name: "Side parent" },
+    { personId: 12, name: "Related child" },
+  ];
+  const anchoredEdges = [
+    { a: 100, b: 101, code: "parent", directed: true },
+    { a: 101, b: 102, code: "parent", directed: true },
+    { a: 102, b: 103, code: "parent", directed: true },
+    { a: 900, b: 901, code: "parent", directed: true },
+    { a: 901, b: 12, code: "parent", directed: true },
+    { a: 102, b: 12, code: "parent", directed: true },
+  ];
+  const layout = layoutFamilyTree(anchoredPeople, anchoredEdges, new Set(anchoredPeople.map((person) => person.personId)), [100, 101, 102, 103]);
+  const ancestor = layout.positions.get(900);
+  const parent = layout.positions.get(901);
+  const child = layout.positions.get(12);
+  assert.ok(ancestor && parent && child);
+  const ancestorCenter = ancestor.x + 140;
+  const parentCenter = parent.x + 140;
+  const childCenter = child.x + 140;
+  assert.ok(Math.abs(parentCenter - childCenter) <= 1);
+  assert.ok(Math.abs(ancestorCenter - childCenter) <= 1);
+});
+
 test("overlapping parent routes get separate lanes so unrelated families never look connected", () => {
   const lanes = assignFamilyParentRouteLanes([
     { childId: 10, generation: 5, startX: 100, endX: 900 },
