@@ -3,7 +3,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import styles from "./entity-picker.module.css";
 
-type EntityType="person"|"group"|"location";
+type EntityType="person"|"group"|"location"|"event";
 type Item={entityType:EntityType;entityId:number;name:string;kind:string;subtitle:string|null;image:string|null};
 
 type Props={
