@@ -11,22 +11,19 @@ const npcInputSchema = z.object({
   publicDescription: z.string().max(100_000).optional(),
   adminNotes: z.string().max(100_000).optional(),
   title: z.string().trim().max(120).optional(),
-  species: z.string().trim().max(80).optional(),
   profession: z.string().trim().max(120).optional(),
   locationId: z.coerce.number().int().positive(),
-  race: z.string().trim().max(40).default("unknown"),
+  race: z.string().trim().max(80).default("unknown"),
   alive: z.coerce.boolean().default(true),
-  birthday: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).default("2000-01-01"),
   follower: z.coerce.boolean().default(false),
   className: z.string().trim().max(50).default("unknown"),
-  age: z.coerce.number().int().min(0).max(100000).default(0),
 });
 
 export type NpcInput = z.input<typeof npcInputSchema>;
 export type NpcListFilters = { query?: string; visibility?: "admin_only" | "all_players" | "selected_players" };
 
 type NpcRow={
-  nId:number;charId:number;campId:number;name:string;gender:string;image:string;notes:string;publicDescription:string|null;adminNotes:string|null;title:string|null;species:string|null;profession:string|null;visibilityMode:string;locId:number;location:string;race:string;alive:boolean;birthday:string;follower:boolean;className:string;age:number;
+  nId:number;charId:number;campId:number;name:string;gender:string;image:string;imageMediaId:number|null;notes:string;publicDescription:string|null;adminNotes:string|null;title:string|null;species:string|null;profession:string|null;visibilityMode:string;locId:number;location:string;race:string;alive:boolean;birthday:string;follower:boolean;className:string;age:number;birthEra:"before"|"after"|null;birthYear:number|null;birthMonth:number|null;birthDay:number|null;birthPrecision:string|null;
 };
 
 function npcFilter(projectId:number,filters:NpcListFilters){
@@ -46,10 +43,12 @@ async function assertLocation(projectId:number,locationId:number){
   if(result.rowCount!==1)throw new Error("Location does not belong to this project.");
 }
 
-const npcSelect=`SELECT n.n_id AS "nId",c.char_id AS "charId",n.camp_id AS "campId",n.name,n.gender,n.image,n.notes,n.public_description AS "publicDescription",n.admin_notes AS "adminNotes",n.title,n.species,n.profession,n.visibility_mode AS "visibilityMode",c.loc_id AS "locId",l.name AS location,c.race,c.alive,c.birthday::text,c.follower,c.class AS "className",c.age
+const npcSelect=`SELECT n.n_id AS "nId",c.char_id AS "charId",n.camp_id AS "campId",n.name,n.gender,n.image,n.image_media_id AS "imageMediaId",n.notes,n.public_description AS "publicDescription",n.admin_notes AS "adminNotes",n.title,n.species,n.profession,n.visibility_mode AS "visibilityMode",c.loc_id AS "locId",l.name AS location,c.race,c.alive,c.birthday::text,c.follower,c.class AS "className",c.age,
+  fd.era AS "birthEra",fd.year AS "birthYear",fd.month AS "birthMonth",fd.day AS "birthDay",fd.precision AS "birthPrecision"
   FROM npcs n
   JOIN charakters c ON c.n_id=n.n_id
-  JOIN locations l ON l.loc_id=c.loc_id AND l.camp_id=n.camp_id`;
+  JOIN locations l ON l.loc_id=c.loc_id AND l.camp_id=n.camp_id
+  LEFT JOIN fantasy_dates fd ON fd.project_id=n.camp_id AND fd.entity_type='person' AND fd.entity_id=n.n_id AND fd.field_key='birth'`;
 
 export async function listNpcs(projectId:number,filters:NpcListFilters={}){
   const {values,where}=npcFilter(projectId,filters);
@@ -78,12 +77,13 @@ export async function createNpc(projectId:number,input:NpcInput){
   try{
     await client.query("BEGIN");
     const base=await client.query<{n_id:number}>(`INSERT INTO npcs(camp_id,name,notes,gender,image,public_description,admin_notes,title,species,profession,visibility_mode,metadata,updated_at)
-      SELECT c.camp_id,$2,$3,$4,$5,$6,$7,$8,$9,$10,'admin_only','{}'::jsonb,now()
-        FROM campaigns c WHERE c.camp_id=$1 AND c.status<>'archived' RETURNING n_id`,[projectId,data.name,data.adminNotes?.trim()||"no notes yet",data.gender,data.image?.trim()||"noimage",data.publicDescription?.trim()||null,data.adminNotes?.trim()||null,data.title?.trim()||null,data.species?.trim()||null,data.profession?.trim()||null]);
+      SELECT c.camp_id,$2,$3,$4,$5,$6,$7,$8,NULL,$9,'admin_only','{}'::jsonb,now()
+        FROM campaigns c WHERE c.camp_id=$1 AND c.status<>'archived' RETURNING n_id`,[projectId,data.name,data.adminNotes?.trim()||"no notes yet",data.gender,data.image?.trim()||"noimage",data.publicDescription?.trim()||null,data.adminNotes?.trim()||null,data.title?.trim()||null,data.profession?.trim()||null]);
     if(base.rowCount!==1)throw new Error("Project not found or archived.");
     const personId=base.rows[0].n_id;
-    await client.query(`INSERT INTO charakters(n_id,loc_id,race,alive,birthday,follower,class,age) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,[personId,data.locationId,data.race,data.alive,data.birthday,data.follower,data.className,data.age]);
-    await client.query(`INSERT INTO audit_log(project_id,actor_type,action,entity_type,entity_id,metadata) VALUES($1,'admin','person.created','person',$2,$3::jsonb)`,[projectId,personId,JSON.stringify({kind:"character"})]);
+    // Legacy birthday/age remain present for compatibility, but are no longer authored by the UI.
+    await client.query(`INSERT INTO charakters(n_id,loc_id,race,alive,birthday,follower,class,age) VALUES($1,$2,$3,$4,'2000-01-01',$5,$6,0)`,[personId,data.locationId,data.race,data.alive,data.follower,data.className]);
+    await client.query(`INSERT INTO audit_log(project_id,actor_type,action,entity_type,entity_id,metadata) VALUES($1,'admin','person.created','person',$2,$3::jsonb)`,[projectId,personId,JSON.stringify({kind:"character",race_source:"charakters.race",chronology:"fantasy_dates"})]);
     await client.query("COMMIT");
     return {nId:personId};
   }catch(error){await client.query("ROLLBACK");throw error;}finally{client.release();}
@@ -96,9 +96,11 @@ export async function updateNpc(projectId:number,npcId:number,input:NpcInput){
     await client.query("BEGIN");
     const locked=await client.query("SELECT 1 FROM npcs n JOIN charakters c ON c.n_id=n.n_id WHERE n.camp_id=$1 AND n.n_id=$2 AND n.archived_at IS NULL FOR UPDATE",[projectId,npcId]);
     if(locked.rowCount!==1){await client.query("ROLLBACK");return null;}
-    await client.query(`UPDATE npcs SET name=$3,notes=$4,gender=$5,image=$6,public_description=$7,admin_notes=$8,title=$9,species=$10,profession=$11,updated_at=now() WHERE camp_id=$1 AND n_id=$2`,[projectId,npcId,data.name,data.adminNotes?.trim()||"no notes yet",data.gender,data.image?.trim()||"noimage",data.publicDescription?.trim()||null,data.adminNotes?.trim()||null,data.title?.trim()||null,data.species?.trim()||null,data.profession?.trim()||null]);
-    await client.query(`UPDATE charakters SET loc_id=$2,race=$3,alive=$4,birthday=$5,follower=$6,class=$7,age=$8 WHERE n_id=$1`,[npcId,data.locationId,data.race,data.alive,data.birthday,data.follower,data.className,data.age]);
-    await client.query(`INSERT INTO audit_log(project_id,actor_type,action,entity_type,entity_id) VALUES($1,'admin','person.updated','person',$2)`,[projectId,npcId]);
+    // species is deliberately not updated: charakters.race is the canonical visible Character species/race field.
+    await client.query(`UPDATE npcs SET name=$3,notes=$4,gender=$5,image=$6,public_description=$7,admin_notes=$8,title=$9,profession=$10,updated_at=now() WHERE camp_id=$1 AND n_id=$2`,[projectId,npcId,data.name,data.adminNotes?.trim()||"no notes yet",data.gender,data.image?.trim()||"noimage",data.publicDescription?.trim()||null,data.adminNotes?.trim()||null,data.title?.trim()||null,data.profession?.trim()||null]);
+    // Legacy age/birthday stay untouched until the explicit calendar migration has reconciled them.
+    await client.query(`UPDATE charakters SET loc_id=$2,race=$3,alive=$4,follower=$5,class=$6 WHERE n_id=$1`,[npcId,data.locationId,data.race,data.alive,data.follower,data.className]);
+    await client.query(`INSERT INTO audit_log(project_id,actor_type,action,entity_type,entity_id,metadata) VALUES($1,'admin','person.updated','person',$2,$3::jsonb)`,[projectId,npcId,JSON.stringify({race_source:"charakters.race",legacy_age_preserved:true,legacy_birthday_preserved:true})]);
     await client.query("COMMIT");return {nId:npcId};
   }catch(error){await client.query("ROLLBACK");throw error;}finally{client.release();}
 }
