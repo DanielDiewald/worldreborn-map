@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState, useTransition, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition, type FocusEvent as ReactFocusEvent, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import {
   FAMILY_NODE_HEIGHT,
   FAMILY_NODE_WIDTH,
@@ -10,6 +10,7 @@ import {
   buildFamilyGenerations,
   findFamilyDescendantLine,
   isFamilyParentEdge,
+  isFamilyStructureEdge,
   layoutFamilyTree,
   resolveFamilyMainLine,
   type FamilyParentRoute,
@@ -26,6 +27,7 @@ type TreePerson = {
   title: string | null;
   roleLabel: string | null;
   branchLabel: string | null;
+  birthYear?: number | null;
 };
 
 type TreeEdge = {
@@ -35,6 +37,7 @@ type TreeEdge = {
   label: string;
   inverseLabel: string | null;
   directed: boolean;
+  category: string;
   source: string;
 };
 
@@ -138,17 +141,19 @@ export function FamilyTreeCanvas({ projectId, people, edges, rootPersonId, named
   const [persistedMainLine, setPersistedMainLine] = useState<number[] | null>(() => savedMainLinePersonIds.length ? savedMainLinePersonIds : null);
   const [draftMainLine, setDraftMainLine] = useState<number[]>([]);
   const [mainLineError, setMainLineError] = useState<string | null>(null);
+  const [hoveredPersonId, setHoveredPersonId] = useState<number | null>(null);
   const [savingMainLine, startMainLineTransition] = useTransition();
 
-  const automaticMainLine = useMemo(() => resolveFamilyMainLine(people, edges, null, rootPersonId), [people, edges, rootPersonId]);
-  const storedMainLine = useMemo(() => resolveFamilyMainLine(people, edges, persistedMainLine, rootPersonId), [people, edges, persistedMainLine, rootPersonId]);
+  const structuralEdges = useMemo(() => edges.filter((edge) => edge.category === "family" && isFamilyStructureEdge(edge)), [edges]);
+  const automaticMainLine = useMemo(() => resolveFamilyMainLine(people, structuralEdges, null, rootPersonId), [people, structuralEdges, rootPersonId]);
+  const storedMainLine = useMemo(() => resolveFamilyMainLine(people, structuralEdges, persistedMainLine, rootPersonId), [people, structuralEdges, persistedMainLine, rootPersonId]);
   const mainLine = editingMainLine && draftMainLine.length ? draftMainLine : storedMainLine;
   const mainLineSet = useMemo(() => new Set(mainLine), [mainLine]);
-  const baseGenerations = useMemo(() => buildFamilyGenerations(people, edges), [people, edges]);
+  const baseGenerations = useMemo(() => buildFamilyGenerations(people, structuralEdges), [people, structuralEdges]);
   const personById = useMemo(() => new Map(people.map((person) => [person.personId, person])), [people]);
   const childrenByParent = useMemo(() => {
     const result = new Map<number, number[]>();
-    for (const edge of edges) {
+    for (const edge of structuralEdges) {
       if (!isFamilyParentEdge(edge)) continue;
       result.set(edge.a, [...(result.get(edge.a) ?? []), edge.b]);
     }
@@ -156,9 +161,9 @@ export function FamilyTreeCanvas({ projectId, people, edges, rootPersonId, named
       result.set(parentId, [...new Set(childIds)].sort((a, b) => (baseGenerations.get(a) ?? 0) - (baseGenerations.get(b) ?? 0) || (personById.get(a)?.name ?? "").localeCompare(personById.get(b)?.name ?? "") || a - b));
     }
     return result;
-  }, [baseGenerations, edges, personById]);
+  }, [baseGenerations, structuralEdges, personById]);
 
-  const branchNodes = useMemo(() => collectBranchMap(mainLine, edges), [edges, mainLine]);
+  const branchNodes = useMemo(() => collectBranchMap(mainLine, structuralEdges), [structuralEdges, mainLine]);
 
   const visibleIds = useMemo(() => {
     if (editingMainLine || showAll) return new Set(people.map((person) => person.personId));
@@ -169,9 +174,19 @@ export function FamilyTreeCanvas({ projectId, people, edges, rootPersonId, named
 
   const visibleNodes = useMemo(() => people.filter((person) => visibleIds.has(person.personId)), [people, visibleIds]);
   const visibleEdges = useMemo(() => edges.filter((edge) => visibleIds.has(edge.a) && visibleIds.has(edge.b)), [edges, visibleIds]);
-  const layout = useMemo(() => layoutFamilyTree(visibleNodes, visibleEdges, visibleIds, mainLine), [visibleNodes, visibleEdges, visibleIds, mainLine]);
+  const visibleStructuralEdges = useMemo(() => structuralEdges.filter((edge) => visibleIds.has(edge.a) && visibleIds.has(edge.b)), [structuralEdges, visibleIds]);
+  const layout = useMemo(() => layoutFamilyTree(visibleNodes, visibleStructuralEdges, visibleIds, mainLine), [visibleNodes, visibleStructuralEdges, visibleIds, mainLine]);
   const hiddenCount = Math.max(0, people.length - visibleIds.size);
   const mainPairs = useMemo(() => new Set(mainLine.slice(0, -1).map((id, index) => `${id}:${mainLine[index + 1]}`)), [mainLine]);
+  const hoveredNeighbors = useMemo(() => {
+    const result = new Set<number>();
+    if (hoveredPersonId == null) return result;
+    for (const edge of visibleEdges) {
+      if (edge.a === hoveredPersonId) result.add(edge.b);
+      if (edge.b === hoveredPersonId) result.add(edge.a);
+    }
+    return result;
+  }, [hoveredPersonId, visibleEdges]);
 
   const scrollToOldest = (behavior: ScrollBehavior = "smooth") => {
     const viewport = viewportRef.current;
@@ -210,7 +225,6 @@ export function FamilyTreeCanvas({ projectId, people, edges, rootPersonId, named
     if (centeredInitially.current || !mainLine.length) return;
     centeredInitially.current = true;
     requestAnimationFrame(() => scrollToOldest("auto"));
-    // Only center once. Expanding branches or editing the succession must not yank the viewport around.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mainLine.length]);
 
@@ -239,7 +253,7 @@ export function FamilyTreeCanvas({ projectId, people, edges, rootPersonId, named
   };
 
   const changeMainLineStart = (personId: number) => {
-    const line = findFamilyDescendantLine(people, edges, personId);
+    const line = findFamilyDescendantLine(people, structuralEdges, personId);
     setDraftMainLine(line.length ? line : [personId]);
     setMainLineError(null);
   };
@@ -250,7 +264,7 @@ export function FamilyTreeCanvas({ projectId, people, edges, rootPersonId, named
       setDraftMainLine(prefix);
       return;
     }
-    const suffix = findFamilyDescendantLine(people, edges, childId);
+    const suffix = findFamilyDescendantLine(people, structuralEdges, childId);
     setDraftMainLine([...prefix, ...(suffix.length ? suffix : [childId])]);
     setMainLineError(null);
   };
@@ -311,10 +325,13 @@ export function FamilyTreeCanvas({ projectId, people, edges, rootPersonId, named
     else if(event.key==="0"){event.preventDefault();setZoom(1);}
     else if(event.key.toLowerCase()==="f"){event.preventDefault();fitTree();}
   };
+  const handleNodeBlur=(event:ReactFocusEvent<HTMLElement>)=>{
+    if(!event.currentTarget.contains(event.relatedTarget as Node|null))setHoveredPersonId(null);
+  };
 
   const geometry = useMemo(() => {
     const parentGroups = new Map<number, TreeEdge[]>();
-    for (const edge of visibleEdges) if (isFamilyParentEdge(edge)) parentGroups.set(edge.b, [...(parentGroups.get(edge.b) ?? []), edge]);
+    for (const edge of visibleStructuralEdges) if (isFamilyParentEdge(edge)) parentGroups.set(edge.b, [...(parentGroups.get(edge.b) ?? []), edge]);
     const rawFamilyUnits = new Map<string, { generation: number; parentIds: number[]; childIds: number[]; childEdges: Map<number, TreeEdge[]> }>();
     for (const [childId, childParentEdges] of parentGroups) {
       const childPos = layout.positions.get(childId);if (!childPos) continue;
@@ -337,11 +354,11 @@ export function FamilyTreeCanvas({ projectId, people, edges, rootPersonId, named
       for (let left = 0; left < unit.children.length; left += 1) for (let right = left + 1; right < unit.children.length; right += 1) siblingPairsFromParentage.add(pairKey(unit.children[left].id, unit.children[right].id));
     }
     const nonParentEdges = visibleEdges.filter((edge) => !isFamilyParentEdge(edge));
-    const partnerEdges = nonParentEdges.filter((edge) => FAMILY_PARTNER_CODES.has(edge.code) && !coParentPairs.has(pairKey(edge.a, edge.b)));
-    const siblingEdges = nonParentEdges.filter((edge) => SIBLING_CODES.has(edge.code) && (edge.code === "twin" || !siblingPairsFromParentage.has(pairKey(edge.a, edge.b))));
-    const otherKinshipEdges = nonParentEdges.filter((edge) => !FAMILY_PARTNER_CODES.has(edge.code) && !SIBLING_CODES.has(edge.code));
-    return {familyUnits,routeLanes,partnerEdges,siblingEdges,otherKinshipEdges};
-  }, [layout, visibleEdges]);
+    const partnerEdges = nonParentEdges.filter((edge) => edge.category === "family" && FAMILY_PARTNER_CODES.has(edge.code) && !coParentPairs.has(pairKey(edge.a, edge.b)));
+    const siblingEdges = nonParentEdges.filter((edge) => edge.category === "family" && SIBLING_CODES.has(edge.code) && (edge.code === "twin" || !siblingPairsFromParentage.has(pairKey(edge.a, edge.b))));
+    const otherRelationshipEdges = nonParentEdges.filter((edge) => !(edge.category === "family" && FAMILY_PARTNER_CODES.has(edge.code)) && !(edge.category === "family" && SIBLING_CODES.has(edge.code)));
+    return {familyUnits,routeLanes,partnerEdges,siblingEdges,otherRelationshipEdges};
+  }, [layout, visibleEdges, visibleStructuralEdges]);
 
   const familySvg = useMemo(() => geometry.familyUnits.map((unit) => {
     const laneIndex = geometry.routeLanes.get(unit.routeId) ?? 0;
@@ -350,29 +367,31 @@ export function FamilyTreeCanvas({ projectId, people, edges, rootPersonId, named
     let parentJoinY = parentBottom + Math.max(28, Math.min(52, gap * .3)) + laneIndex * 12;let childBusY = childTop - Math.max(34, Math.min(56, gap * .3)) - laneIndex * 10;
     if (childBusY - parentJoinY < 26) {const middle = (parentBottom + childTop) / 2;parentJoinY = middle - 13;childBusY = middle + 13;}
     const parentMinX = Math.min(...parentXs);const parentMaxX = Math.max(...parentXs);const hubX = unit.parents.length > 1 ? (parentMinX + parentMaxX) / 2 : parentXs[0];const childBusMinX = Math.min(hubX, ...childXs);const childBusMaxX = Math.max(hubX, ...childXs);const unitHasMain = unit.children.some((child) => child.edges.some((edge) => mainPairs.has(`${edge.a}:${edge.b}`)));
-    return <g key={`family-unit-${unit.key}`}>
+    const hoverMatch=hoveredPersonId!=null&&(unit.parentIds.includes(hoveredPersonId)||unit.children.some((child)=>child.id===hoveredPersonId));
+    const hoverClass=hoveredPersonId==null?"":hoverMatch?styles.edgeHighlighted:styles.edgeDimmed;
+    return <g key={`family-unit-${unit.key}`} className={hoverClass}>
       {unit.parents.length > 1 ? <path d={`M ${parentMinX} ${parentJoinY} H ${parentMaxX}`} className={styles.parentJunction} /> : null}
       {unit.parents.map(({ id, pos }) => {const parentX=pos.x+FAMILY_NODE_WIDTH/2;const parentIsMain=unit.children.some((child)=>child.edges.some((edge)=>edge.a===id&&mainPairs.has(`${edge.a}:${edge.b}`)));return <path key={`family-parent-${unit.key}-${id}`} d={`M ${parentX} ${pos.y + FAMILY_NODE_HEIGHT} V ${parentJoinY}`} className={parentIsMain ? styles.mainParentEdge : styles.parentEdge} />;})}
       <circle cx={hubX} cy={parentJoinY} r="3.5" className={unitHasMain ? styles.mainJunctionDot : styles.junctionDot}/><path d={`M ${hubX} ${parentJoinY} V ${childBusY}`} className={unitHasMain ? styles.mainParentEdge : styles.parentEdge}/>{childBusMaxX-childBusMinX>1?<path d={`M ${childBusMinX} ${childBusY} H ${childBusMaxX}`} className={styles.parentJunction}/>:null}<circle cx={hubX} cy={childBusY} r="3" className={unitHasMain ? styles.mainJunctionDot : styles.junctionDot}/>
       {unit.children.map((child)=>{const childX=child.pos.x+FAMILY_NODE_WIDTH/2;const childIsMain=child.edges.some((edge)=>mainPairs.has(`${edge.a}:${edge.b}`));const specialEdge=child.edges.find((edge)=>edge.code!=="parent");return <g key={`family-child-${unit.key}-${child.id}`}><path d={`M ${childX} ${childBusY} V ${child.pos.y}`} className={childIsMain?styles.mainParentEdge:styles.parentEdge}/><circle cx={childX} cy={childBusY} r="2.7" className={childIsMain?styles.mainJunctionDot:styles.junctionDot}/>{specialEdge?<text x={childX+8} y={child.pos.y-10} textAnchor="start" className={styles.edgeLabel}>{specialEdge.label}</text>:null}</g>;})}
     </g>;
-  }), [geometry.familyUnits, geometry.routeLanes, mainPairs]);
+  }), [geometry.familyUnits, geometry.routeLanes, hoveredPersonId, mainPairs]);
 
   const partnerSvg = useMemo(() => geometry.partnerEdges.map((edge) => {
-    const a=layout.positions.get(edge.a);const b=layout.positions.get(edge.b);if(!a||!b)return null;const left=a.x<=b.x?a:b;const right=a.x<=b.x?b:a;const y1=left.y+FAMILY_NODE_HEIGHT/2;const y2=right.y+FAMILY_NODE_HEIGHT/2;const x1=left.x+FAMILY_NODE_WIDTH;const x2=right.x;const midX=(x1+x2)/2;const path=Math.abs(y1-y2)<2?`M ${x1} ${y1} H ${x2}`:`M ${x1} ${y1} C ${midX} ${y1}, ${midX} ${y2}, ${x2} ${y2}`;return <g key={edgeKey(edge)}><path d={path} className={styles.partnerEdge}/><text x={midX} y={(y1+y2)/2-8} textAnchor="middle" className={styles.edgeLabel}>{edge.label}</text></g>;
-  }), [geometry.partnerEdges, layout]);
+    const a=layout.positions.get(edge.a);const b=layout.positions.get(edge.b);if(!a||!b)return null;const left=a.x<=b.x?a:b;const right=a.x<=b.x?b:a;const y1=left.y+FAMILY_NODE_HEIGHT/2;const y2=right.y+FAMILY_NODE_HEIGHT/2;const x1=left.x+FAMILY_NODE_WIDTH;const x2=right.x;const midX=(x1+x2)/2;const path=Math.abs(y1-y2)<2?`M ${x1} ${y1} H ${x2}`:`M ${x1} ${y1} C ${midX} ${y1}, ${midX} ${y2}, ${x2} ${y2}`;const hoverMatch=hoveredPersonId!=null&&(edge.a===hoveredPersonId||edge.b===hoveredPersonId);const hoverClass=hoveredPersonId==null?"":hoverMatch?styles.edgeHighlighted:styles.edgeDimmed;return <g key={edgeKey(edge)} className={hoverClass}><path d={path} className={styles.partnerEdge}/><text x={midX} y={(y1+y2)/2-8} textAnchor="middle" className={styles.edgeLabel}>{edge.label}</text></g>;
+  }), [geometry.partnerEdges, hoveredPersonId, layout]);
 
-  const kinshipSvg = useMemo(() => [...geometry.siblingEdges,...geometry.otherKinshipEdges].map((edge,index)=>{
-    const a=layout.positions.get(edge.a);const b=layout.positions.get(edge.b);if(!a||!b)return null;const ax=a.x+FAMILY_NODE_WIDTH/2;const bx=b.x+FAMILY_NODE_WIDTH/2;const laneY=Math.min(a.y,b.y)-20-(index%5)*12;return <g key={edgeKey(edge)}><path d={`M ${ax} ${a.y} V ${laneY} H ${bx} V ${b.y}`} className={styles.otherEdge}/><text x={(ax+bx)/2} y={laneY-7} textAnchor="middle" className={styles.edgeLabel}>{edge.label}</text></g>;
-  }), [geometry.otherKinshipEdges, geometry.siblingEdges, layout]);
+  const relationshipSvg = useMemo(() => [...geometry.siblingEdges,...geometry.otherRelationshipEdges].map((edge,index)=>{
+    const a=layout.positions.get(edge.a);const b=layout.positions.get(edge.b);if(!a||!b)return null;const ax=a.x+FAMILY_NODE_WIDTH/2;const bx=b.x+FAMILY_NODE_WIDTH/2;const laneY=Math.min(a.y,b.y)-20-(index%7)*12;const hoverMatch=hoveredPersonId!=null&&(edge.a===hoveredPersonId||edge.b===hoveredPersonId);const hoverClass=hoveredPersonId==null?"":hoverMatch?styles.edgeHighlighted:styles.edgeDimmed;return <g key={edgeKey(edge)} className={hoverClass}><path d={`M ${ax} ${a.y} V ${laneY} H ${bx} V ${b.y}`} className={styles.otherEdge}/><text x={(ax+bx)/2} y={laneY-7} textAnchor="middle" className={styles.edgeLabel}>{edge.label}</text></g>;
+  }), [geometry.otherRelationshipEdges, geometry.siblingEdges, hoveredPersonId, layout]);
 
   const disconnectedHidden = people.length - new Set([...mainLineSet, ...[...branchNodes.values()].flatMap((set) => [...set])]).size;
   const startOptions = useMemo(() => [...people].sort((a, b) => (baseGenerations.get(a.personId) ?? 0) - (baseGenerations.get(b.personId) ?? 0) || a.name.localeCompare(b.name) || a.personId - b.personId), [baseGenerations, people]);
 
   return (
-    <div className={styles.canvasShell} ref={viewportRef} tabIndex={0} aria-label="Interaktiver Stammbaum. Ziehen zum Verschieben, Plus/Minus zum Zoomen, 0 für 100 Prozent, F zum Einpassen." onKeyDown={handleKeyDown} onPointerDown={handlePointerDown} onPointerMove={handlePointerMove} onPointerUp={stopPan} onPointerCancel={stopPan}>
+    <div className={styles.canvasShell} ref={viewportRef} tabIndex={0} aria-label="Interaktiver Stammbaum. Ziehen zum Verschieben, Plus/Minus zum Zoomen, 0 für 100 Prozent, F zum Einpassen. Beim Überfahren einer Person werden direkte Beziehungen hervorgehoben." onKeyDown={handleKeyDown} onPointerDown={handlePointerDown} onPointerMove={handlePointerMove} onPointerUp={stopPan} onPointerCancel={stopPan}>
       <div className={styles.canvasControls}>
-        <div className={styles.canvasStatus}><strong>Hauptlinie</strong><span>{mainLine.length} Personen</span><span>{persistedMainLine?.length ? "manuell" : "automatisch"}</span><span>{hiddenCount ? `${hiddenCount} ausgeblendet` : "alle sichtbar"}</span></div>
+        <div className={styles.canvasStatus}><strong>Hauptlinie</strong><span>{mainLine.length} Personen</span><span>{persistedMainLine?.length ? "manuell" : "automatisch"}</span><span>{hiddenCount ? `${hiddenCount} ausgeblendet` : "alle sichtbar"}</span>{hoveredPersonId!=null?<span>{hoveredNeighbors.size} direkte Verbindung{hoveredNeighbors.size===1?"":"en"}</span>:null}</div>
         <div className={styles.canvasButtons}>
           {!editingMainLine ? <button type="button" className="button ghost" onClick={() => { setShowAll(false); setExpandedAnchors(new Set()); }}>Nur Hauptlinie</button> : null}
           {!editingMainLine ? <button type="button" className="button ghost" onClick={() => setShowAll(true)} disabled={showAll || people.length === visibleIds.size}>Alle Zweige</button> : null}
@@ -386,8 +405,8 @@ export function FamilyTreeCanvas({ projectId, people, edges, rootPersonId, named
 
       <div className={styles.zoomSurface} style={{ width: layout.width * zoom, height: layout.height * zoom }}><div className={styles.canvas} style={{ width: layout.width, height: layout.height, transform: `scale(${zoom})` }}>
         {layout.shownGenerations.map((generation)=>{const first=visibleNodes.find((node)=>layout.positions.get(node.personId)?.generation===generation);const position=first?layout.positions.get(first.personId):null;if(!position)return null;return <div key={generation} className={styles.generationMarker} style={{top:position.y-38}}>{generation===0?"Älteste Generation":`Generation ${generation+1}`}</div>;})}
-        <svg className={styles.edges} width={layout.width} height={layout.height} aria-hidden="true">{familySvg}{partnerSvg}{kinshipSvg}</svg>
-        {visibleNodes.map((node)=>{const pos=layout.positions.get(node.personId);if(!pos)return null;const main=mainLineSet.has(node.personId);const root=node.personId===rootPersonId;const branchCount=branchNodes.get(node.personId)?.size??0;const branchOpen=expandedAnchors.has(node.personId);const removable=named&&typeof treeId==="number"&&!root&&!editingMainLine;const removeAction=removable?removeFamilyTreeMemberAction.bind(null,projectId,treeId,node.personId):null;return <article key={node.personId} data-tree-node className={`${styles.node} ${main?styles.mainNode:styles.branchNode} ${root?styles.rootNode:""}`} style={{left:pos.x,top:pos.y}}><Link href={personHref(projectId,node)} className={styles.nodeLink}><div className={styles.nodeHead}><span className={styles.avatar}>{validImage(node.image)?<img src={node.image} alt="" loading="lazy"/>:node.name.slice(0,1).toUpperCase()}</span><span className={styles.nodeIdentity}><strong>{node.name}</strong><small>{node.kind}{node.title?` · ${node.title}`:""}</small></span></div></Link><div className={styles.nodeBadges}>{main?<span className={styles.mainBadge}>{editingMainLine?"Hauptlinie · Vorschau":"Hauptlinie"}</span>:<span>Seitenzweig</span>}{root?<span>Root</span>:null}{node.roleLabel&&node.roleLabel!=="Root"?<span>{node.roleLabel}</span>:null}{node.branchLabel?<span>{node.branchLabel}</span>:null}</div><div className={styles.nodeActions}>{!editingMainLine&&main&&branchCount>0&&!showAll?<button type="button" className={styles.branchToggle} onClick={()=>toggleBranch(node.personId)}>{branchOpen?"− Seitenzweige":`+ ${branchCount} Zweig${branchCount===1?"":"e"}`}</button>:null}{removeAction?<form action={removeAction}><button className={styles.removeButton}>Entfernen</button></form>:null}</div></article>;})}
+        <svg className={styles.edges} width={layout.width} height={layout.height} aria-hidden="true">{familySvg}{partnerSvg}{relationshipSvg}</svg>
+        {visibleNodes.map((node)=>{const pos=layout.positions.get(node.personId);if(!pos)return null;const main=mainLineSet.has(node.personId);const root=node.personId===rootPersonId;const branchCount=branchNodes.get(node.personId)?.size??0;const branchOpen=expandedAnchors.has(node.personId);const removable=named&&typeof treeId==="number"&&!root&&!editingMainLine;const removeAction=removable?removeFamilyTreeMemberAction.bind(null,projectId,treeId,node.personId):null;const hoverActive=hoveredPersonId!=null;const hoverSelf=hoveredPersonId===node.personId;const hoverConnected=hoveredNeighbors.has(node.personId);const hoverClass=!hoverActive?"":hoverSelf?styles.nodeHovered:hoverConnected?styles.nodeConnected:styles.nodeDimmed;return <article key={node.personId} data-tree-node className={`${styles.node} ${main?styles.mainNode:styles.branchNode} ${root?styles.rootNode:""} ${hoverClass}`} style={{left:pos.x,top:pos.y}} onMouseEnter={()=>setHoveredPersonId(node.personId)} onMouseLeave={()=>setHoveredPersonId(null)} onFocusCapture={()=>setHoveredPersonId(node.personId)} onBlurCapture={handleNodeBlur}><Link href={personHref(projectId,node)} className={styles.nodeLink}><div className={styles.nodeHead}><span className={styles.avatar}>{validImage(node.image)?<img src={node.image} alt="" loading="lazy"/>:node.name.slice(0,1).toUpperCase()}</span><span className={styles.nodeIdentity}><strong>{node.name}</strong><small>{node.kind}{node.title?` · ${node.title}`:""}</small></span></div></Link><div className={styles.nodeBadges}>{main?<span className={styles.mainBadge}>{editingMainLine?"Hauptlinie · Vorschau":"Hauptlinie"}</span>:<span>Seitenzweig</span>}{root?<span>Root</span>:null}{node.roleLabel&&node.roleLabel!=="Root"?<span>{node.roleLabel}</span>:null}{node.branchLabel?<span>{node.branchLabel}</span>:null}</div><div className={styles.nodeActions}>{!editingMainLine&&main&&branchCount>0&&!showAll?<button type="button" className={styles.branchToggle} onClick={()=>toggleBranch(node.personId)}>{branchOpen?"− Seitenzweige":`+ ${branchCount} Zweig${branchCount===1?"":"e"}`}</button>:null}{removeAction?<form action={removeAction}><button className={styles.removeButton}>Entfernen</button></form>:null}</div></article>;})}
         {!editingMainLine&&!showAll&&disconnectedHidden>0?<div className={styles.disconnectedHint}>{disconnectedHidden} weitere Person{disconnectedHidden===1?"":"en"} liegen in getrennten Familienlinien. <button type="button" onClick={()=>setShowAll(true)}>Alle anzeigen</button></div>:null}
       </div></div>
     </div>
