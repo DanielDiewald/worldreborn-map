@@ -22,6 +22,46 @@ dbTest("legacy group memberships translate char_id to canonical n_id without cha
   assert.equal(values.get("Putschists"),2000);assert.equal(values.get("Johnsen Johnsen"),4000);assert.equal(values.get("The Holyknights"),2000);
 });
 
+dbTest("modern Character membership keeps is_part_of shadow in sync and preserves estimated size",async(pool)=>{
+  const candidate=await pool.query<{project_id:number;group_id:number;person_id:number;char_id:number;estimated:number}>(`SELECT n.camp_id AS project_id,g.gr_id AS group_id,n.n_id AS person_id,c.char_id,g.members AS estimated FROM charakters c JOIN npcs n ON n.n_id=c.n_id JOIN groups g ON g.camp_id=n.camp_id WHERE n.archived_at IS NULL AND g.archived_at IS NULL AND NOT EXISTS(SELECT 1 FROM group_memberships gm WHERE gm.project_id=n.camp_id AND gm.group_id=g.gr_id AND gm.entity_type='person' AND gm.entity_id=n.n_id) AND NOT EXISTS(SELECT 1 FROM is_part_of i WHERE i.gr_id=g.gr_id AND i.char_id=c.char_id) ORDER BY n.n_id,g.gr_id LIMIT 1`);
+  assert.equal(candidate.rowCount,1);const c=candidate.rows[0];
+  try{
+    await pool.query("INSERT INTO group_memberships(project_id,group_id,entity_type,entity_id,role,rank,status,is_leader) VALUES($1,$2,'person',$3,'member','test-rank','active',false)",[c.project_id,c.group_id,c.person_id]);
+    assert.equal(await count(pool,"SELECT count(*) value FROM is_part_of WHERE gr_id=$1 AND char_id=$2",[c.group_id,c.char_id]),1);
+    assert.equal(await count(pool,"SELECT members value FROM groups WHERE gr_id=$1",[c.group_id]),c.estimated);
+    await pool.query("DELETE FROM group_memberships WHERE project_id=$1 AND group_id=$2 AND entity_type='person' AND entity_id=$3",[c.project_id,c.group_id,c.person_id]);
+    assert.equal(await count(pool,"SELECT count(*) value FROM is_part_of WHERE gr_id=$1 AND char_id=$2",[c.group_id,c.char_id]),0);
+    assert.equal(await count(pool,"SELECT members value FROM groups WHERE gr_id=$1",[c.group_id]),c.estimated);
+  }finally{
+    await pool.query("DELETE FROM group_memberships WHERE project_id=$1 AND group_id=$2 AND entity_type='person' AND entity_id=$3",[c.project_id,c.group_id,c.person_id]);
+    await pool.query("DELETE FROM is_part_of WHERE gr_id=$1 AND char_id=$2",[c.group_id,c.char_id]);
+  }
+});
+
+dbTest("modern God membership stays canonical without is_part_of shadow",async(pool)=>{
+  const candidate=await pool.query<{project_id:number;group_id:number;person_id:number}>(`SELECT n.camp_id AS project_id,g.gr_id AS group_id,n.n_id AS person_id FROM gods gd JOIN npcs n ON n.n_id=gd.n_id JOIN groups g ON g.camp_id=n.camp_id WHERE n.archived_at IS NULL AND g.archived_at IS NULL AND NOT EXISTS(SELECT 1 FROM group_memberships gm WHERE gm.project_id=n.camp_id AND gm.group_id=g.gr_id AND gm.entity_type='person' AND gm.entity_id=n.n_id) ORDER BY n.n_id,g.gr_id LIMIT 1`);
+  assert.equal(candidate.rowCount,1);const c=candidate.rows[0];
+  try{
+    await pool.query("INSERT INTO group_memberships(project_id,group_id,entity_type,entity_id,role) VALUES($1,$2,'person',$3,'deity')",[c.project_id,c.group_id,c.person_id]);
+    assert.equal(await count(pool,"SELECT count(*) value FROM group_memberships WHERE project_id=$1 AND group_id=$2 AND entity_type='person' AND entity_id=$3",[c.project_id,c.group_id,c.person_id]),1);
+    assert.equal(await count(pool,"SELECT count(*) value FROM is_part_of i JOIN charakters ch ON ch.char_id=i.char_id WHERE i.gr_id=$1 AND ch.n_id=$2",[c.group_id,c.person_id]),0);
+  }finally{
+    await pool.query("DELETE FROM group_memberships WHERE project_id=$1 AND group_id=$2 AND entity_type='person' AND entity_id=$3",[c.project_id,c.group_id,c.person_id]);
+  }
+});
+
+dbTest("named family tree can contain Character and God persons",async(pool)=>{
+  const character=await pool.query<{project_id:number;person_id:number}>("SELECT n.camp_id AS project_id,n.n_id AS person_id FROM charakters c JOIN npcs n ON n.n_id=c.n_id WHERE n.archived_at IS NULL ORDER BY n.n_id LIMIT 1");
+  const god=await pool.query<{person_id:number}>("SELECT n.n_id AS person_id FROM gods g JOIN npcs n ON n.n_id=g.n_id WHERE n.camp_id=$1 AND n.archived_at IS NULL ORDER BY n.n_id LIMIT 1",[character.rows[0].project_id]);
+  assert.equal(character.rowCount,1);assert.equal(god.rowCount,1);const projectId=character.rows[0].project_id;
+  const tree=await pool.query<{tree_id:number}>("INSERT INTO family_trees(project_id,name,root_person_id,visibility_mode) VALUES($1,'Integration Test Family',$2,'admin_only') RETURNING tree_id",[projectId,character.rows[0].person_id]);
+  const treeId=tree.rows[0].tree_id;
+  try{
+    await pool.query("INSERT INTO family_tree_members(project_id,tree_id,person_id,role_label) VALUES($1,$2,$3,'Root'),($1,$2,$4,'Divine branch')",[projectId,treeId,character.rows[0].person_id,god.rows[0].person_id]);
+    assert.equal(await count(pool,"SELECT count(*) value FROM family_tree_members WHERE project_id=$1 AND tree_id=$2",[projectId,treeId]),2);
+  }finally{await pool.query("DELETE FROM family_trees WHERE project_id=$1 AND tree_id=$2",[projectId,treeId]);}
+});
+
 dbTest("all generic person references use person plus n_id",async(pool)=>{
   const legacy=await count(pool,`SELECT
     (SELECT count(*) FROM relationships WHERE entity_a_type IN ('npc','character','god') OR entity_b_type IN ('npc','character','god'))+
