@@ -5,12 +5,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   FAMILY_NODE_HEIGHT,
   FAMILY_NODE_WIDTH,
-  FAMILY_PARENT_CODES,
   FAMILY_PARTNER_CODES,
   collectFamilyBranchNodes,
   findFamilyMainLine,
   isFamilyParentEdge,
   layoutFamilyTree,
+  type FamilyTreePosition,
 } from "@/lib/family-tree-layout";
 import { removeFamilyTreeMemberAction } from "./actions";
 import styles from "./family-trees.module.css";
@@ -126,7 +126,7 @@ export function FamilyTreeCanvas({ projectId, people, edges, rootPersonId, named
     const laneY = childTop - 72;
     const resolved = group
       .map((edge) => ({ edge, parent: layout.positions.get(edge.a) }))
-      .filter((item): item is { edge: TreeEdge; parent: NonNullable<ReturnType<typeof layout.positions.get>> } => Boolean(item.parent))
+      .filter((item): item is { edge: TreeEdge; parent: FamilyTreePosition } => Boolean(item.parent))
       .sort((left, right) => left.parent.x - right.parent.x);
     if (!resolved.length) return null;
 
