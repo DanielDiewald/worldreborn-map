@@ -1,4 +1,4 @@
-export type FamilyLayoutNode = { personId: number; name: string };
+export type FamilyLayoutNode = { personId: number; name: string; birthYear?: number | null };
 export type FamilyLayoutEdge = { a: number; b: number; code: string; directed: boolean };
 export type FamilyTreePosition = { x: number; y: number; generation: number };
 export type FamilyParentRoute = { childId: number; generation: number; startX: number; endX: number };
@@ -63,6 +63,78 @@ function parentMaps(nodes: FamilyLayoutNode[], edges: FamilyLayoutEdge[]) {
   }
   for (const values of [...parents.values(), ...children.values()]) values.sort((a, b) => a - b);
   return { ids, parentEdges, parents, children };
+}
+
+function median(values: number[]) {
+  if (!values.length) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+}
+
+function validBirthYear(node: FamilyLayoutNode | undefined) {
+  const value = node?.birthYear;
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function estimateGenerationYearSpan(nodes: FamilyLayoutNode[], parentEdges: FamilyLayoutEdge[]) {
+  const nodeById = new Map(nodes.map((node) => [node.personId, node]));
+  const gaps: number[] = [];
+  for (const edge of parentEdges) {
+    const parentYear = validBirthYear(nodeById.get(edge.a));
+    const childYear = validBirthYear(nodeById.get(edge.b));
+    if (parentYear == null || childYear == null || childYear <= parentYear) continue;
+    gaps.push(childYear - parentYear);
+  }
+  const span = median(gaps);
+  return span != null && span > 0 ? span : null;
+}
+
+function alignGenerationComponentsByBirthYear(
+  nodes: FamilyLayoutNode[],
+  parentEdges: FamilyLayoutEdge[],
+  generation: Map<number, number>,
+) {
+  const yearSpan = estimateGenerationYearSpan(nodes, parentEdges);
+  if (yearSpan == null) return generation;
+
+  // A parent-connected component has a fixed internal generation structure. Birth years are used only to place whole
+  // components relative to each other, so no real Parent→Child edge can ever be broken by chronology alignment.
+  const ids = nodes.map((node) => node.personId);
+  const union = new UnionFind(ids);
+  for (const edge of parentEdges) union.union(edge.a, edge.b);
+
+  const members = new Map<number, FamilyLayoutNode[]>();
+  for (const node of nodes) {
+    const root = union.find(node.personId);
+    members.set(root, [...(members.get(root) ?? []), node]);
+  }
+
+  // For a component, birthYear - generation * span estimates the birth year of its generation-zero cohort.
+  // Comparing those baselines lets disconnected branches, spouse-only nodes and sibling-only nodes line up with the
+  // known chronology without assuming a hard-coded real-world generation length.
+  const baselineByRoot = new Map<number, number>();
+  for (const [root, component] of members) {
+    const estimates = component.flatMap((node) => {
+      const birthYear = validBirthYear(node);
+      if (birthYear == null) return [];
+      return [birthYear - (generation.get(node.personId) ?? 0) * yearSpan];
+    });
+    const baseline = median(estimates);
+    if (baseline != null) baselineByRoot.set(root, baseline);
+  }
+  if (!baselineByRoot.size) return generation;
+
+  const earliestBaseline = Math.min(...baselineByRoot.values());
+  const result = new Map(generation);
+  for (const [root, baseline] of baselineByRoot) {
+    const shift = Math.max(0, Math.round((baseline - earliestBaseline) / yearSpan));
+    if (!shift) continue;
+    for (const node of members.get(root) ?? []) {
+      result.set(node.personId, (generation.get(node.personId) ?? 0) + shift);
+    }
+  }
+  return result;
 }
 
 export function buildFamilyGenerations(nodes: FamilyLayoutNode[], edges: FamilyLayoutEdge[]) {
@@ -131,7 +203,7 @@ export function buildFamilyGenerations(nodes: FamilyLayoutNode[], edges: FamilyL
     if (!changed) break;
   }
 
-  return generation;
+  return alignGenerationComponentsByBirthYear(nodes, parentEdges, generation);
 }
 
 export function findFamilyDescendantLine(nodes: FamilyLayoutNode[], edges: FamilyLayoutEdge[], startPersonId: number) {
@@ -249,6 +321,7 @@ function alignShortDisconnectedBranches(
   visibleIds: Set<number>,
   edges: FamilyLayoutEdge[],
   mainLine: Set<number>,
+  nodes: FamilyLayoutNode[],
 ) {
   const result = new Map(generation);
   const links = adjacency(edges, visibleIds);
@@ -257,6 +330,9 @@ function alignShortDisconnectedBranches(
   const mainBottom = mainGenerations.length
     ? Math.max(...mainGenerations)
     : Math.max(0, ...[...visibleIds].map((id) => generation.get(id) ?? 0));
+  const parentEdges = edges.filter((edge) => visibleIds.has(edge.a) && visibleIds.has(edge.b) && isFamilyParentEdge(edge));
+  const birthYearAligned = estimateGenerationYearSpan(nodes, parentEdges) != null;
+  const nodeById = new Map(nodes.map((node) => [node.personId, node]));
 
   for (const start of visibleIds) {
     if (visited.has(start)) continue;
@@ -274,6 +350,9 @@ function alignShortDisconnectedBranches(
       }
     }
     if (component.some((id) => mainLine.has(id))) continue;
+    // If chronology already placed this component, keep that learned row instead of forcing its youngest member to
+    // the bottom of the main line. Components without usable birth years retain the established fallback behavior.
+    if (birthYearAligned && component.some((id) => validBirthYear(nodeById.get(id)) != null)) continue;
     const componentBottom = Math.max(...component.map((id) => generation.get(id) ?? 0));
     const shift = Math.max(0, mainBottom - componentBottom);
     if (!shift) continue;
@@ -543,7 +622,7 @@ export function layoutFamilyTree(
   const visibleNodes = allNodes.filter((node) => visibleIds.has(node.personId));
   const visibleSet = new Set(visibleNodes.map((node) => node.personId));
   const mainLine = new Set(mainLineIds);
-  const bottomAligned = alignShortDisconnectedBranches(baseGeneration, visibleSet, edges, mainLine);
+  const bottomAligned = alignShortDisconnectedBranches(baseGeneration, visibleSet, edges, mainLine, allNodes);
   const generation = compactSideAncestorsTowardAttachments(bottomAligned, visibleSet, edges, mainLine);
   const nodeById = new Map(visibleNodes.map((node) => [node.personId, node]));
   const rows = new Map<number, FamilyLayoutNode[]>();
