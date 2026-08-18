@@ -1,50 +1,21 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { AdminShell } from "@/components/admin/admin-shell";
+import { Pagination } from "@/components/pagination";
 import { requireAdminSession } from "@/lib/auth/session";
-import { listLocations } from "@/lib/entities/locations";
+import { listLocations, listLocationsPaginated, type LocationListFilters } from "@/lib/entities/locations";
+import { parsePagination } from "@/lib/pagination";
 import { getProject } from "@/lib/projects";
 import { createLocationAction } from "./actions";
 
-export default async function LocationsPage({ params }: { params: Promise<{ projectId: string }> }) {
-  await requireAdminSession();
-  const projectId = Number.parseInt((await params).projectId, 10);
-  if (!Number.isSafeInteger(projectId) || projectId <= 0) notFound();
-  const [project, locations] = await Promise.all([getProject(projectId), listLocations(projectId)]);
-  if (!project) notFound();
+type Search=Promise<{q?:string;visibility?:string;page?:string;pageSize?:string}>;
 
-  return (
-    <AdminShell projectId={projectId} projectName={project.name} section="locations" eyebrow={`${project.name} / World`} title="Locations">
-      <div className="page-heading compact-heading">
-        <div>
-          <div className="breadcrumb"><Link href={`/admin/projects/${projectId}`}>{project.name}</Link><span>/</span><strong>Locations</strong></div>
-          <h1>Orte & Hierarchie</h1>
-          <p>Kontinente, Reiche, Städte und Räume bleiben über Parent Locations miteinander verbunden.</p>
-        </div>
-        <details className="create-dropdown">
-          <summary className="button primary">＋ Location</summary>
-          <div className="create-popover">
-            <form action={createLocationAction.bind(null, projectId)} className="stack">
-              <label>Name<input name="name" required maxLength={100}/></label>
-              <label>Typ<input name="locationType" maxLength={80}/></label>
-              <label>Parent<select name="parentLocId"><option value="">—</option>{locations.map((location) => <option key={location.loc_id} value={location.loc_id}>{location.name}</option>)}</select></label>
-              <label>Beschreibung<textarea name="description"/></label>
-              <label>Wappen/Bild<input name="coatOfArm"/></label>
-              <label>Population<input name="population" type="number" min="0"/></label>
-              <label>Sichtbarkeit<select name="visibilityMode"><option value="admin_only">Admin only</option><option value="all_players">Alle Spieler</option><option value="selected_players">Ausgewählte</option></select></label>
-              <button className="primary">Anlegen</button>
-            </form>
-          </div>
-        </details>
-      </div>
-      <section className="panel-card">
-        <div className="table-meta"><span><strong>{locations.length}</strong> Locations</span><span>Projekt #{projectId}</span></div>
-        {locations.length === 0 ? <div className="empty-state large"><strong>Keine Locations</strong></div> : (
-          <div className="table-scroll"><table className="entity-table"><thead><tr><th>Name</th><th>Typ</th><th>Parent</th><th>Owner</th><th>Sichtbarkeit</th><th/></tr></thead><tbody>
-            {locations.map((location) => <tr key={location.loc_id}><td><strong>{location.name}</strong></td><td>{location.location_type || "—"}</td><td>{location.parent_name || "—"}</td><td>{location.owner_name || "—"}</td><td>{location.visibility_mode}</td><td><Link className="table-action" href={`/admin/projects/${projectId}/locations/${location.loc_id}`}>→</Link></td></tr>)}
-          </tbody></table></div>
-        )}
-      </section>
-    </AdminShell>
-  );
+export default async function LocationsPage({params,searchParams}:{params:Promise<{projectId:string}>;searchParams:Search}) {
+  await requireAdminSession();const [{projectId:raw},search]=await Promise.all([params,searchParams]);const projectId=Number.parseInt(raw,10);if(!Number.isSafeInteger(projectId)||projectId<=0)notFound();
+  const visibility=["admin_only","all_players","selected_players"].includes(search.visibility??"")?search.visibility as LocationListFilters["visibility"]:undefined;const pagination=parsePagination(search);
+  const [project,allLocations,locations]=await Promise.all([getProject(projectId),listLocations(projectId),listLocationsPaginated(projectId,{query:search.q,visibility},pagination)]);if(!project)notFound();const path=`/admin/projects/${projectId}/locations`;
+  return <AdminShell projectId={projectId} projectName={project.name} section="locations" eyebrow={`${project.name} / World`} title="Locations">
+    <div className="page-heading compact-heading"><div><div className="breadcrumb"><Link href={`/admin/projects/${projectId}`}>{project.name}</Link><span>/</span><strong>Locations</strong></div><h1>Orte & Hierarchie</h1><p>Kontinente, Reiche, Städte und Räume bleiben über Parent Locations miteinander verbunden.</p></div><details className="create-dropdown"><summary className="button primary">＋ Location</summary><div className="create-popover"><form action={createLocationAction.bind(null,projectId)} className="stack"><label>Name<input name="name" required maxLength={100}/></label><label>Typ<input name="locationType" maxLength={80}/></label><label>Parent<select name="parentLocId"><option value="">—</option>{allLocations.map((location)=><option key={location.loc_id} value={location.loc_id}>{location.name}</option>)}</select></label><label>Beschreibung<textarea name="description"/></label><label>Wappen/Bild<input name="coatOfArm"/></label><label>Population<input name="population" type="number" min="0"/></label><label>Sichtbarkeit<select name="visibilityMode"><option value="admin_only">Admin only</option><option value="all_players">Alle Spieler</option><option value="selected_players">Ausgewählte</option></select></label><button className="primary">Anlegen</button></form></div></details></div>
+    <section className="panel-card"><form className="filter-bar" method="get"><label className="search-box"><span aria-hidden="true">⌕</span><input name="q" defaultValue={search.q??""} placeholder="Location, Typ, Parent oder Owner suchen …"/></label><select name="visibility" defaultValue={visibility??""}><option value="">Alle Sichtbarkeiten</option><option value="admin_only">Nur Admin</option><option value="all_players">Alle Spieler</option><option value="selected_players">Ausgewählte</option></select><button>Filtern</button></form><div className="table-meta"><span><strong>{locations.total}</strong> Locations</span><span>Projekt #{projectId}</span></div>{locations.items.length===0?<div className="empty-state large"><strong>Keine Locations</strong></div>:<div className="table-scroll"><table className="entity-table"><thead><tr><th>Name</th><th>Typ</th><th>Parent</th><th>Owner</th><th>Sichtbarkeit</th><th/></tr></thead><tbody>{locations.items.map((location)=><tr key={location.loc_id}><td><strong>{location.name}</strong></td><td>{location.location_type||"—"}</td><td>{location.parent_name||"—"}</td><td>{location.owner_name||"—"}</td><td>{location.visibility_mode}</td><td><Link className="table-action" href={`/admin/projects/${projectId}/locations/${location.loc_id}`}>→</Link></td></tr>)}</tbody></table></div>}<Pagination pathname={path} searchParams={{q:search.q,visibility:search.visibility}} page={locations.page} pageSize={locations.pageSize} total={locations.total} totalPages={locations.totalPages}/></section>
+  </AdminShell>;
 }
