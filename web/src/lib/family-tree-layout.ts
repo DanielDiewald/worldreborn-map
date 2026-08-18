@@ -14,6 +14,8 @@ const SIDE_PADDING = 170;
 const TOP_PADDING = 108;
 const BASE_COLUMN_GAP = 150;
 
+type BranchSide = -1 | 1;
+
 export function isFamilyParentEdge(edge: FamilyLayoutEdge) {
   return edge.directed && FAMILY_PARENT_CODES.has(edge.code);
 }
@@ -284,6 +286,67 @@ export function assignFamilyParentRouteLanes(routes: FamilyParentRoute[]) {
   return result;
 }
 
+function stabilizeBranchSides(
+  rows: Map<number, FamilyLayoutNode[]>,
+  generation: Map<number, number>,
+  visibleSet: Set<number>,
+  mainLine: Set<number>,
+  familyNeighbors: Map<number, Set<number>>,
+) {
+  const sideByNode = new Map<number, BranchSide>();
+  const visited = new Set<number>();
+  const offMain = [...visibleSet].filter((id) => !mainLine.has(id));
+
+  for (const start of offMain) {
+    if (visited.has(start)) continue;
+    const component: number[] = [];
+    const queue = [start];
+    visited.add(start);
+    for (let cursor = 0; cursor < queue.length; cursor += 1) {
+      const id = queue[cursor];
+      component.push(id);
+      for (const next of familyNeighbors.get(id) ?? []) {
+        if (!visibleSet.has(next) || mainLine.has(next) || visited.has(next)) continue;
+        visited.add(next);
+        queue.push(next);
+      }
+    }
+
+    let vote = 0;
+    for (const id of component) {
+      const rowId = generation.get(id) ?? 0;
+      const row = rows.get(rowId) ?? [];
+      const nodeIndex = row.findIndex((node) => node.personId === id);
+      const mainIndexes = row
+        .map((node, index) => mainLine.has(node.personId) ? index : -1)
+        .filter((index) => index >= 0);
+      if (nodeIndex < 0 || mainIndexes.length === 0) continue;
+      const mainIndex = mainIndexes.reduce((sum, index) => sum + index, 0) / mainIndexes.length;
+      const direction: BranchSide | 0 = nodeIndex < mainIndex ? -1 : nodeIndex > mainIndex ? 1 : 0;
+      if (!direction) continue;
+      const touchesMainLine = [...(familyNeighbors.get(id) ?? [])].some((neighbor) => mainLine.has(neighbor));
+      const depthWeight = Math.max(1, rowId + 1);
+      vote += direction * depthWeight * (touchesMainLine ? 12 : 1);
+    }
+
+    // If a branch has no row where it can be compared with the main line, use a deterministic side.
+    // The choice itself matters less than keeping the whole connected branch on that same side.
+    const fallbackId = Math.min(...component);
+    const side: BranchSide = vote < 0 ? -1 : vote > 0 ? 1 : fallbackId % 2 === 0 ? -1 : 1;
+    for (const id of component) sideByNode.set(id, side);
+  }
+
+  for (const [rowId, row] of rows) {
+    const mainNodes = row.filter((node) => mainLine.has(node.personId));
+    const left = row.filter((node) => !mainLine.has(node.personId) && sideByNode.get(node.personId) === -1);
+    const right = row.filter((node) => !mainLine.has(node.personId) && sideByNode.get(node.personId) === 1);
+    const neutral = row.filter((node) => !mainLine.has(node.personId) && !sideByNode.has(node.personId));
+    rows.set(rowId, mainNodes.length ? [...left, ...neutral, ...mainNodes, ...right] : [...left, ...neutral, ...right]);
+  }
+
+  return sideByNode;
+}
+
 export function layoutFamilyTree(
   allNodes: FamilyLayoutNode[],
   edges: FamilyLayoutEdge[],
@@ -365,6 +428,11 @@ export function layoutFamilyTree(
     }
   }
 
+  // A connected side branch must not jump across the main line between generations. Deeper nodes and
+  // direct main-line contacts get more weight, then that side is propagated to every ancestor/descendant
+  // in the off-main component before absolute X positions are calculated.
+  const branchSides = stabilizeBranchSides(rows, generation, visibleSet, mainLine, familyNeighbors);
+
   const mergePressure = new Map<number, number>();
   for (const childId of visibleSet) {
     const parentIds = (parents.get(childId) ?? []).filter((id) => visibleSet.has(id));
@@ -378,6 +446,10 @@ export function layoutFamilyTree(
     for (let index = 0; index < row.length - 1; index += 1) {
       const pressure = (mergePressure.get(row[index].personId) ?? 0) + (mergePressure.get(row[index + 1].personId) ?? 0);
       width += BASE_COLUMN_GAP + Math.min(150, pressure * 30);
+      if (!mainLine.has(row[index].personId) && !mainLine.has(row[index + 1].personId)
+        && branchSides.get(row[index].personId) === -1 && branchSides.get(row[index + 1].personId) === 1) {
+        width += FAMILY_NODE_WIDTH;
+      }
     }
     return width;
   };
@@ -402,19 +474,33 @@ export function layoutFamilyTree(
       rawPositions.set(node.personId, x);
       x += FAMILY_NODE_WIDTH;
       if (index < row.length - 1) {
-        const pressure = (mergePressure.get(node.personId) ?? 0) + (mergePressure.get(row[index + 1].personId) ?? 0);
+        const nextNode = row[index + 1];
+        const pressure = (mergePressure.get(node.personId) ?? 0) + (mergePressure.get(nextNode.personId) ?? 0);
         x += BASE_COLUMN_GAP + Math.min(150, pressure * 30);
+        if (!mainLine.has(node.personId) && !mainLine.has(nextNode.personId)
+          && branchSides.get(node.personId) === -1 && branchSides.get(nextNode.personId) === 1) {
+          x += FAMILY_NODE_WIDTH;
+        }
       }
     }
 
     const mainInRow = row.filter((node) => mainLine.has(node.personId));
+    const rowMin = row.length ? Math.min(...row.map((node) => rawPositions.get(node.personId) ?? 0)) : 0;
+    const rowMax = row.length ? Math.max(...row.map((node) => (rawPositions.get(node.personId) ?? 0) + FAMILY_NODE_WIDTH)) : 0;
     let shift = 0;
     if (mainInRow.length) {
       const currentCenter = mainInRow.reduce((sum, node) => sum + (rawPositions.get(node.personId) ?? 0) + FAMILY_NODE_WIDTH / 2, 0) / mainInRow.length;
       shift = width / 2 - currentCenter;
-      const rowMin = Math.min(...row.map((node) => rawPositions.get(node.personId) ?? 0));
-      const rowMax = Math.max(...row.map((node) => (rawPositions.get(node.personId) ?? 0) + FAMILY_NODE_WIDTH));
       shift = Math.max(SIDE_PADDING - rowMin, Math.min(shift, width - SIDE_PADDING - rowMax));
+    } else if (row.length) {
+      const rowSides = new Set(row.map((node) => branchSides.get(node.personId)).filter((side): side is BranchSide => Boolean(side)));
+      if (rowSides.size === 1) {
+        const onlySide = [...rowSides][0];
+        const desired = onlySide === -1
+          ? width / 2 - BASE_COLUMN_GAP - rowMax
+          : width / 2 + BASE_COLUMN_GAP - rowMin;
+        shift = Math.max(SIDE_PADDING - rowMin, Math.min(desired, width - SIDE_PADDING - rowMax));
+      }
     }
 
     for (const node of row) {
