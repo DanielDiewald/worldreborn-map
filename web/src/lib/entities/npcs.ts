@@ -38,7 +38,7 @@ export type NpcFilterOptions = {
 };
 
 type NpcRow={
-  nId:number;charId:number;campId:number;name:string;gender:string;image:string;imageMediaId:number|null;notes:string;publicDescription:string|null;adminNotes:string|null;title:string|null;species:string|null;profession:string|null;visibilityMode:string;locId:number;location:string;race:string;alive:boolean;birthday:string;follower:boolean;className:string;age:number;birthEra:"before"|"after"|null;birthYear:number|null;birthMonth:number|null;birthDay:number|null;birthPrecision:string|null;
+  nId:number;charId:number;campId:number;name:string;gender:string;image:string;imageMediaId:number|null;notes:string;publicDescription:string|null;adminNotes:string|null;title:string|null;species:string|null;profession:string|null;visibilityMode:string;locId:number;location:string;race:string;alive:boolean;birthday:string;follower:boolean;className:string;age:number;birthEra:"before"|"after"|null;birthYear:number|null;birthMonth:number|null;birthDay:number|null;birthPrecision:string|null;deathCauseCode:string|null;deathCauseDetail:string|null;
 };
 
 function npcFilter(projectId:number,filters:NpcListFilters){
@@ -65,7 +65,8 @@ async function assertLocation(projectId:number,locationId:number){
 }
 
 const npcSelect=`SELECT n.n_id AS "nId",c.char_id AS "charId",n.camp_id AS "campId",n.name,n.gender,n.image,n.image_media_id AS "imageMediaId",n.notes,n.public_description AS "publicDescription",n.admin_notes AS "adminNotes",n.title,n.species,n.profession,n.visibility_mode AS "visibilityMode",c.loc_id AS "locId",l.name AS location,c.race,c.alive,c.birthday::text,c.follower,c.class AS "className",c.age,
-  fd.era AS "birthEra",fd.year AS "birthYear",fd.month AS "birthMonth",fd.day AS "birthDay",fd.precision AS "birthPrecision"
+  fd.era AS "birthEra",fd.year AS "birthYear",fd.month AS "birthMonth",fd.day AS "birthDay",fd.precision AS "birthPrecision",
+  n.metadata->>'death_cause_code' AS "deathCauseCode",n.metadata->>'death_cause_detail' AS "deathCauseDetail"
   FROM npcs n
   JOIN charakters c ON c.n_id=n.n_id
   JOIN locations l ON l.loc_id=c.loc_id AND l.camp_id=n.camp_id
