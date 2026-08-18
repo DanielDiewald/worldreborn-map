@@ -75,7 +75,7 @@ export default async function AdminMapPage({
         <span>{players.length} aktive Spieler für selektive Freigaben</span>
         <span>{selected.map_type === "image" ? "Image Map · X/Y" : "Tile Map · Lat/Lng"}</span>
       </div>
-      <MapViewer mapConfig={config} initialMarkers={markers} admin projectId={projectId} players={players}/>
+      <MapViewer key={config.mapId} mapConfig={config} initialMarkers={markers} admin projectId={projectId} players={players}/>
     </section>
 
     {maps.length>1?<section className="panel-card">
