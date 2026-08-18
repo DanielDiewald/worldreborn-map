@@ -11,8 +11,16 @@ export interface StorageAdapter {
   getUrl(storagePath: string): string;
 }
 
+const DEFAULT_STORAGE_ROOT = path.join(process.cwd(), ".data", "uploads");
+function mediaStorageRoot(){
+  const configured=process.env.MEDIA_STORAGE_ROOT?.trim();
+  if(!configured)return DEFAULT_STORAGE_ROOT;
+  // Deployment storage is intentionally external/runtime data and must not cause Next NFT to trace the whole repository.
+  return path.resolve(/*turbopackIgnore: true*/ configured);
+}
+
 export class LocalStorageAdapter implements StorageAdapter {
-  constructor(private readonly root = path.resolve(process.env.MEDIA_STORAGE_ROOT ?? path.join(process.cwd(), ".data", "uploads"))) {}
+  constructor(private readonly root = mediaStorageRoot()) {}
 
   private resolveSafe(storagePath: string) {
     const absolute = path.resolve(this.root, storagePath);
