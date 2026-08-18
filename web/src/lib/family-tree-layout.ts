@@ -361,8 +361,6 @@ function compactGenerationsBottomUp(
   const result = new Map(generation);
   const parentEdges = edges.filter((edge) => visibleIds.has(edge.a) && visibleIds.has(edge.b) && isFamilyParentEdge(edge));
 
-  // Build same-generation family groups first, but never let a lateral relationship
-  // between the main line and a side branch glue those two vertical timelines together.
   const union = new UnionFind([...visibleIds]);
   for (const edge of edges) {
     if (!visibleIds.has(edge.a) || !visibleIds.has(edge.b) || !SAME_GENERATION_CODES.has(edge.code)) continue;
@@ -392,10 +390,6 @@ function compactGenerationsBottomUp(
   const groupGeneration = (root: number) => Math.max(...(members.get(root) ?? []).map((id) => result.get(id) ?? 0));
   const roots = [...members.keys()];
 
-  // Work from descendants upward. Every parent group is moved as late as legally
-  // possible, immediately before its earliest child group. This applies to the
-  // main line as well, so a short ancestry cannot stay pinned to the top merely
-  // because one of its people belongs to the chosen succession line.
   for (let pass = 0; pass < roots.length; pass += 1) {
     let changed = false;
     const ordered = [...roots].sort((a, b) => groupGeneration(b) - groupGeneration(a) || a - b);
@@ -412,6 +406,63 @@ function compactGenerationsBottomUp(
     if (!changed) break;
   }
 
+  return result;
+}
+
+function enforceAdjacentParentGenerations(
+  generation: Map<number, number>,
+  visibleIds: Set<number>,
+  edges: FamilyLayoutEdge[],
+  mainLine: Set<number>,
+) {
+  const parentEdges = edges.filter((edge) => visibleIds.has(edge.a) && visibleIds.has(edge.b) && isFamilyParentEdge(edge));
+  if (!parentEdges.length) return generation;
+
+  const links = new Map<number, Array<{ id: number; delta: number }>>();
+  for (const edge of parentEdges) {
+    links.set(edge.a, [...(links.get(edge.a) ?? []), { id: edge.b, delta: 1 }]);
+    links.set(edge.b, [...(links.get(edge.b) ?? []), { id: edge.a, delta: -1 }]);
+  }
+  for (const values of links.values()) values.sort((a, b) => a.id - b.id || a.delta - b.delta);
+
+  const result = new Map(generation);
+  const visited = new Set<number>();
+  const starts = [...visibleIds].sort((a, b) => {
+    const aMain = mainLine.has(a) ? 0 : 1;
+    const bMain = mainLine.has(b) ? 0 : 1;
+    return aMain - bMain || (generation.get(a) ?? 0) - (generation.get(b) ?? 0) || a - b;
+  });
+
+  for (const start of starts) {
+    if (visited.has(start) || !(links.get(start)?.length)) continue;
+    const relative = new Map<number, number>([[start, 0]]);
+    const component: number[] = [];
+    const queue = [start];
+    visited.add(start);
+
+    for (let cursor = 0; cursor < queue.length; cursor += 1) {
+      const id = queue[cursor];
+      component.push(id);
+      const current = relative.get(id) ?? 0;
+      for (const link of links.get(id) ?? []) {
+        const expected = current + link.delta;
+        if (!relative.has(link.id)) {
+          relative.set(link.id, expected);
+          visited.add(link.id);
+          queue.push(link.id);
+        }
+      }
+    }
+
+    const anchors = component.filter((id) => mainLine.has(id));
+    const referenceIds = anchors.length ? anchors : component;
+    const shifts = referenceIds.map((id) => (generation.get(id) ?? 0) - (relative.get(id) ?? 0));
+    const shift = Math.round(median(shifts) ?? 0);
+    for (const id of component) result.set(id, (relative.get(id) ?? 0) + shift);
+  }
+
+  const minimum = Math.min(0, ...[...visibleIds].map((id) => result.get(id) ?? 0));
+  if (minimum < 0) for (const id of visibleIds) result.set(id, (result.get(id) ?? 0) - minimum);
   return result;
 }
 
@@ -695,12 +746,10 @@ export function layoutFamilyTree(
   const mainLine = new Set(mainLineIds);
   const bottomAligned = alignShortDisconnectedBranches(baseGeneration, visibleSet, structuralEdges, mainLine, allNodes);
   const cohortAligned = alignSideComponentsToMainBirthCohorts(allNodes, structuralEdges, bottomAligned, visibleSet, mainLine);
-  const generation = compactGenerationsBottomUp(cohortAligned, visibleSet, structuralEdges, mainLine);
+  const bottomUp = compactGenerationsBottomUp(cohortAligned, visibleSet, structuralEdges, mainLine);
+  const generation = enforceAdjacentParentGenerations(bottomUp, visibleSet, structuralEdges, mainLine);
   const nodeById = new Map(visibleNodes.map((node) => [node.personId, node]));
 
-  // Logical generations can contain gaps after chronology alignment. The visual tree
-  // renders only occupied rows, so inferred/missing generations never create giant
-  // empty vertical bands between known people.
   const occupiedLogicalGenerations = [...new Set(visibleNodes.map((node) => generation.get(node.personId) ?? 0))].sort((a, b) => a - b);
   const visualRowByLogicalGeneration = new Map(occupiedLogicalGenerations.map((value, index) => [value, index]));
   const visualGeneration = new Map<number, number>();
