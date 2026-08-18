@@ -173,6 +173,12 @@
 .junctionDot { fill: #8a7954; stroke: #0d1014; stroke-width: 2; vector-effect: non-scaling-stroke; }
 .mainJunctionDot { fill: #d0ad62; stroke: #0d1014; stroke-width: 2; vector-effect: non-scaling-stroke; }
 .edgeLabel { fill: #aeb4bd; font-size: 9px; paint-order: stroke; stroke: #0d1014; stroke-width: 5px; stroke-linejoin: round; }
+.edgeHighlighted,
+.edgeDimmed { transition: opacity .13s ease, filter .13s ease; }
+.edgeHighlighted { opacity: 1; filter: drop-shadow(0 0 5px rgba(224, 190, 112, .6)); }
+.edgeHighlighted path { stroke-width: 3.2; }
+.edgeHighlighted .edgeLabel { fill: #f0d58e; font-size: 10px; font-weight: 700; }
+.edgeDimmed { opacity: .09; }
 
 .generationMarker {
   position: absolute;
@@ -204,13 +210,16 @@
   border-radius: 14px;
   background: linear-gradient(180deg, rgba(27, 31, 38, .99), rgba(18, 21, 27, .99));
   box-shadow: 0 12px 30px rgba(0, 0, 0, .26);
-  transition: border-color .16s ease, transform .16s ease, box-shadow .16s ease;
+  transition: border-color .16s ease, transform .16s ease, box-shadow .16s ease, opacity .13s ease, filter .13s ease;
 }
 
 .node:hover { z-index: 4; transform: translateY(-2px); border-color: #6e5d37; box-shadow: 0 16px 38px rgba(0, 0, 0, .36); }
 .mainNode { border-color: #6d5b35; box-shadow: 0 0 0 1px rgba(199, 164, 93, .08), 0 14px 32px rgba(0, 0, 0, .28); }
 .rootNode { border-color: #9b7d40; box-shadow: 0 0 0 1px rgba(199, 164, 93, .18), 0 15px 36px rgba(0, 0, 0, .32); }
 .branchNode { background: linear-gradient(180deg, rgba(24, 28, 34, .97), rgba(16, 19, 24, .97)); }
+.nodeDimmed { opacity: .22; filter: saturate(.45); }
+.nodeConnected { z-index: 4; border-color: #8f7a49; box-shadow: 0 0 0 1px rgba(199, 164, 93, .2), 0 14px 34px rgba(0, 0, 0, .34); }
+.nodeHovered { z-index: 5; transform: translateY(-2px); border-color: #d0ad62; box-shadow: 0 0 0 2px rgba(199, 164, 93, .24), 0 0 24px rgba(199, 164, 93, .18), 0 18px 40px rgba(0, 0, 0, .42); }
 .nodeLink { min-width: 0; color: inherit; text-decoration: none; }
 .nodeHead { display: grid; grid-template-columns: 46px minmax(0, 1fr); gap: 10px; align-items: center; min-width: 0; }
 .nodeIdentity { min-width: 0; }
