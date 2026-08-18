@@ -263,14 +263,6 @@ function alignShortDisconnectedBranches(
   return result;
 }
 
-function centerMainLine(row: FamilyLayoutNode[], mainLine: Set<number>) {
-  const main = row.filter((node) => mainLine.has(node.personId));
-  if (main.length === 0) return row;
-  const side = row.filter((node) => !mainLine.has(node.personId));
-  const middle = Math.ceil(side.length / 2);
-  return [...side.slice(0, middle), ...main, ...side.slice(middle)];
-}
-
 export function assignFamilyParentRouteLanes(routes: FamilyParentRoute[]) {
   const result = new Map<number, number>();
   const byGeneration = new Map<number, FamilyParentRoute[]>();
@@ -309,7 +301,9 @@ export function layoutFamilyTree(
     const row = generation.get(node.personId) ?? 0;
     rows.set(row, [...(rows.get(row) ?? []), node]);
   }
-  for (const [row, values] of rows) rows.set(row, centerMainLine(values.sort((a, b) => a.name.localeCompare(b.name) || a.personId - b.personId), mainLine));
+  // Relationship passes below decide the visual order. IDs are only a deterministic final fallback;
+  // names must never decide which side of the family a branch appears on.
+  for (const [row, values] of rows) rows.set(row, values.sort((a, b) => a.personId - b.personId));
 
   const parentEdges = edges.filter((edge) => visibleSet.has(edge.a) && visibleSet.has(edge.b) && isFamilyParentEdge(edge));
   const parents = new Map<number, number[]>();
@@ -318,6 +312,7 @@ export function layoutFamilyTree(
     parents.set(edge.b, [...(parents.get(edge.b) ?? []), edge.a]);
     children.set(edge.a, [...(children.get(edge.a) ?? []), edge.b]);
   }
+  const familyNeighbors = adjacency(edges, visibleSet);
 
   const sortedGenerations = [...rows.keys()].sort((a, b) => a - b);
   const indexMap = () => {
@@ -325,24 +320,47 @@ export function layoutFamilyTree(
     for (const values of rows.values()) values.forEach((node, index) => result.set(node.personId, index));
     return result;
   };
-  const score = (ids: number[] | undefined, indexes: Map<number, number>) => {
-    const values = (ids ?? []).map((id) => indexes.get(id)).filter((value): value is number => value !== undefined);
+  const score = (ids: Iterable<number> | undefined, indexes: Map<number, number>) => {
+    const values = [...(ids ?? [])].map((id) => indexes.get(id)).filter((value): value is number => value !== undefined);
     return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : Number.POSITIVE_INFINITY;
   };
+  const compareScore = (left: number, right: number) => {
+    const leftFinite = Number.isFinite(left);
+    const rightFinite = Number.isFinite(right);
+    if (leftFinite && rightFinite) return left - right;
+    if (leftFinite) return -1;
+    if (rightFinite) return 1;
+    return 0;
+  };
+  const relationshipCompare = (
+    a: FamilyLayoutNode,
+    b: FamilyLayoutNode,
+    indexes: Map<number, number>,
+    primary: Map<number, number[]>,
+    secondary: Map<number, number[]>,
+  ) => {
+    return compareScore(score(primary.get(a.personId), indexes), score(primary.get(b.personId), indexes))
+      || compareScore(score(secondary.get(a.personId), indexes), score(secondary.get(b.personId), indexes))
+      || compareScore(score(familyNeighbors.get(a.personId), indexes), score(familyNeighbors.get(b.personId), indexes))
+      || a.personId - b.personId;
+  };
 
-  for (let pass = 0; pass < 5; pass += 1) {
+  // Repeated barycentric passes propagate the position of descendants upward through a whole side branch.
+  // Crucially, the main line is NOT reinserted into the middle of the row here. Its X coordinate is centered
+  // later, after genealogical ordering is complete, so a branch stays above the relatives it actually leads to.
+  for (let pass = 0; pass < 7; pass += 1) {
     let indexes = indexMap();
     for (const rowId of sortedGenerations) {
       const row = rows.get(rowId) ?? [];
-      row.sort((a, b) => score(parents.get(a.personId), indexes) - score(parents.get(b.personId), indexes) || a.name.localeCompare(b.name) || a.personId - b.personId);
-      rows.set(rowId, centerMainLine(row, mainLine));
+      row.sort((a, b) => relationshipCompare(a, b, indexes, parents, children));
+      rows.set(rowId, row);
       indexes = indexMap();
     }
     indexes = indexMap();
     for (const rowId of [...sortedGenerations].reverse()) {
       const row = rows.get(rowId) ?? [];
-      row.sort((a, b) => score(children.get(a.personId), indexes) - score(children.get(b.personId), indexes) || a.name.localeCompare(b.name) || a.personId - b.personId);
-      rows.set(rowId, centerMainLine(row, mainLine));
+      row.sort((a, b) => relationshipCompare(a, b, indexes, children, parents));
+      rows.set(rowId, row);
       indexes = indexMap();
     }
   }
