@@ -352,7 +352,7 @@ function alignShortDisconnectedBranches(
   return result;
 }
 
-function compactSideAncestorsTowardAttachments(
+function compactGenerationsBottomUp(
   generation: Map<number, number>,
   visibleIds: Set<number>,
   edges: FamilyLayoutEdge[],
@@ -361,6 +361,8 @@ function compactSideAncestorsTowardAttachments(
   const result = new Map(generation);
   const parentEdges = edges.filter((edge) => visibleIds.has(edge.a) && visibleIds.has(edge.b) && isFamilyParentEdge(edge));
 
+  // Build same-generation family groups first, but never let a lateral relationship
+  // between the main line and a side branch glue those two vertical timelines together.
   const union = new UnionFind([...visibleIds]);
   for (const edge of edges) {
     if (!visibleIds.has(edge.a) || !visibleIds.has(edge.b) || !SAME_GENERATION_CODES.has(edge.code)) continue;
@@ -387,22 +389,24 @@ function compactSideAncestorsTowardAttachments(
     outgoing.set(from, targets);
   }
 
-  const fixed = new Set<number>();
-  for (const id of mainLine) if (visibleIds.has(id)) fixed.add(union.find(id));
   const groupGeneration = (root: number) => Math.max(...(members.get(root) ?? []).map((id) => result.get(id) ?? 0));
   const roots = [...members.keys()];
 
+  // Work from descendants upward. Every parent group is moved as late as legally
+  // possible, immediately before its earliest child group. This applies to the
+  // main line as well, so a short ancestry cannot stay pinned to the top merely
+  // because one of its people belongs to the chosen succession line.
   for (let pass = 0; pass < roots.length; pass += 1) {
     let changed = false;
     const ordered = [...roots].sort((a, b) => groupGeneration(b) - groupGeneration(a) || a - b);
     for (const root of ordered) {
-      if (fixed.has(root)) continue;
       const childRoots = [...(outgoing.get(root) ?? [])];
       if (!childRoots.length) continue;
       const latestLegal = Math.min(...childRoots.map((childRoot) => groupGeneration(childRoot) - 1));
       const current = groupGeneration(root);
       if (latestLegal <= current) continue;
-      for (const id of members.get(root) ?? []) result.set(id, latestLegal);
+      const shift = latestLegal - current;
+      for (const id of members.get(root) ?? []) result.set(id, (result.get(id) ?? 0) + shift);
       changed = true;
     }
     if (!changed) break;
@@ -690,12 +694,21 @@ export function layoutFamilyTree(
   const visibleSet = new Set(visibleNodes.map((node) => node.personId));
   const mainLine = new Set(mainLineIds);
   const bottomAligned = alignShortDisconnectedBranches(baseGeneration, visibleSet, structuralEdges, mainLine, allNodes);
-  const compacted = compactSideAncestorsTowardAttachments(bottomAligned, visibleSet, structuralEdges, mainLine);
-  const generation = alignSideComponentsToMainBirthCohorts(allNodes, structuralEdges, compacted, visibleSet, mainLine);
+  const cohortAligned = alignSideComponentsToMainBirthCohorts(allNodes, structuralEdges, bottomAligned, visibleSet, mainLine);
+  const generation = compactGenerationsBottomUp(cohortAligned, visibleSet, structuralEdges, mainLine);
   const nodeById = new Map(visibleNodes.map((node) => [node.personId, node]));
+
+  // Logical generations can contain gaps after chronology alignment. The visual tree
+  // renders only occupied rows, so inferred/missing generations never create giant
+  // empty vertical bands between known people.
+  const occupiedLogicalGenerations = [...new Set(visibleNodes.map((node) => generation.get(node.personId) ?? 0))].sort((a, b) => a - b);
+  const visualRowByLogicalGeneration = new Map(occupiedLogicalGenerations.map((value, index) => [value, index]));
+  const visualGeneration = new Map<number, number>();
   const rows = new Map<number, FamilyLayoutNode[]>();
   for (const node of visibleNodes) {
-    const rowId = generation.get(node.personId) ?? 0;
+    const logicalGeneration = generation.get(node.personId) ?? 0;
+    const rowId = visualRowByLogicalGeneration.get(logicalGeneration) ?? 0;
+    visualGeneration.set(node.personId, rowId);
     rows.set(rowId, [...(rows.get(rowId) ?? []), node]);
   }
   for (const [rowId, row] of rows) rows.set(rowId, row.sort((a, b) => a.personId - b.personId));
@@ -755,7 +768,7 @@ export function layoutFamilyTree(
     }
   }
 
-  const branchSides = stabilizeBranchSides(rows, generation, visibleSet, mainLine, familyNeighbors, parentEdges);
+  const branchSides = stabilizeBranchSides(rows, visualGeneration, visibleSet, mainLine, familyNeighbors, parentEdges);
   const mergePressure = new Map<number, number>();
   for (const childId of visibleSet) {
     const parentIds = (parents.get(childId) ?? []).filter((id) => visibleSet.has(id));
