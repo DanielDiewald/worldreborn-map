@@ -425,7 +425,9 @@ export function MapViewer({
       setStatus(`Position gewählt: ${formatCoordinate(mapConfig.mapType, event.latlng)}`);
     };
     map.on("click", handler);
-    return () => map.off("click", handler);
+    return () => {
+      map.off("click", handler);
+    };
   }, [addMode, admin, mapConfig.mapType, mapRevision]);
 
   useEffect(() => {
