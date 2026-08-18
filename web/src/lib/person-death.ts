@@ -3,6 +3,13 @@ import "server-only";
 import { pool } from "@/lib/db";
 import { parseDeathCauseCode } from "@/lib/death-causes";
 
+export async function clearPersonDeathDate(projectId: number, personId: number) {
+  await pool.query(
+    "DELETE FROM fantasy_dates WHERE project_id=$1 AND entity_type='person' AND entity_id=$2 AND field_key='death'",
+    [projectId, personId],
+  );
+}
+
 export async function savePersonDeathMetadata(
   projectId: number,
   personId: number,
