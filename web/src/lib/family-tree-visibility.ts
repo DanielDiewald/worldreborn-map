@@ -37,16 +37,15 @@ export function buildFamilyExpansionMap(personIds: Iterable<number>, edges: Fami
   return result;
 }
 
-export function resolveProgressiveFamilyVisibility(
+export function resolveProgressiveFamilyVisibilityFromMap(
   personIds: Iterable<number>,
   mainLineIds: Iterable<number>,
   expandedPersonIds: Iterable<number>,
-  edges: FamilyLayoutEdge[],
+  neighbors: Map<number, Set<number>>,
 ) {
   const allIds = new Set(personIds);
   const visible = new Set([...mainLineIds].filter((id) => allIds.has(id)));
   const expanded = new Set(expandedPersonIds);
-  const neighbors = buildFamilyExpansionMap(allIds, edges);
 
   let changed = true;
   while (changed) {
@@ -61,7 +60,21 @@ export function resolveProgressiveFamilyVisibility(
     }
   }
 
-  return { visible, neighbors };
+  return visible;
+}
+
+export function resolveProgressiveFamilyVisibility(
+  personIds: Iterable<number>,
+  mainLineIds: Iterable<number>,
+  expandedPersonIds: Iterable<number>,
+  edges: FamilyLayoutEdge[],
+) {
+  const allIds = new Set(personIds);
+  const neighbors = buildFamilyExpansionMap(allIds, edges);
+  return {
+    visible: resolveProgressiveFamilyVisibilityFromMap(allIds, mainLineIds, expandedPersonIds, neighbors),
+    neighbors,
+  };
 }
 
 export function collectFamilyConnectedIds(mainLineIds: Iterable<number>, neighbors: Map<number, Set<number>>) {
