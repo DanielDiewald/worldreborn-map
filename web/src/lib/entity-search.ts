@@ -2,7 +2,7 @@ import "server-only";
 
 import { pool } from "@/lib/db";
 
-export type SearchEntityType = "person" | "group" | "location";
+export type SearchEntityType = "person" | "group" | "location" | "event";
 export type EntitySearchResult = {
   entityType: SearchEntityType;
   entityId: number;
@@ -21,7 +21,7 @@ type SearchArgs = {
   excludeFamilyTreeId?: number | null;
 };
 
-const ALL_TYPES: SearchEntityType[] = ["person", "group", "location"];
+const ALL_TYPES: SearchEntityType[] = ["person", "group", "location", "event"];
 
 function boundedLimit(value: number | undefined) {
   if (!Number.isFinite(value)) return 20;
@@ -93,6 +93,19 @@ export async function searchProjectEntities({ projectId, query = "", types, limi
          AND l.archived_at IS NULL
          AND 'location'=ANY($4::text[])
          AND ($2='' OR l.name ILIKE $3 OR l.location_type ILIKE $3 OR p.name ILIKE $3)
+      UNION ALL
+      SELECT 'event'::text,
+             e.e_id::int,
+             e.name,
+             'Event'::text,
+             NULLIF(CONCAT_WS(' · ', NULLIF(e.category,''), NULLIF(e.display_date,''), l.name), ''),
+             NULLIF(e.image,'noimage')
+        FROM events e
+        LEFT JOIN locations l ON l.loc_id=e.loc_id AND l.camp_id=e.camp_id
+       WHERE e.camp_id=$1
+         AND e.archived_at IS NULL
+         AND 'event'=ANY($4::text[])
+         AND ($2='' OR e.name ILIKE $3 OR e.category ILIKE $3 OR e.display_date ILIKE $3 OR l.name ILIKE $3)
     )
     SELECT "entityType", "entityId", name, kind, subtitle, image
       FROM candidates
@@ -126,6 +139,10 @@ export async function getProjectEntityOption(projectId:number,entityType:SearchE
       SELECT 'location',l.loc_id::int,l.name,'Location',NULLIF(CONCAT_WS(' · ',NULLIF(l.location_type,''),p.name),''),NULLIF(l.coat_of_arm,'noimage')
         FROM locations l LEFT JOIN locations p ON p.loc_id=l.parent_loc_id AND p.camp_id=l.camp_id
        WHERE l.camp_id=$1 AND l.loc_id=$3 AND l.archived_at IS NULL AND $2='location'
+      UNION ALL
+      SELECT 'event',e.e_id::int,e.name,'Event',NULLIF(CONCAT_WS(' · ',NULLIF(e.category,''),NULLIF(e.display_date,''),l.name),''),NULLIF(e.image,'noimage')
+        FROM events e LEFT JOIN locations l ON l.loc_id=e.loc_id AND l.camp_id=e.camp_id
+       WHERE e.camp_id=$1 AND e.e_id=$3 AND e.archived_at IS NULL AND $2='event'
     ) x LIMIT 1`,[projectId,entityType,entityId]);
   return result.rows[0]??null;
 }
