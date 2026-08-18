@@ -13,9 +13,6 @@ const tileMapSchema = z.object({
   centerLng: z.coerce.number().finite().nullable().optional(),
   noWrap: z.coerce.boolean().default(true),
   isPrimary: z.coerce.boolean().default(false),
-}).superRefine((value,context)=>{
-  if(value.maxZoom<value.minZoom)context.addIssue({code:"custom",message:"Max Zoom must be greater than or equal to Min Zoom."});
-  if((value.centerLat==null)!=(value.centerLng==null))context.addIssue({code:"custom",message:"Map center requires both latitude and longitude."});
 });
 
 const imageMapSchema = z.object({
@@ -27,11 +24,14 @@ const imageMapSchema = z.object({
   width: z.coerce.number().positive().max(1_000_000),
   height: z.coerce.number().positive().max(1_000_000),
   isPrimary: z.coerce.boolean().default(false),
-}).superRefine((value,context)=>{
-  if(value.maxZoom<value.minZoom)context.addIssue({code:"custom",message:"Max Zoom must be greater than or equal to Min Zoom."});
 });
 
-const mapSchema = z.discriminatedUnion("mapType", [tileMapSchema, imageMapSchema]);
+const mapSchema = z.discriminatedUnion("mapType", [tileMapSchema, imageMapSchema]).superRefine((value,context)=>{
+  if(value.maxZoom<value.minZoom)context.addIssue({code:"custom",message:"Max Zoom must be greater than or equal to Min Zoom."});
+  if(value.mapType==="tile"&&(value.centerLat==null)!=(value.centerLng==null)){
+    context.addIssue({code:"custom",message:"Map center requires both latitude and longitude."});
+  }
+});
 
 export async function createProjectMap(projectId:number,input:unknown){
   const data=mapSchema.parse(input);
