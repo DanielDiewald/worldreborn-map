@@ -47,3 +47,30 @@ test("older disconnected ancestry stays above a younger main line when birth yea
   assert.equal(layout.positions.get(4)?.generation, 4);
   assert.equal((layout.positions.get(91)?.generation ?? -1) - (layout.positions.get(90)?.generation ?? -1), 1);
 });
+
+test("a later-born side lineage follows the main-line birth cohort even when a non-family relation points to an early ancestor", () => {
+  const people = [
+    { personId: 1, name: "Main 1", birthYear: 1000 },
+    { personId: 2, name: "Main 2", birthYear: 1030 },
+    { personId: 3, name: "Main 3", birthYear: 1060 },
+    { personId: 4, name: "Main 4", birthYear: 1090 },
+    { personId: 5, name: "Main 5", birthYear: 1120 },
+    { personId: 90, name: "Later side parent", birthYear: 1092 },
+    { personId: 91, name: "Later side child", birthYear: 1118 },
+  ];
+  const edges = [
+    { a: 1, b: 2, code: "parent", directed: true },
+    { a: 2, b: 3, code: "parent", directed: true },
+    { a: 3, b: 4, code: "parent", directed: true },
+    { a: 4, b: 5, code: "parent", directed: true },
+    { a: 90, b: 91, code: "parent", directed: true },
+    { a: 1, b: 90, code: "ally", directed: false },
+  ];
+
+  const visible = new Set(people.map((person) => person.personId));
+  const layout = layoutFamilyTree(people, edges, visible, [1, 2, 3, 4, 5]);
+
+  assert.equal(layout.positions.get(90)?.generation, 3);
+  assert.equal(layout.positions.get(91)?.generation, 4);
+  assert.equal((layout.positions.get(91)?.generation ?? -1) - (layout.positions.get(90)?.generation ?? -1), 1);
+});
