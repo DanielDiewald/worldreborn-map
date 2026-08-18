@@ -16,7 +16,7 @@ import {
   type FamilyParentRoute,
   type FamilyTreePosition,
 } from "@/lib/family-tree-layout";
-import { buildFamilyExpansionMap, collectFamilyConnectedIds, resolveProgressiveFamilyVisibility } from "@/lib/family-tree-visibility";
+import { buildFamilyExpansionMap, collectFamilyConnectedIds, resolveHouseFamilyVisibility, resolveProgressiveFamilyVisibility } from "@/lib/family-tree-visibility";
 import { removeFamilyTreeMemberAction, updateFamilyTreeMainLineAction } from "./actions";
 import styles from "./family-trees.module.css";
 
@@ -25,6 +25,7 @@ type TreePerson = {
   name: string;
   image: string;
   kind: "God" | "Player Character" | "NPC / Character";
+  gender: string | null;
   title: string | null;
   roleLabel: string | null;
   branchLabel: string | null;
@@ -40,6 +41,7 @@ type TreeEdge = {
   directed: boolean;
   category: string;
   source: string;
+  metadata: Record<string, unknown>;
 };
 
 type Props = {
@@ -128,15 +130,16 @@ export function FamilyTreeCanvas({ projectId, people, edges, rootPersonId, named
     return result;
   }, [baseGenerations, structuralEdges, personById]);
 
-  const familyExpansionMap = useMemo(() => buildFamilyExpansionMap(people.map((person) => person.personId), structuralEdges), [people, structuralEdges]);
+  const houseVisibility = useMemo(() => resolveHouseFamilyVisibility(people, mainLine, edges), [edges, mainLine, people]);
+  const familyExpansionMap = useMemo(() => buildFamilyExpansionMap(people.map((person) => person.personId), edges), [people, edges]);
   const progressiveVisibility = useMemo(
-    () => resolveProgressiveFamilyVisibility(people.map((person) => person.personId), mainLine, expandedAnchors, structuralEdges),
-    [expandedAnchors, mainLine, people, structuralEdges],
+    () => resolveProgressiveFamilyVisibility(people.map((person) => person.personId), showAll ? houseVisibility : mainLine, expandedAnchors, edges),
+    [edges, expandedAnchors, houseVisibility, mainLine, people, showAll],
   );
   const visibleIds = useMemo(() => {
-    if (editingMainLine || showAll) return new Set(people.map((person) => person.personId));
+    if (editingMainLine) return new Set(people.map((person) => person.personId));
     return progressiveVisibility.visible;
-  }, [editingMainLine, people, progressiveVisibility.visible, showAll]);
+  }, [editingMainLine, people, progressiveVisibility.visible]);
 
   const visibleNodes = useMemo(() => people.filter((person) => visibleIds.has(person.personId)), [people, visibleIds]);
   const visibleEdges = useMemo(() => edges.filter((edge) => visibleIds.has(edge.a) && visibleIds.has(edge.b)), [edges, visibleIds]);
@@ -220,7 +223,6 @@ export function FamilyTreeCanvas({ projectId, people, edges, rootPersonId, named
   }, [mainLine.length]);
 
   const toggleBranch = (anchor: number) => {
-    setShowAll(false);
     setExpandedAnchors((current) => {
       const next = new Set(current);
       if (next.has(anchor)) next.delete(anchor);
@@ -399,7 +401,7 @@ export function FamilyTreeCanvas({ projectId, people, edges, rootPersonId, named
   }), [geometry.romanticEdges, hoveredPersonId, layout, romanticLaneByKey]);
 
   const relationshipSvg = useMemo(() => [...geometry.siblingEdges,...geometry.otherRelationshipEdges].map((edge,index)=>{
-    const a=layout.positions.get(edge.a);const b=layout.positions.get(edge.b);if(!a||!b)return null;const ax=a.x+FAMILY_NODE_WIDTH/2;const bx=b.x+FAMILY_NODE_WIDTH/2;const laneY=Math.min(a.y,b.y)-20-(index%7)*12;const hoverMatch=hoveredPersonId!=null&&(edge.a===hoveredPersonId||edge.b===hoveredPersonId);const hoverClass=hoveredPersonId==null?"":hoverMatch?styles.edgeHighlighted:styles.edgeDimmed;return <g key={edgeKey(edge)} className={hoverClass}><path d={`M ${ax} ${a.y} V ${laneY} H ${bx} V ${b.y}`} className={styles.otherEdge}/><text x={(ax+bx)/2} y={laneY-7} textAnchor="middle" className={styles.edgeLabel}>{edge.label}</text></g>;
+    const a=layout.positions.get(edge.a);const b=layout.positions.get(edge.b);if(!a||!b)return null;const ax=a.x+FAMILY_NODE_WIDTH/2;const bx=b.x+FAMILY_NODE_WIDTH/2;const laneY=Math.min(a.y,b.y)-20-(index%7)*12;const hoverMatch=hoveredPersonId!=null&&(edge.a===hoveredPersonId||edge.b===hoveredPersonId);const hoverClass=hoveredPersonId==null?"":hoverMatch?styles.edgeHighlighted:styles.edgeDimmed;return <g key={edgeKey(edge)} className={hoverClass}><path d={`M ${ax} ${a.y} V ${laneY} H ${bx} V ${b.y}`} className={edge.code==="ancestor"?styles.ancestorEdge:styles.otherEdge}/><text x={(ax+bx)/2} y={laneY-7} textAnchor="middle" className={styles.edgeLabel}>{edge.label}</text></g>;
   }), [geometry.otherRelationshipEdges, geometry.siblingEdges, hoveredPersonId, layout]);
 
   const connectedFamilyIds = useMemo(() => collectFamilyConnectedIds(mainLine, familyExpansionMap), [familyExpansionMap, mainLine]);
@@ -409,10 +411,10 @@ export function FamilyTreeCanvas({ projectId, people, edges, rootPersonId, named
   return (
     <div className={styles.canvasShell} ref={viewportRef} tabIndex={0} aria-label="Interaktiver Stammbaum. Mausrad zoomt, Ziehen verschiebt, Plus/Minus zoomt, 0 setzt 100 Prozent und F passt den Baum ein. Beim Überfahren einer Person werden direkte Beziehungen hervorgehoben." onKeyDown={handleKeyDown} onPointerDown={handlePointerDown} onPointerMove={handlePointerMove} onPointerUp={stopPan} onPointerCancel={stopPan}>
       <div className={styles.canvasControls}>
-        <div className={styles.canvasStatus}><strong>Hauptlinie</strong><span>{mainLine.length} Personen</span><span>{geometry.romanticEdges.length} romantische Beziehung{geometry.romanticEdges.length===1?"":"en"} sichtbar</span><span>{persistedMainLine?.length ? "manuell" : "automatisch"}</span><span>{hiddenCount ? `${hiddenCount} ausgeblendet` : "alle sichtbar"}</span>{hoveredPersonId!=null?<span>{hoveredNeighbors.size} direkte Verbindung{hoveredNeighbors.size===1?"":"en"}</span>:null}</div>
+        <div className={styles.canvasStatus}><strong>{showAll?"Hauszweige":"Hauptlinie"}</strong><span>{mainLine.length} Personen Hauptlinie</span>{showAll?<span>{houseVisibility.size} im Haus geboren</span>:null}<span>{geometry.romanticEdges.length} romantische Beziehung{geometry.romanticEdges.length===1?"":"en"} sichtbar</span><span>{persistedMainLine?.length ? "manuell" : "automatisch"}</span><span>{hiddenCount ? `${hiddenCount} ausgeblendet` : "alle sichtbar"}</span>{hoveredPersonId!=null?<span>{hoveredNeighbors.size} direkte Verbindung{hoveredNeighbors.size===1?"":"en"}</span>:null}</div>
         <div className={styles.canvasButtons}>
           {!editingMainLine ? <button type="button" className="button ghost" onClick={() => { setShowAll(false); setExpandedAnchors(new Set()); }}>Nur Hauptlinie</button> : null}
-          {!editingMainLine ? <button type="button" className="button ghost" onClick={() => setShowAll(true)} disabled={showAll || people.length === visibleIds.size}>Alle Zweige</button> : null}
+          {!editingMainLine ? <button type="button" className="button ghost" onClick={() => setShowAll(true)} disabled={showAll} title="Hauptlinie plus väterliche Blutverwandte, die nach der Ehe-Hausfolge in dieses Haus geboren wurden">Alle Zweige</button> : null}
           {named && !editingMainLine ? <button type="button" className="button ghost" onClick={beginMainLineEdit}>✎ Hauptlinie bearbeiten</button> : null}
           <span className={styles.zoomControls}><button type="button" aria-label="Herauszoomen" onClick={() => setZoom((current) => clampZoom(current - ZOOM_STEP))} disabled={zoom <= MIN_ZOOM}>−</button><button type="button" className={styles.zoomValue} onClick={() => setZoom(1)} title="Zoom auf 100 % zurücksetzen">{Math.round(zoom * 100)}%</button><button type="button" aria-label="Hineinzoomen" onClick={() => setZoom((current) => clampZoom(current + ZOOM_STEP))} disabled={zoom >= MAX_ZOOM}>+</button><button type="button" onClick={fitTree}>Einpassen</button></span>
           <button type="button" className="button ghost" onClick={() => scrollToOldest()}>↑ Älteste Generation</button>
@@ -425,8 +427,8 @@ export function FamilyTreeCanvas({ projectId, people, edges, rootPersonId, named
       <div className={styles.zoomSurface} style={{ width: layout.width * zoom, height: layout.height * zoom }}><div className={styles.canvas} style={{ width: layout.width, height: layout.height, transform: `scale(${zoom})` }}>
         {layout.shownGenerations.map((generation)=>{const first=visibleNodes.find((node)=>layout.positions.get(node.personId)?.generation===generation);const position=first?layout.positions.get(first.personId):null;if(!position)return null;return <div key={generation} className={styles.generationMarker} style={{top:position.y-38}}>{generation===0?"Älteste Generation":`Generation ${generation+1}`}</div>;})}
         <svg className={styles.edges} width={layout.width} height={layout.height} aria-hidden="true">{familySvg}{romanticSvg}{relationshipSvg}</svg>
-        {visibleNodes.map((node)=>{const pos=layout.positions.get(node.personId);if(!pos)return null;const main=mainLineSet.has(node.personId);const root=node.personId===rootPersonId;const branchOpen=expandedAnchors.has(node.personId);const hiddenRelatives=[...(familyExpansionMap.get(node.personId)??[])].filter((id)=>!visibleIds.has(id));const canToggle=!editingMainLine&&!showAll&&(branchOpen||hiddenRelatives.length>0);const removable=named&&typeof treeId==="number"&&!root&&!editingMainLine;const removeAction=removable?removeFamilyTreeMemberAction.bind(null,projectId,treeId,node.personId):null;const hoverActive=hoveredPersonId!=null;const hoverSelf=hoveredPersonId===node.personId;const hoverConnected=hoveredNeighbors.has(node.personId);const hoverClass=!hoverActive?"":hoverSelf?styles.nodeHovered:hoverConnected?styles.nodeConnected:styles.nodeDimmed;return <article key={node.personId} data-tree-node className={`${styles.node} ${main?styles.mainNode:styles.branchNode} ${root?styles.rootNode:""} ${hoverClass}`} style={{left:pos.x,top:pos.y}} onMouseEnter={()=>setHoveredPersonId(node.personId)} onMouseLeave={()=>setHoveredPersonId(null)} onFocusCapture={()=>setHoveredPersonId(node.personId)} onBlurCapture={handleNodeBlur}><Link href={personHref(projectId,node)} className={styles.nodeLink}><div className={styles.nodeHead}><span className={styles.avatar}>{validImage(node.image)?<img src={node.image} alt="" loading="lazy"/>:node.name.slice(0,1).toUpperCase()}</span><span className={styles.nodeIdentity}><strong>{node.name}</strong><small>{node.kind}{node.title?` · ${node.title}`:""}</small></span></div></Link><div className={styles.nodeBadges}>{main?<span className={styles.mainBadge}>{editingMainLine?"Hauptlinie · Vorschau":"Hauptlinie"}</span>:<span>Seitenzweig</span>}{root?<span>Root</span>:null}{node.roleLabel&&node.roleLabel!=="Root"?<span>{node.roleLabel}</span>:null}{node.branchLabel?<span>{node.branchLabel}</span>:null}</div><div className={styles.nodeActions}>{canToggle?<button type="button" className={styles.branchToggle} onClick={()=>toggleBranch(node.personId)}>{branchOpen?"− Verwandte":`+ ${hiddenRelatives.length} Verwandte`}</button>:null}{removeAction?<form action={removeAction}><button className={styles.removeButton}>Entfernen</button></form>:null}</div></article>;})}
-        {!editingMainLine&&!showAll&&disconnectedHidden>0?<div className={styles.disconnectedHint}>{disconnectedHidden} weitere Person{disconnectedHidden===1?"":"en"} liegen in getrennten Familienlinien. <button type="button" onClick={()=>setShowAll(true)}>Alle anzeigen</button></div>:null}
+        {visibleNodes.map((node)=>{const pos=layout.positions.get(node.personId);if(!pos)return null;const main=mainLineSet.has(node.personId);const inHouse=houseVisibility.has(node.personId);const root=node.personId===rootPersonId;const branchOpen=expandedAnchors.has(node.personId);const hiddenRelatives=[...(familyExpansionMap.get(node.personId)??[])].filter((id)=>!visibleIds.has(id));const canToggle=!editingMainLine&&(branchOpen||hiddenRelatives.length>0);const removable=named&&typeof treeId==="number"&&!root&&!editingMainLine;const removeAction=removable?removeFamilyTreeMemberAction.bind(null,projectId,treeId,node.personId):null;const hoverActive=hoveredPersonId!=null;const hoverSelf=hoveredPersonId===node.personId;const hoverConnected=hoveredNeighbors.has(node.personId);const hoverClass=!hoverActive?"":hoverSelf?styles.nodeHovered:hoverConnected?styles.nodeConnected:styles.nodeDimmed;return <article key={node.personId} data-tree-node className={`${styles.node} ${main?styles.mainNode:styles.branchNode} ${root?styles.rootNode:""} ${hoverClass}`} style={{left:pos.x,top:pos.y}} onMouseEnter={()=>setHoveredPersonId(node.personId)} onMouseLeave={()=>setHoveredPersonId(null)} onFocusCapture={()=>setHoveredPersonId(node.personId)} onBlurCapture={handleNodeBlur}><Link href={personHref(projectId,node)} className={styles.nodeLink}><div className={styles.nodeHead}><span className={styles.avatar}>{validImage(node.image)?<img src={node.image} alt="" loading="lazy"/>:node.name.slice(0,1).toUpperCase()}</span><span className={styles.nodeIdentity}><strong>{node.name}</strong><small>{node.kind}{node.title?` · ${node.title}`:""}</small></span></div></Link><div className={styles.nodeBadges}>{main?<span className={styles.mainBadge}>{editingMainLine?"Hauptlinie · Vorschau":"Hauptlinie"}</span>:inHouse?<span className={styles.houseBadge}>Im Haus geboren</span>:<span>Seitenzweig</span>}{root?<span>Root</span>:null}{node.roleLabel&&node.roleLabel!=="Root"?<span>{node.roleLabel}</span>:null}{node.branchLabel?<span>{node.branchLabel}</span>:null}</div><div className={styles.nodeActions}>{canToggle?<button type="button" className={styles.branchToggle} onClick={()=>toggleBranch(node.personId)}>{branchOpen?"− Verwandte":`+ ${hiddenRelatives.length} Verwandte`}</button>:null}{removeAction?<form action={removeAction}><button className={styles.removeButton}>Entfernen</button></form>:null}</div></article>;})}
+        {!editingMainLine&&!showAll&&disconnectedHidden>0?<div className={styles.disconnectedHint}>{disconnectedHidden} weitere Person{disconnectedHidden===1?"":"en"} liegen außerhalb der sichtbaren Hauptlinie. <button type="button" onClick={()=>setShowAll(true)}>Hauszweige anzeigen</button></div>:null}
       </div></div>
     </div>
   );
