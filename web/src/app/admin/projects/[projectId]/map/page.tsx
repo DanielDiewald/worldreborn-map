@@ -65,13 +65,15 @@ export default async function AdminMapPage({
           </select>
           <button className="button ghost">Öffnen</button>
         </form>:null}
-        <Link className="button ghost" href={`/admin/projects/${projectId}/settings`}>Maps verwalten</Link>
+        <Link className="button ghost" href={`/admin/projects/${projectId}/map/maps`}>Maps</Link>
+        <Link className="button ghost" href={`/admin/projects/${projectId}/map/markers?mapId=${selected.map_id}`}>Marker verwalten</Link>
+        <Link className="button ghost" href={`/admin/projects/${projectId}/settings`}>Map Settings</Link>
       </div>
     </div>
 
     <section className="panel-card">
       <div className="table-meta">
-        <span><strong>{markers.length}</strong> Marker</span>
+        <span><strong>{markers.length}</strong> Marker auf dem Canvas</span>
         <span>{players.length} aktive Spieler für selektive Freigaben</span>
         <span>{selected.map_type === "image" ? "Image Map · X/Y" : "Tile Map · Lat/Lng"}</span>
       </div>
