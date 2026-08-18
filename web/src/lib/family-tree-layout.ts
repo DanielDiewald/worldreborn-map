@@ -292,26 +292,48 @@ function stabilizeBranchSides(
   visibleSet: Set<number>,
   mainLine: Set<number>,
   familyNeighbors: Map<number, Set<number>>,
+  parentEdges: FamilyLayoutEdge[],
 ) {
   const sideByNode = new Map<number, BranchSide>();
-  const visited = new Set<number>();
   const offMain = [...visibleSet].filter((id) => !mainLine.has(id));
+  const offMainSet = new Set(offMain);
+  const branchUnion = new UnionFind(offMain);
 
-  for (const start of offMain) {
-    if (visited.has(start)) continue;
-    const component: number[] = [];
-    const queue = [start];
-    visited.add(start);
-    for (let cursor = 0; cursor < queue.length; cursor += 1) {
-      const id = queue[cursor];
-      component.push(id);
-      for (const next of familyNeighbors.get(id) ?? []) {
-        if (!visibleSet.has(next) || mainLine.has(next) || visited.has(next)) continue;
-        visited.add(next);
-        queue.push(next);
-      }
+  // Normal family links keep off-main relatives in one branch bundle.
+  for (const id of offMain) {
+    for (const next of familyNeighbors.get(id) ?? []) {
+      if (offMainSet.has(next)) branchUnion.union(id, next);
     }
+  }
 
+  // Important: a manually selected main-line person can sit in the middle of what is visually one side lineage.
+  // We therefore allow an off-main parent branch to pass THROUGH that exact main-line person to an off-main child
+  // branch. We never traverse from one main-line person to the next, so unrelated spouses/branches elsewhere on the
+  // main spine do not collapse into one giant component.
+  const incomingByMain = new Map<number, number[]>();
+  const outgoingByMain = new Map<number, number[]>();
+  for (const edge of parentEdges) {
+    if (mainLine.has(edge.b) && offMainSet.has(edge.a)) {
+      incomingByMain.set(edge.b, [...(incomingByMain.get(edge.b) ?? []), edge.a]);
+    }
+    if (mainLine.has(edge.a) && offMainSet.has(edge.b)) {
+      outgoingByMain.set(edge.a, [...(outgoingByMain.get(edge.a) ?? []), edge.b]);
+    }
+  }
+  for (const mainId of mainLine) {
+    const incoming = incomingByMain.get(mainId) ?? [];
+    const outgoing = outgoingByMain.get(mainId) ?? [];
+    if (!incoming.length || !outgoing.length) continue;
+    for (const parentId of incoming) for (const childId of outgoing) branchUnion.union(parentId, childId);
+  }
+
+  const components = new Map<number, number[]>();
+  for (const id of offMain) {
+    const root = branchUnion.find(id);
+    components.set(root, [...(components.get(root) ?? []), id]);
+  }
+
+  for (const component of components.values()) {
     let vote = 0;
     for (const id of component) {
       const rowId = generation.get(id) ?? 0;
@@ -428,10 +450,9 @@ export function layoutFamilyTree(
     }
   }
 
-  // A connected side branch must not jump across the main line between generations. Deeper nodes and
-  // direct main-line contacts get more weight, then that side is propagated to every ancestor/descendant
-  // in the off-main component before absolute X positions are calculated.
-  const branchSides = stabilizeBranchSides(rows, generation, visibleSet, mainLine, familyNeighbors);
+  // A side branch must also stay intact when a person from the main line sits in its middle. The bridge-aware
+  // stabilizer keeps that local lineage together without allowing traversal along the whole main spine.
+  const branchSides = stabilizeBranchSides(rows, generation, visibleSet, mainLine, familyNeighbors, parentEdges);
 
   const mergePressure = new Map<number, number>();
   for (const childId of visibleSet) {
