@@ -1,438 +1,96 @@
 "use client";
 
-import Link from "next/link";
-import { useEffect, useMemo, useRef, useState, useTransition, type FocusEvent as ReactFocusEvent, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
-import {
-  FAMILY_NODE_HEIGHT,
-  FAMILY_NODE_WIDTH,
-  FAMILY_PARTNER_CODES,
-  assignFamilyParentRouteLanes,
-  buildFamilyGenerations,
-  findFamilyDescendantLine,
-  isFamilyParentEdge,
-  isFamilyStructureEdge,
-  layoutFamilyTree,
-  resolveFamilyMainLine,
-  type FamilyParentRoute,
-  type FamilyTreePosition,
-} from "@/lib/family-tree-layout";
-import { buildFamilyExpansionMap, collectFamilyConnectedIds, resolveHouseFamilyVisibility, resolveProgressiveFamilyVisibility } from "@/lib/family-tree-visibility";
-import { removeFamilyTreeMemberAction, updateFamilyTreeMainLineAction } from "./actions";
+import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { createPortal } from "react-dom";
+import { groupAncestorRelationships } from "@/lib/family-tree-ancestor-groups";
+import { FamilyTreeCanvas as LegacyFamilyTreeCanvas } from "./family-tree-canvas-legacy";
 import styles from "./family-trees.module.css";
 
-type TreePerson = {
-  personId: number;
-  name: string;
-  image: string;
-  kind: "God" | "Player Character" | "NPC / Character";
-  gender: string | null;
-  title: string | null;
-  roleLabel: string | null;
-  branchLabel: string | null;
-  birthYear?: number | null;
-};
+type TreePerson = { personId:number; name:string; image:string; kind:"God"|"Player Character"|"NPC / Character"; gender:string|null; title:string|null; roleLabel:string|null; branchLabel:string|null; birthYear?:number|null };
+type TreeEdge = { a:number; b:number; code:string; label:string; inverseLabel:string|null; directed:boolean; category:string; source:string; metadata:Record<string,unknown> };
+type Props = { projectId:number; people:TreePerson[]; edges:TreeEdge[]; rootPersonId:number|null; named:boolean; treeId:number|"all"; savedMainLinePersonIds:number[] };
+type NodeBox = { left:number; top:number; width:number; height:number };
 
-type TreeEdge = {
-  a: number;
-  b: number;
-  code: string;
-  label: string;
-  inverseLabel: string | null;
-  directed: boolean;
-  category: string;
-  source: string;
-  metadata: Record<string, unknown>;
-};
-
-type Props = {
-  projectId: number;
-  people: TreePerson[];
-  edges: TreeEdge[];
-  rootPersonId: number | null;
-  named: boolean;
-  treeId: number | "all";
-  savedMainLinePersonIds: number[];
-};
-
-type ResolvedFamilyUnit = {
-  key: string;
-  routeId: number;
-  generation: number;
-  parentIds: number[];
-  parents: Array<{ id: number; pos: FamilyTreePosition }>;
-  children: Array<{ id: number; pos: FamilyTreePosition; edges: TreeEdge[] }>;
-  startX: number;
-  endX: number;
-};
-
-const MIN_ZOOM = 0.1;
-const MAX_ZOOM = 2;
-const ZOOM_STEP = 0.1;
-const WHEEL_ZOOM_STEP = 0.05;
-const SIBLING_CODES = new Set(["sibling", "twin"]);
-const INTERACTIVE_SELECTOR = "a,button,input,select,textarea,summary,label,form";
-
-function clampZoom(value: number) {
-  return Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Math.round(value * 100) / 100));
+function personIdFromTarget(target:Element|null){
+  const node=target?.closest<HTMLElement>("[data-tree-node]");
+  const href=node?.querySelector<HTMLAnchorElement>("a[href]")?.getAttribute("href")??"";
+  const match=href.match(/\/(?:npcs|gods)\/(\d+)(?:[/?#]|$)/);
+  const id=match?Number.parseInt(match[1],10):NaN;
+  return Number.isSafeInteger(id)&&id>0?id:null;
 }
 
-function personHref(projectId: number, node: TreePerson) {
-  return node.kind === "God" ? `/admin/projects/${projectId}/gods/${node.personId}` : `/admin/projects/${projectId}/npcs/${node.personId}`;
-}
+export function FamilyTreeCanvas(props:Props){
+  const wrapperRef=useRef<HTMLDivElement>(null);
+  const [canvasHost,setCanvasHost]=useState<HTMLElement|null>(null);
+  const [canvasSize,setCanvasSize]=useState({width:0,height:0});
+  const [nodeBoxes,setNodeBoxes]=useState<Map<number,NodeBox>>(()=>new Map());
+  const [hoveredPersonId,setHoveredPersonId]=useState<number|null>(null);
+  const ancestorGroups=useMemo(()=>groupAncestorRelationships(props.edges),[props.edges]);
 
-function validImage(value: string) {
-  return Boolean(value && value.trim() && value !== "noimage" && value !== "/noimg.jpg");
-}
-
-function edgeKey(edge: TreeEdge) {
-  return `${edge.code}-${edge.a}-${edge.b}-${edge.source}`;
-}
-
-function pairKey(a: number, b: number) {
-  return a < b ? `${a}:${b}` : `${b}:${a}`;
-}
-
-function isInteractiveTarget(target: EventTarget | null) {
-  return target instanceof Element && Boolean(target.closest(INTERACTIVE_SELECTOR));
-}
-
-export function FamilyTreeCanvas({ projectId, people, edges, rootPersonId, named, treeId, savedMainLinePersonIds }: Props) {
-  const viewportRef = useRef<HTMLDivElement>(null);
-  const centeredInitially = useRef(false);
-  const panState = useRef<{ pointerId: number; x: number; y: number; left: number; top: number } | null>(null);
-  const [expandedAnchors, setExpandedAnchors] = useState<Set<number>>(() => new Set());
-  const [showAll, setShowAll] = useState(false);
-  const [zoom, setZoom] = useState(1);
-  const [isFullscreen, setIsFullscreen] = useState(false);
-  const [editingMainLine, setEditingMainLine] = useState(false);
-  const [persistedMainLine, setPersistedMainLine] = useState<number[] | null>(() => savedMainLinePersonIds.length ? savedMainLinePersonIds : null);
-  const [draftMainLine, setDraftMainLine] = useState<number[]>([]);
-  const [mainLineError, setMainLineError] = useState<string | null>(null);
-  const [hoveredPersonId, setHoveredPersonId] = useState<number | null>(null);
-  const [savingMainLine, startMainLineTransition] = useTransition();
-
-  const familyEdges = useMemo(() => edges.filter((edge) => edge.category === "family"), [edges]);
-  const structuralEdges = useMemo(() => familyEdges.filter(isFamilyStructureEdge), [familyEdges]);
-  const automaticMainLine = useMemo(() => resolveFamilyMainLine(people, familyEdges, null, rootPersonId), [people, familyEdges, rootPersonId]);
-  const storedMainLine = useMemo(() => resolveFamilyMainLine(people, familyEdges, persistedMainLine, rootPersonId), [people, familyEdges, persistedMainLine, rootPersonId]);
-  const mainLine = editingMainLine && draftMainLine.length ? draftMainLine : storedMainLine;
-  const mainLineSet = useMemo(() => new Set(mainLine), [mainLine]);
-  const baseGenerations = useMemo(() => buildFamilyGenerations(people, structuralEdges), [people, structuralEdges]);
-  const personById = useMemo(() => new Map(people.map((person) => [person.personId, person])), [people]);
-  const successorsByPerson = useMemo(() => {
-    const result = new Map<number, number[]>();
-    for (const edge of familyEdges) {
-      if (!isFamilyParentEdge(edge) && !(edge.directed && edge.code === "ancestor")) continue;
-      result.set(edge.a, [...(result.get(edge.a) ?? []), edge.b]);
-    }
-    for (const [personId, successorIds] of result) {
-      result.set(personId, [...new Set(successorIds)].sort((a, b) => (baseGenerations.get(a) ?? 0) - (baseGenerations.get(b) ?? 0) || (personById.get(a)?.name ?? "").localeCompare(personById.get(b)?.name ?? "") || a - b));
-    }
-    return result;
-  }, [baseGenerations, familyEdges, personById]);
-
-  const houseVisibility = useMemo(() => resolveHouseFamilyVisibility(people, mainLine, edges), [edges, mainLine, people]);
-  const familyExpansionMap = useMemo(() => buildFamilyExpansionMap(people.map((person) => person.personId), edges), [people, edges]);
-  const progressiveVisibility = useMemo(
-    () => resolveProgressiveFamilyVisibility(people.map((person) => person.personId), showAll ? houseVisibility : mainLine, expandedAnchors, edges),
-    [edges, expandedAnchors, houseVisibility, mainLine, people, showAll],
-  );
-  const visibleIds = useMemo(() => {
-    if (editingMainLine) return new Set(people.map((person) => person.personId));
-    return progressiveVisibility.visible;
-  }, [editingMainLine, people, progressiveVisibility.visible]);
-
-  const visibleNodes = useMemo(() => people.filter((person) => visibleIds.has(person.personId)), [people, visibleIds]);
-  const visibleEdges = useMemo(() => edges.filter((edge) => visibleIds.has(edge.a) && visibleIds.has(edge.b)), [edges, visibleIds]);
-  const visibleFamilyEdges = useMemo(() => familyEdges.filter((edge) => visibleIds.has(edge.a) && visibleIds.has(edge.b)), [familyEdges, visibleIds]);
-  const visibleStructuralEdges = useMemo(() => structuralEdges.filter((edge) => visibleIds.has(edge.a) && visibleIds.has(edge.b)), [structuralEdges, visibleIds]);
-  const layout = useMemo(() => layoutFamilyTree(visibleNodes, visibleFamilyEdges, visibleIds, mainLine), [visibleNodes, visibleFamilyEdges, visibleIds, mainLine]);
-  const hiddenCount = Math.max(0, people.length - visibleIds.size);
-  const mainPairs = useMemo(() => new Set(mainLine.slice(0, -1).map((id, index) => `${id}:${mainLine[index + 1]}`)), [mainLine]);
-  const hoveredNeighbors = useMemo(() => {
-    const result = new Set<number>();
-    if (hoveredPersonId == null) return result;
-    for (const edge of visibleEdges) {
-      if (edge.a === hoveredPersonId) result.add(edge.b);
-      if (edge.b === hoveredPersonId) result.add(edge.a);
-    }
-    return result;
-  }, [hoveredPersonId, visibleEdges]);
-
-  const scrollToOldest = (behavior: ScrollBehavior = "smooth") => {
-    const viewport = viewportRef.current;
-    const oldest = mainLine[0] ? layout.positions.get(mainLine[0]) : undefined;
-    if (!viewport || !oldest) return;
-    viewport.scrollTo({
-      left: Math.max(0, (oldest.x + FAMILY_NODE_WIDTH / 2) * zoom - viewport.clientWidth / 2),
-      top: Math.max(0, oldest.y * zoom - 72),
-      behavior,
-    });
-  };
-
-  const fitTree = () => {
-    const viewport = viewportRef.current;
-    if (!viewport) return;
-    const availableWidth = Math.max(320, viewport.clientWidth - 40);
-    const availableHeight = Math.max(320, viewport.clientHeight - 96);
-    const next = clampZoom(Math.min(1, availableWidth / layout.width, availableHeight / layout.height));
-    setZoom(next);
-    requestAnimationFrame(() => viewport.scrollTo({ left: 0, top: 0, behavior: "smooth" }));
-  };
-
-  const toggleFullscreen = async () => {
-    const viewport = viewportRef.current;
-    if (!viewport) return;
-    if (document.fullscreenElement === viewport) await document.exitFullscreen();
-    else await viewport.requestFullscreen();
-  };
-
-  useEffect(() => {
-    const handleFullscreenChange = () => setIsFullscreen(document.fullscreenElement === viewportRef.current);
-    document.addEventListener("fullscreenchange", handleFullscreenChange);
-    return () => document.removeEventListener("fullscreenchange", handleFullscreenChange);
-  }, []);
-
-  useEffect(() => {
-    const viewport = viewportRef.current;
-    if (!viewport) return;
-    const handleWheel = (event: globalThis.WheelEvent) => {
-      event.preventDefault();
-      const rect = viewport.getBoundingClientRect();
-      const pointerX = event.clientX - rect.left;
-      const pointerY = event.clientY - rect.top;
-      setZoom((current) => {
-        const next = clampZoom(current + (event.deltaY < 0 ? WHEEL_ZOOM_STEP : -WHEEL_ZOOM_STEP));
-        if (next === current) return current;
-        const logicalX = (viewport.scrollLeft + pointerX) / current;
-        const logicalY = (viewport.scrollTop + pointerY) / current;
-        requestAnimationFrame(() => {
-          viewport.scrollLeft = Math.max(0, logicalX * next - pointerX);
-          viewport.scrollTop = Math.max(0, logicalY * next - pointerY);
-        });
-        return next;
-      });
+  useEffect(()=>{
+    const root=wrapperRef.current;if(!root)return;
+    let frame=0;let resizeObserver:ResizeObserver|null=null;
+    const scheduleMeasure=()=>{if(frame)cancelAnimationFrame(frame);frame=requestAnimationFrame(measure);};
+    const measure=()=>{
+      const canvas=root.querySelector<HTMLElement>(`.${styles.canvas}`);if(!canvas)return;
+      setCanvasHost((current)=>current===canvas?current:canvas);
+      setCanvasSize({width:canvas.offsetWidth,height:canvas.offsetHeight});
+      const next=new Map<number,NodeBox>();
+      for(const node of canvas.querySelectorAll<HTMLElement>("[data-tree-node]")){
+        const id=personIdFromTarget(node);if(!id)continue;
+        next.set(id,{left:node.offsetLeft,top:node.offsetTop,width:node.offsetWidth,height:node.offsetHeight});
+      }
+      setNodeBoxes(next);
+      for(const path of canvas.querySelectorAll<SVGPathElement>(`path.${styles.ancestorEdge}`)){
+        const group=path.closest<SVGGElement>("g");
+        if(!group||group.dataset.ancestorOverlay==="true"||group.dataset.legacyAncestorHidden==="true")continue;
+        group.dataset.legacyAncestorHidden="true";group.style.display="none";
+      }
+      if(!resizeObserver){resizeObserver=new ResizeObserver(scheduleMeasure);resizeObserver.observe(canvas);}
     };
-    viewport.addEventListener("wheel", handleWheel, { passive: false });
-    return () => viewport.removeEventListener("wheel", handleWheel);
-  }, []);
+    const mutationObserver=new MutationObserver(scheduleMeasure);
+    mutationObserver.observe(root,{subtree:true,childList:true,attributes:true,attributeFilter:["style"]});
+    scheduleMeasure();window.addEventListener("resize",scheduleMeasure);
+    return()=>{if(frame)cancelAnimationFrame(frame);mutationObserver.disconnect();resizeObserver?.disconnect();window.removeEventListener("resize",scheduleMeasure);};
+  },[]);
 
-  useEffect(() => {
-    if (centeredInitially.current || !mainLine.length) return;
-    centeredInitially.current = true;
-    requestAnimationFrame(() => scrollToOldest("auto"));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mainLine.length]);
-
-  const toggleBranch = (anchor: number) => {
-    setExpandedAnchors((current) => {
-      const next = new Set(current);
-      if (next.has(anchor)) next.delete(anchor);
-      else next.add(anchor);
-      return next;
-    });
+  const onMouseMove=(event:ReactMouseEvent<HTMLDivElement>)=>{
+    const id=personIdFromTarget(event.target instanceof Element?event.target:null);
+    setHoveredPersonId((current)=>current===id?current:id);
   };
 
-  const beginMainLineEdit = () => {
-    setDraftMainLine(storedMainLine.length ? storedMainLine : automaticMainLine);
-    setMainLineError(null);
-    setShowAll(true);
-    setEditingMainLine(true);
-  };
-
-  const cancelMainLineEdit = () => {
-    setDraftMainLine([]);
-    setMainLineError(null);
-    setEditingMainLine(false);
-    setShowAll(false);
-  };
-
-  const changeMainLineStart = (personId: number) => {
-    const line = findFamilyDescendantLine(people, structuralEdges, personId);
-    setDraftMainLine(line.length ? line : [personId]);
-    setMainLineError(null);
-  };
-
-  const changeSuccessor = (index: number, successorId: number | null) => {
-    const prefix = draftMainLine.slice(0, index + 1);
-    if (!successorId) {
-      setDraftMainLine(prefix);
-      return;
-    }
-    const selectedEdge = familyEdges.find((edge) => edge.a === draftMainLine[index] && edge.b === successorId && edge.directed && edge.code === "ancestor");
-    const suffix = selectedEdge ? [successorId] : findFamilyDescendantLine(people, structuralEdges, successorId);
-    setDraftMainLine([...prefix, ...(suffix.length ? suffix : [successorId])]);
-    setMainLineError(null);
-  };
-
-  const saveMainLine = () => {
-    if (!named || typeof treeId !== "number" || !draftMainLine.length) return;
-    setMainLineError(null);
-    startMainLineTransition(async () => {
-      try {
-        const formData = new FormData();
-        formData.set("personIds", draftMainLine.join(","));
-        await updateFamilyTreeMainLineAction(projectId, treeId, formData);
-        setPersistedMainLine([...draftMainLine]);
-        setEditingMainLine(false);
-        setShowAll(false);
-      } catch (error) {
-        setMainLineError(error instanceof Error ? error.message : "Die Hauptlinie konnte nicht gespeichert werden.");
-      }
-    });
-  };
-
-  const resetAutomaticMainLine = () => {
-    if (!named || typeof treeId !== "number") return;
-    setMainLineError(null);
-    startMainLineTransition(async () => {
-      try {
-        const formData = new FormData();
-        formData.set("personIds", "");
-        await updateFamilyTreeMainLineAction(projectId, treeId, formData);
-        setPersistedMainLine(null);
-        setDraftMainLine(automaticMainLine);
-        setEditingMainLine(false);
-        setShowAll(false);
-      } catch (error) {
-        setMainLineError(error instanceof Error ? error.message : "Die automatische Hauptlinie konnte nicht wiederhergestellt werden.");
-      }
-    });
-  };
-
-  const handlePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (event.button !== 0 || isInteractiveTarget(event.target)) return;
-    const viewport = viewportRef.current;if(!viewport)return;
-    panState.current={pointerId:event.pointerId,x:event.clientX,y:event.clientY,left:viewport.scrollLeft,top:viewport.scrollTop};
-    viewport.setPointerCapture(event.pointerId);viewport.dataset.panning="true";
-  };
-  const handlePointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
-    const state=panState.current;const viewport=viewportRef.current;if(!state||!viewport||state.pointerId!==event.pointerId)return;
-    viewport.scrollLeft=state.left-(event.clientX-state.x);viewport.scrollTop=state.top-(event.clientY-state.y);
-  };
-  const stopPan = (event: ReactPointerEvent<HTMLDivElement>) => {
-    const viewport=viewportRef.current;if(panState.current?.pointerId!==event.pointerId||!viewport)return;
-    panState.current=null;delete viewport.dataset.panning;if(viewport.hasPointerCapture(event.pointerId))viewport.releasePointerCapture(event.pointerId);
-  };
-  const handleKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
-    if(isInteractiveTarget(event.target))return;
-    if(event.key==="+"||event.key==="="){event.preventDefault();setZoom((current)=>clampZoom(current+ZOOM_STEP));}
-    else if(event.key==="-"){event.preventDefault();setZoom((current)=>clampZoom(current-ZOOM_STEP));}
-    else if(event.key==="0"){event.preventDefault();setZoom(1);}
-    else if(event.key.toLowerCase()==="f"){event.preventDefault();fitTree();}
-  };
-  const handleNodeBlur=(event:ReactFocusEvent<HTMLElement>)=>{
-    if(!event.currentTarget.contains(event.relatedTarget as Node|null))setHoveredPersonId(null);
-  };
-
-  const geometry = useMemo(() => {
-    const parentGroups = new Map<number, TreeEdge[]>();
-    for (const edge of visibleStructuralEdges) if (isFamilyParentEdge(edge)) parentGroups.set(edge.b, [...(parentGroups.get(edge.b) ?? []), edge]);
-    const rawFamilyUnits = new Map<string, { generation: number; parentIds: number[]; childIds: number[]; childEdges: Map<number, TreeEdge[]> }>();
-    for (const [childId, childParentEdges] of parentGroups) {
-      const childPos = layout.positions.get(childId);if (!childPos) continue;
-      const parentIds = [...new Set(childParentEdges.map((edge) => edge.a))].sort((a, b) => a - b);
-      if (!parentIds.length || parentIds.some((id) => !layout.positions.has(id))) continue;
-      const key = `${childPos.generation}|${parentIds.join(",")}`;
-      const existing = rawFamilyUnits.get(key) ?? { generation: childPos.generation, parentIds, childIds: [], childEdges: new Map<number, TreeEdge[]>() };
-      existing.childIds.push(childId);existing.childEdges.set(childId, childParentEdges);rawFamilyUnits.set(key, existing);
-    }
-    const familyUnits: ResolvedFamilyUnit[] = [...rawFamilyUnits.entries()].map(([key, unit]) => {
-      const parents = unit.parentIds.map((id) => ({ id, pos: layout.positions.get(id) })).filter((item): item is { id: number; pos: FamilyTreePosition } => Boolean(item.pos));
-      const children = [...new Set(unit.childIds)].map((id) => ({ id, pos: layout.positions.get(id), edges: unit.childEdges.get(id) ?? [] })).filter((item): item is { id: number; pos: FamilyTreePosition; edges: TreeEdge[] } => Boolean(item.pos)).sort((a, b) => a.pos.x - b.pos.x || a.id - b.id);
-      const centers = [...parents.map(({ pos }) => pos.x + FAMILY_NODE_WIDTH / 2), ...children.map(({ pos }) => pos.x + FAMILY_NODE_WIDTH / 2)];
-      return {key,routeId:Math.min(...children.map((child) => child.id)),generation:unit.generation,parentIds:unit.parentIds,parents,children,startX:Math.min(...centers),endX:Math.max(...centers)};
-    }).filter((unit) => unit.parents.length > 0 && unit.children.length > 0);
-    const routeLanes = assignFamilyParentRouteLanes(familyUnits.map<FamilyParentRoute>((unit) => ({childId:unit.routeId,generation:unit.generation,startX:unit.startX,endX:unit.endX})));
-    const siblingPairsFromParentage = new Set<string>();
-    for (const unit of familyUnits) {
-      for (let left = 0; left < unit.children.length; left += 1) {
-        for (let right = left + 1; right < unit.children.length; right += 1) {
-          siblingPairsFromParentage.add(pairKey(unit.children[left].id, unit.children[right].id));
+  const overlay=canvasHost?createPortal(
+    <svg aria-hidden="true" width={canvasSize.width} height={canvasSize.height} style={{position:"absolute",inset:0,zIndex:1,overflow:"visible",pointerEvents:"none"}}>
+      {ancestorGroups.flatMap((group)=>{
+        const descendant=nodeBoxes.get(group.descendantId);if(!descendant)return[];
+        const visibleAncestors=group.edges.map((edge)=>({edge,box:nodeBoxes.get(edge.a)})).filter((item):item is {edge:TreeEdge;box:NodeBox}=>Boolean(item.box));
+        if(!visibleAncestors.length)return[];
+        const descendantX=descendant.left+descendant.width/2;const descendantTop=descendant.top;
+        const involvedIds=new Set([group.descendantId,...visibleAncestors.map(({edge})=>edge.a)]);
+        const highlighted=hoveredPersonId==null||involvedIds.has(hoveredPersonId);
+        const className=hoveredPersonId==null?"":highlighted?styles.edgeHighlighted:styles.edgeDimmed;
+        if(group.joint&&visibleAncestors.length>1){
+          const ancestorXs=visibleAncestors.map(({box})=>box.left+box.width/2);
+          const ancestorBottom=Math.max(...visibleAncestors.map(({box})=>box.top+box.height));
+          const busY=ancestorBottom+32;const minX=Math.min(...ancestorXs);const maxX=Math.max(...ancestorXs);const hubX=(minX+maxX)/2;
+          const routeY=Math.max(busY+30,busY+Math.max(30,(descendantTop-busY)/2));
+          return[<g key={`ancestor-joint-${group.descendantId}-${group.ancestorIds.join("-")}`} data-ancestor-overlay="true" className={className}>
+            {visibleAncestors.map(({edge,box})=><path key={`${edge.a}-${edge.b}`} d={`M ${box.left+box.width/2} ${box.top+box.height} V ${busY}`} className={styles.ancestorEdge}/>)}
+            <path d={`M ${minX} ${busY} H ${maxX}`} className={styles.ancestorEdge}/>
+            <path d={`M ${hubX} ${busY} V ${routeY} H ${descendantX} V ${descendantTop}`} className={styles.ancestorEdge}/>
+            <text x={hubX} y={busY-8} textAnchor="middle" className={styles.edgeLabel}>Vorfahren</text>
+          </g>];
         }
-      }
-    }
-    const nonParentEdges = visibleEdges.filter((edge) => !isFamilyParentEdge(edge));
-    const romanticEdges = nonParentEdges.filter((edge) => edge.source === "relationship" && FAMILY_PARTNER_CODES.has(edge.code));
-    const siblingEdges = nonParentEdges.filter((edge) => edge.category === "family" && SIBLING_CODES.has(edge.code) && (edge.code === "twin" || !siblingPairsFromParentage.has(pairKey(edge.a, edge.b))));
-    const otherRelationshipEdges = nonParentEdges.filter((edge) => !FAMILY_PARTNER_CODES.has(edge.code) && !(edge.category === "family" && SIBLING_CODES.has(edge.code)));
-    return {familyUnits,routeLanes,romanticEdges,siblingEdges,otherRelationshipEdges};
-  }, [layout, visibleEdges, visibleStructuralEdges]);
+        return visibleAncestors.map(({edge,box},index)=>{
+          const ancestorX=box.left+box.width/2;const ancestorBottom=box.top+box.height;
+          const middleY=Math.max(ancestorBottom+30,ancestorBottom+Math.max(40,(descendantTop-ancestorBottom)/2)+index*10);
+          return <g key={`ancestor-single-${edge.a}-${edge.b}`} data-ancestor-overlay="true" className={className}>
+            <path d={`M ${ancestorX} ${ancestorBottom} V ${middleY} H ${descendantX} V ${descendantTop}`} className={styles.ancestorEdge}/>
+            <text x={(ancestorX+descendantX)/2} y={middleY-8} textAnchor="middle" className={styles.edgeLabel}>{edge.label||"Vorfahre"}</text>
+          </g>;
+        });
+      })}
+    </svg>,canvasHost):null;
 
-  const romanticLaneByKey = useMemo(() => {
-    const grouped = new Map<string, TreeEdge[]>();
-    for (const edge of geometry.romanticEdges) {
-      const pair = pairKey(edge.a, edge.b);
-      grouped.set(pair, [...(grouped.get(pair) ?? []), edge]);
-    }
-    const result = new Map<string, number>();
-    for (const group of grouped.values()) {
-      group.forEach((edge, index) => result.set(edgeKey(edge), index - (group.length - 1) / 2));
-    }
-    return result;
-  }, [geometry.romanticEdges]);
-
-  const familySvg = useMemo(() => geometry.familyUnits.map((unit) => {
-    const laneIndex = geometry.routeLanes.get(unit.routeId) ?? 0;
-    const parentXs = unit.parents.map(({ pos }) => pos.x + FAMILY_NODE_WIDTH / 2);const childXs = unit.children.map(({ pos }) => pos.x + FAMILY_NODE_WIDTH / 2);
-    const parentBottom = Math.max(...unit.parents.map(({ pos }) => pos.y + FAMILY_NODE_HEIGHT));const childTop = Math.min(...unit.children.map(({ pos }) => pos.y));const gap = Math.max(80, childTop - parentBottom);
-    let parentJoinY = parentBottom + Math.max(28, Math.min(52, gap * .3)) + laneIndex * 12;let childBusY = childTop - Math.max(34, Math.min(56, gap * .3)) - laneIndex * 10;
-    if (childBusY - parentJoinY < 26) {const middle = (parentBottom + childTop) / 2;parentJoinY = middle - 13;childBusY = middle + 13;}
-    const parentMinX = Math.min(...parentXs);const parentMaxX = Math.max(...parentXs);const hubX = unit.parents.length > 1 ? (parentMinX + parentMaxX) / 2 : parentXs[0];const childBusMinX = Math.min(hubX, ...childXs);const childBusMaxX = Math.max(hubX, ...childXs);const unitHasMain = unit.children.some((child) => child.edges.some((edge) => mainPairs.has(`${edge.a}:${edge.b}`)));
-    const hoverMatch=hoveredPersonId!=null&&(unit.parentIds.includes(hoveredPersonId)||unit.children.some((child)=>child.id===hoveredPersonId));
-    const hoverClass=hoveredPersonId==null?"":hoverMatch?styles.edgeHighlighted:styles.edgeDimmed;
-    return <g key={`family-unit-${unit.key}`} className={hoverClass}>
-      {unit.parents.length > 1 ? <path d={`M ${parentMinX} ${parentJoinY} H ${parentMaxX}`} className={styles.parentJunction} /> : null}
-      {unit.parents.map(({ id, pos }) => {const parentX=pos.x+FAMILY_NODE_WIDTH/2;const parentIsMain=unit.children.some((child)=>child.edges.some((edge)=>edge.a===id&&mainPairs.has(`${edge.a}:${edge.b}`)));return <path key={`family-parent-${unit.key}-${id}`} d={`M ${parentX} ${pos.y + FAMILY_NODE_HEIGHT} V ${parentJoinY}`} className={parentIsMain ? styles.mainParentEdge : styles.parentEdge} />;})}
-      <circle cx={hubX} cy={parentJoinY} r="3.5" className={unitHasMain ? styles.mainJunctionDot : styles.junctionDot}/><path d={`M ${hubX} ${parentJoinY} V ${childBusY}`} className={unitHasMain ? styles.mainParentEdge : styles.parentEdge}/>{childBusMaxX-childBusMinX>1?<path d={`M ${childBusMinX} ${childBusY} H ${childBusMaxX}`} className={styles.parentJunction}/>:null}<circle cx={hubX} cy={childBusY} r="3" className={unitHasMain ? styles.mainJunctionDot : styles.junctionDot}/>
-      {unit.children.map((child)=>{const childX=child.pos.x+FAMILY_NODE_WIDTH/2;const childIsMain=child.edges.some((edge)=>mainPairs.has(`${edge.a}:${edge.b}`));return <g key={`family-child-${unit.key}-${child.id}`}><path d={`M ${childX} ${childBusY} V ${child.pos.y}`} className={childIsMain?styles.mainParentEdge:styles.parentEdge}/><circle cx={childX} cy={childBusY} r="2.7" className={childIsMain?styles.mainJunctionDot:styles.junctionDot}/></g>;})}
-    </g>;
-  }), [geometry.familyUnits, geometry.routeLanes, hoveredPersonId, mainPairs]);
-
-  const romanticSvg = useMemo(() => geometry.romanticEdges.map((edge) => {
-    const a=layout.positions.get(edge.a);const b=layout.positions.get(edge.b);if(!a||!b)return null;
-    const lane=(romanticLaneByKey.get(edgeKey(edge))??0)*18;
-    const left=a.x<=b.x?a:b;const right=a.x<=b.x?b:a;
-    const y1=left.y+FAMILY_NODE_HEIGHT/2;const y2=right.y+FAMILY_NODE_HEIGHT/2;
-    const x1=left.x+FAMILY_NODE_WIDTH;const x2=right.x;const midX=(x1+x2)/2;
-    const path=Math.abs(y1-y2)<2
-      ? `M ${x1} ${y1+lane} H ${x2}`
-      : `M ${x1} ${y1} C ${midX+lane} ${y1}, ${midX+lane} ${y2}, ${x2} ${y2}`;
-    const labelY=Math.abs(y1-y2)<2?y1+lane-8:(y1+y2)/2-8;
-    const hoverMatch=hoveredPersonId!=null&&(edge.a===hoveredPersonId||edge.b===hoveredPersonId);const hoverClass=hoveredPersonId==null?"":hoverMatch?styles.edgeHighlighted:styles.edgeDimmed;
-    return <g key={edgeKey(edge)} className={hoverClass}><path d={path} className={styles.partnerEdge}/><text x={midX+(Math.abs(y1-y2)<2?0:lane)} y={labelY} textAnchor="middle" className={styles.edgeLabel}>{edge.label}</text></g>;
-  }), [geometry.romanticEdges, hoveredPersonId, layout, romanticLaneByKey]);
-
-  const relationshipSvg = useMemo(() => [...geometry.siblingEdges,...geometry.otherRelationshipEdges].map((edge,index)=>{
-    const a=layout.positions.get(edge.a);const b=layout.positions.get(edge.b);if(!a||!b)return null;const ax=a.x+FAMILY_NODE_WIDTH/2;const bx=b.x+FAMILY_NODE_WIDTH/2;const laneY=Math.min(a.y,b.y)-20-(index%7)*12;const hoverMatch=hoveredPersonId!=null&&(edge.a===hoveredPersonId||edge.b===hoveredPersonId);const hoverClass=hoveredPersonId==null?"":hoverMatch?styles.edgeHighlighted:styles.edgeDimmed;return <g key={edgeKey(edge)} className={hoverClass}><path d={`M ${ax} ${a.y} V ${laneY} H ${bx} V ${b.y}`} className={edge.code==="ancestor"?styles.ancestorEdge:styles.otherEdge}/><text x={(ax+bx)/2} y={laneY-7} textAnchor="middle" className={styles.edgeLabel}>{edge.label}</text></g>;
-  }), [geometry.otherRelationshipEdges, geometry.siblingEdges, hoveredPersonId, layout]);
-
-  const connectedFamilyIds = useMemo(() => collectFamilyConnectedIds(mainLine, familyExpansionMap), [familyExpansionMap, mainLine]);
-  const disconnectedHidden = Math.max(0, people.length - connectedFamilyIds.size);
-  const startOptions = useMemo(() => [...people].sort((a, b) => (baseGenerations.get(a.personId) ?? 0) - (baseGenerations.get(b.personId) ?? 0) || a.name.localeCompare(b.name) || a.personId - b.personId), [baseGenerations, people]);
-
-  return (
-    <div className={styles.canvasShell} ref={viewportRef} tabIndex={0} aria-label="Interaktiver Stammbaum. Mausrad zoomt, Ziehen verschiebt, Plus/Minus zoomt, 0 setzt 100 Prozent und F passt den Baum ein. Beim Überfahren einer Person werden direkte Beziehungen hervorgehoben." onKeyDown={handleKeyDown} onPointerDown={handlePointerDown} onPointerMove={handlePointerMove} onPointerUp={stopPan} onPointerCancel={stopPan}>
-      <div className={styles.canvasControls}>
-        <div className={styles.canvasStatus}><strong>{showAll?"Hauszweige":"Hauptlinie"}</strong><span>{mainLine.length} Personen Hauptlinie</span>{showAll?<span>{houseVisibility.size} im Haus geboren</span>:null}<span>{geometry.romanticEdges.length} romantische Beziehung{geometry.romanticEdges.length===1?"":"en"} sichtbar</span><span>{persistedMainLine?.length ? "manuell" : "automatisch"}</span><span>{hiddenCount ? `${hiddenCount} ausgeblendet` : "alle sichtbar"}</span>{hoveredPersonId!=null?<span>{hoveredNeighbors.size} direkte Verbindung{hoveredNeighbors.size===1?"":"en"}</span>:null}</div>
-        <div className={styles.canvasButtons}>
-          {!editingMainLine ? <button type="button" className="button ghost" onClick={() => { setShowAll(false); setExpandedAnchors(new Set()); }}>Nur Hauptlinie</button> : null}
-          {!editingMainLine ? <button type="button" className="button ghost" onClick={() => setShowAll(true)} disabled={showAll} title="Hauptlinie plus väterliche Blutverwandte, die nach der Ehe-Hausfolge in dieses Haus geboren wurden">Alle Zweige</button> : null}
-          {named && !editingMainLine ? <button type="button" className="button ghost" onClick={beginMainLineEdit}>✎ Hauptlinie bearbeiten</button> : null}
-          <span className={styles.zoomControls}><button type="button" aria-label="Herauszoomen" onClick={() => setZoom((current) => clampZoom(current - ZOOM_STEP))} disabled={zoom <= MIN_ZOOM}>−</button><button type="button" className={styles.zoomValue} onClick={() => setZoom(1)} title="Zoom auf 100 % zurücksetzen">{Math.round(zoom * 100)}%</button><button type="button" aria-label="Hineinzoomen" onClick={() => setZoom((current) => clampZoom(current + ZOOM_STEP))} disabled={zoom >= MAX_ZOOM}>+</button><button type="button" onClick={fitTree}>Einpassen</button></span>
-          <button type="button" className="button ghost" onClick={() => scrollToOldest()}>↑ Älteste Generation</button>
-          <button type="button" className="button ghost" onClick={toggleFullscreen} aria-pressed={isFullscreen}>{isFullscreen?"Vollbild schließen":"⛶ Vollbild"}</button>
-        </div>
-      </div>
-
-      {editingMainLine ? <section className={styles.mainLineEditor}><div className={styles.mainLineEditorHead}><div><strong>Hauptlinie bearbeiten</strong><p>Wähle die Startperson und danach den tatsächlichen Nachfolger. Direkte Eltern-Kind-Schritte und gerichtete Vorfahre→Nachfahre-Sprünge sind erlaubt.</p></div><button type="button" className="button ghost" onClick={cancelMainLineEdit} disabled={savingMainLine}>Schließen</button></div><label className={styles.mainLineStart}>Start der Hauptlinie<select value={draftMainLine[0] ?? ""} onChange={(event) => changeMainLineStart(Number(event.target.value))}>{startOptions.map((person) => <option key={person.personId} value={person.personId}>Generation {(baseGenerations.get(person.personId) ?? 0) + 1} · {person.name}</option>)}</select></label><div className={styles.mainLineChain}>{draftMainLine.map((personId,index)=>{const person=personById.get(personId);if(!person)return null;const successorIds=successorsByPerson.get(personId)??[];const currentNext=draftMainLine[index+1];return <div key={`${personId}-${index}`} className={styles.mainLineStep}><span>Gen. {(baseGenerations.get(personId)??0)+1}</span><strong>{person.name}</strong>{successorIds.length?<label>Nachfolger<select value={currentNext&&successorIds.includes(currentNext)?currentNext:""} onChange={(event)=>changeSuccessor(index,event.target.value?Number(event.target.value):null)}><option value="">Linie hier beenden</option>{successorIds.map((successorId)=><option key={successorId} value={successorId}>{personById.get(successorId)?.name??`Person #${successorId}`}</option>)}</select></label>:<small>Keine direkten Kinder oder Vorfahre→Nachfahre-Ziele in diesem Stammbaum</small>}</div>;})}</div>{mainLineError?<div className={styles.mainLineError}>{mainLineError}</div>:null}<div className={styles.mainLineEditorActions}><button type="button" className="primary" onClick={saveMainLine} disabled={savingMainLine||!draftMainLine.length}>{savingMainLine?"Speichere …":"Hauptlinie speichern"}</button><button type="button" className="button ghost" onClick={resetAutomaticMainLine} disabled={savingMainLine}>Automatische Linie verwenden</button><button type="button" className="button ghost" onClick={cancelMainLineEdit} disabled={savingMainLine}>Abbrechen</button></div></section> : null}
-
-      <div className={styles.zoomSurface} style={{ width: layout.width * zoom, height: layout.height * zoom }}><div className={styles.canvas} style={{ width: layout.width, height: layout.height, transform: `scale(${zoom})` }}>
-        {layout.shownGenerations.map((generation)=>{const first=visibleNodes.find((node)=>layout.positions.get(node.personId)?.generation===generation);const position=first?layout.positions.get(first.personId):null;if(!position)return null;return <div key={generation} className={styles.generationMarker} style={{top:position.y-38}}>{generation===0?"Älteste Generation":`Generation ${generation+1}`}</div>;})}
-        <svg className={styles.edges} width={layout.width} height={layout.height} aria-hidden="true">{familySvg}{romanticSvg}{relationshipSvg}</svg>
-        {visibleNodes.map((node)=>{const pos=layout.positions.get(node.personId);if(!pos)return null;const main=mainLineSet.has(node.personId);const inHouse=houseVisibility.has(node.personId);const root=node.personId===rootPersonId;const branchOpen=expandedAnchors.has(node.personId);const hiddenRelatives=[...(familyExpansionMap.get(node.personId)??[])].filter((id)=>!visibleIds.has(id));const canToggle=!editingMainLine&&(branchOpen||hiddenRelatives.length>0);const removable=named&&typeof treeId==="number"&&!root&&!editingMainLine;const removeAction=removable?removeFamilyTreeMemberAction.bind(null,projectId,treeId,node.personId):null;const hoverActive=hoveredPersonId!=null;const hoverSelf=hoveredPersonId===node.personId;const hoverConnected=hoveredNeighbors.has(node.personId);const hoverClass=!hoverActive?"":hoverSelf?styles.nodeHovered:hoverConnected?styles.nodeConnected:styles.nodeDimmed;return <article key={node.personId} data-tree-node className={`${styles.node} ${main?styles.mainNode:styles.branchNode} ${root?styles.rootNode:""} ${hoverClass}`} style={{left:pos.x,top:pos.y}} onMouseEnter={()=>setHoveredPersonId(node.personId)} onMouseLeave={()=>setHoveredPersonId(null)} onFocusCapture={()=>setHoveredPersonId(node.personId)} onBlurCapture={handleNodeBlur}><Link href={personHref(projectId,node)} className={styles.nodeLink}><div className={styles.nodeHead}><span className={styles.avatar}>{validImage(node.image)?<img src={node.image} alt="" loading="lazy"/>:node.name.slice(0,1).toUpperCase()}</span><span className={styles.nodeIdentity}><strong>{node.name}</strong><small>{node.kind}{node.title?` · ${node.title}`:""}</small></span></div></Link><div className={styles.nodeBadges}>{main?<span className={styles.mainBadge}>{editingMainLine?"Hauptlinie · Vorschau":"Hauptlinie"}</span>:inHouse?<span className={styles.houseBadge}>Im Haus geboren</span>:<span>Seitenzweig</span>}{root?<span>Root</span>:null}{node.roleLabel&&node.roleLabel!=="Root"?<span>{node.roleLabel}</span>:null}{node.branchLabel?<span>{node.branchLabel}</span>:null}</div><div className={styles.nodeActions}>{canToggle?<button type="button" className={styles.branchToggle} onClick={()=>toggleBranch(node.personId)}>{branchOpen?"− Verwandte":`+ ${hiddenRelatives.length} Verwandte`}</button>:null}{removeAction?<form action={removeAction}><button className={styles.removeButton}>Entfernen</button></form>:null}</div></article>;})}
-        {!editingMainLine&&!showAll&&disconnectedHidden>0?<div className={styles.disconnectedHint}>{disconnectedHidden} weitere Person{disconnectedHidden===1?"":"en"} liegen außerhalb der sichtbaren Hauptlinie. <button type="button" onClick={()=>setShowAll(true)}>Hauszweige anzeigen</button></div>:null}
-      </div></div>
-    </div>
-  );
+  return <div ref={wrapperRef} onMouseMove={onMouseMove} onMouseLeave={()=>setHoveredPersonId(null)}><LegacyFamilyTreeCanvas {...props}/>{overlay}</div>;
 }
