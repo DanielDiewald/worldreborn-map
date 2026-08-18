@@ -23,7 +23,7 @@ export async function listFamilyTreePeople(projectId:number){const r=await pool.
 export async function listFamilyTreesPaginated(projectId:number,pagination:Pagination){
   const count=await pool.query<{total:number}>("SELECT count(*)::int AS total FROM family_trees WHERE project_id=$1",[projectId]);
   const total=count.rows[0]?.total??0;const page=clampPagination(total,pagination);
-  const rows=await pool.query<{tree_id:number;name:string|null;subtitle:string|null;description:string|null;root_person_id:number|null;root_name:string|null;visibility_mode:string;member_count:number}>(`SELECT ft.family_tree_id AS tree_id,ft.name,ft.subtitle,ft.description,ft.root_person_id,n.name AS root_name,ft.visibility_mode,(SELECT count(*)::int FROM family_tree_members m WHERE m.family_tree_id=ft.family_tree_id) AS member_count FROM family_trees ft LEFT JOIN npcs n ON n.n_id=ft.root_person_id AND n.camp_id=ft.project_id WHERE ft.project_id=$1 ORDER BY COALESCE(ft.name,''),ft.family_tree_id LIMIT $2 OFFSET $3`,[projectId,page.limit,page.offset]);
+  const rows=await pool.query<{tree_id:number;name:string|null;subtitle:string|null;description:string|null;root_person_id:number|null;root_name:string|null;visibility_mode:string;member_count:number}>(`SELECT ft.family_tree_id AS tree_id,ft.name,ft.subtitle,ft.description,ft.root_person_id,n.name AS root_name,ft.visibility_mode,COALESCE(mc.member_count,0)::int AS member_count FROM family_trees ft LEFT JOIN npcs n ON n.n_id=ft.root_person_id AND n.camp_id=ft.project_id LEFT JOIN LATERAL (SELECT count(*)::int AS member_count FROM family_tree_members m WHERE m.family_tree_id=ft.family_tree_id) mc ON true WHERE ft.project_id=$1 ORDER BY COALESCE(ft.name,''),ft.family_tree_id LIMIT $2 OFFSET $3`,[projectId,page.limit,page.offset]);
   return paginatedResult(rows.rows,total,page);
 }
 
@@ -46,17 +46,24 @@ export async function updateFamilyTreeMainLine(projectId:number,treeId:number,pe
     if(ids.length){
       const members=await client.query<{person_id:number}>("SELECT person_id FROM family_tree_members WHERE family_tree_id=$1 AND person_id=ANY($2::int[])",[treeId,ids]);
       if(members.rowCount!==ids.length)throw new Error("Jede Person der Hauptlinie muss Mitglied dieses Stammbaums sein.");
-      for(let index=1;index<ids.length;index+=1){
-        const parentId=ids[index-1],childId=ids[index];
-        const relation=await client.query<{valid:boolean}>(`SELECT EXISTS(
+      if(ids.length>1){
+        const parents=ids.slice(0,-1);const children=ids.slice(1);
+        const validation=await client.query<{valid_count:number}>(`WITH requested(parent_id,child_id,ord) AS (
+          SELECT parent_id,child_id,ord::int FROM unnest($2::int[],$3::int[]) WITH ORDINALITY AS u(parent_id,child_id,ord)
+        )
+        SELECT count(*)::int AS valid_count FROM requested req
+        WHERE EXISTS(
           SELECT 1 FROM relationships r JOIN relationship_types rt ON rt.relationship_type_id=r.relationship_type_id
-          WHERE r.project_id=$1 AND r.entity_a_type='person' AND r.entity_b_type='person' AND r.entity_a_id=$2 AND r.entity_b_id=$3
+          WHERE r.project_id=$1 AND r.entity_a_type='person' AND r.entity_b_type='person'
+            AND r.entity_a_id=req.parent_id AND r.entity_b_id=req.child_id
             AND rt.code IN ('parent','adoptive_parent','step_parent','guardian')
-          UNION ALL
-          SELECT 1 FROM parent_child_relationships p JOIN npcs pa ON pa.n_id=p.parent_id JOIN npcs ch ON ch.n_id=p.child_id
-          WHERE pa.camp_id=$1 AND ch.camp_id=$1 AND p.parent_id=$2 AND p.child_id=$3
-        ) AS valid`,[projectId,parentId,childId]);
-        if(!relation.rows[0]?.valid)throw new Error("Die Hauptlinie muss einer direkten Eltern-Kind-Kette folgen.");
+        ) OR EXISTS(
+          SELECT 1 FROM parent_child_relationships p
+          JOIN npcs pa ON pa.n_id=p.parent_id
+          JOIN npcs ch ON ch.n_id=p.child_id
+          WHERE pa.camp_id=$1 AND ch.camp_id=$1 AND p.parent_id=req.parent_id AND p.child_id=req.child_id
+        )`,[projectId,parents,children]);
+        if((validation.rows[0]?.valid_count??0)!==parents.length)throw new Error("Die Hauptlinie muss einer direkten Eltern-Kind-Kette folgen.");
       }
       await client.query("UPDATE family_trees SET metadata=jsonb_set(COALESCE(metadata,'{}'::jsonb),'{main_line_person_ids}',$3::jsonb,true),updated_at=now() WHERE project_id=$1 AND family_tree_id=$2",[projectId,treeId,JSON.stringify(ids)]);
     }else{
@@ -87,11 +94,16 @@ export async function getFamilyTreeGraph(projectId:number,treeRef:number|"all"){
   const tree:FamilyTreeRecord|null=treeRef==="all"?{tree_id:null,name:"Gesamter Familiengraph",subtitle:"Alle Familienbeziehungen des Projekts",description:null,root_person_id:null,visibility_mode:"admin_only",metadata:{}}:((await pool.query<FamilyTreeRecord>("SELECT family_tree_id AS tree_id,name,subtitle,description,root_person_id,visibility_mode,metadata FROM family_trees WHERE project_id=$1 AND family_tree_id=$2",[projectId,treeRef])).rows[0]??null);
   if(!tree)return null;
   const named=treeRef!=="all";
+  const params=named?[projectId,treeRef]:[projectId];
   const peopleSql=named?`SELECT n.n_id AS "personId",n.name,n.image,CASE WHEN g.g_id IS NOT NULL THEN 'God' WHEN EXISTS(SELECT 1 FROM chars ch WHERE ch.n_id=n.n_id) THEN 'Player Character' ELSE 'NPC / Character' END AS kind,n.title,m.role_label AS "roleLabel",m.branch_label AS "branchLabel" FROM family_tree_members m JOIN family_trees ft ON ft.family_tree_id=m.family_tree_id JOIN npcs n ON n.n_id=m.person_id AND n.camp_id=ft.project_id LEFT JOIN gods g ON g.n_id=n.n_id WHERE ft.project_id=$1 AND m.family_tree_id=$2 AND n.archived_at IS NULL ORDER BY m.sort_order,n.name,n.n_id`:`SELECT n.n_id AS "personId",n.name,n.image,CASE WHEN g.g_id IS NOT NULL THEN 'God' WHEN EXISTS(SELECT 1 FROM chars ch WHERE ch.n_id=n.n_id) THEN 'Player Character' ELSE 'NPC / Character' END AS kind,n.title,NULL::varchar AS "roleLabel",NULL::varchar AS "branchLabel" FROM npcs n LEFT JOIN gods g ON g.n_id=n.n_id WHERE n.camp_id=$1 AND n.archived_at IS NULL ORDER BY n.name,n.n_id`;
-  const people=(await pool.query<FamilyTreeNode>(peopleSql,named?[projectId,treeRef]:[projectId])).rows;
-  const memberIds=new Set(people.map((p)=>p.personId));
-  const relationshipEdges=await pool.query<FamilyTreeEdge>(`SELECT r.entity_a_id::int AS a,r.entity_b_id::int AS b,rt.code,rt.label,rt.inverse_label AS "inverseLabel",rt.directed,'relationship'::text AS source FROM relationships r JOIN relationship_types rt ON rt.relationship_type_id=r.relationship_type_id WHERE r.project_id=$1 AND r.entity_a_type='person' AND r.entity_b_type='person' AND rt.category='family' ORDER BY r.relationship_id`,[projectId]);
-  const legacyEdges=await pool.query<FamilyTreeEdge>(`SELECT p.parent_id AS a,p.child_id AS b,'parent'::text AS code,'Parent'::text AS label,'Child'::text AS "inverseLabel",true AS directed,'legacy_parent_child'::text AS source FROM parent_child_relationships p JOIN npcs pa ON pa.n_id=p.parent_id JOIN npcs ch ON ch.n_id=p.child_id WHERE pa.camp_id=$1 AND ch.camp_id=$1`,[projectId]);
-  const seen=new Set<string>();const edges:FamilyTreeEdge[]=[];for(const edge of [...relationshipEdges.rows,...legacyEdges.rows]){if(!memberIds.has(edge.a)||!memberIds.has(edge.b))continue;const symmetric=!edge.directed;const key=symmetric?[edge.code,Math.min(edge.a,edge.b),Math.max(edge.a,edge.b)].join(":"):[edge.code,edge.a,edge.b].join(":");if(seen.has(key))continue;seen.add(key);edges.push(edge);}
+  const relationshipSql=named?`SELECT r.entity_a_id::int AS a,r.entity_b_id::int AS b,rt.code,rt.label,rt.inverse_label AS "inverseLabel",rt.directed,'relationship'::text AS source FROM relationships r JOIN relationship_types rt ON rt.relationship_type_id=r.relationship_type_id JOIN family_tree_members ma ON ma.family_tree_id=$2 AND ma.person_id=r.entity_a_id JOIN family_tree_members mb ON mb.family_tree_id=$2 AND mb.person_id=r.entity_b_id JOIN family_trees ft ON ft.family_tree_id=$2 AND ft.project_id=r.project_id WHERE r.project_id=$1 AND r.entity_a_type='person' AND r.entity_b_type='person' AND rt.category='family' ORDER BY r.relationship_id`:`SELECT r.entity_a_id::int AS a,r.entity_b_id::int AS b,rt.code,rt.label,rt.inverse_label AS "inverseLabel",rt.directed,'relationship'::text AS source FROM relationships r JOIN relationship_types rt ON rt.relationship_type_id=r.relationship_type_id WHERE r.project_id=$1 AND r.entity_a_type='person' AND r.entity_b_type='person' AND rt.category='family' ORDER BY r.relationship_id`;
+  const legacySql=named?`SELECT p.parent_id AS a,p.child_id AS b,'parent'::text AS code,'Parent'::text AS label,'Child'::text AS "inverseLabel",true AS directed,'legacy_parent_child'::text AS source FROM parent_child_relationships p JOIN npcs pa ON pa.n_id=p.parent_id JOIN npcs ch ON ch.n_id=p.child_id JOIN family_tree_members ma ON ma.family_tree_id=$2 AND ma.person_id=p.parent_id JOIN family_tree_members mb ON mb.family_tree_id=$2 AND mb.person_id=p.child_id JOIN family_trees ft ON ft.family_tree_id=$2 AND ft.project_id=pa.camp_id WHERE pa.camp_id=$1 AND ch.camp_id=$1`:`SELECT p.parent_id AS a,p.child_id AS b,'parent'::text AS code,'Parent'::text AS label,'Child'::text AS "inverseLabel",true AS directed,'legacy_parent_child'::text AS source FROM parent_child_relationships p JOIN npcs pa ON pa.n_id=p.parent_id JOIN npcs ch ON ch.n_id=p.child_id WHERE pa.camp_id=$1 AND ch.camp_id=$1`;
+  const [peopleResult,relationshipEdges,legacyEdges]=await Promise.all([
+    pool.query<FamilyTreeNode>(peopleSql,params),
+    pool.query<FamilyTreeEdge>(relationshipSql,params),
+    pool.query<FamilyTreeEdge>(legacySql,params),
+  ]);
+  const people=peopleResult.rows;const seen=new Set<string>();const edges:FamilyTreeEdge[]=[];
+  for(const edge of [...relationshipEdges.rows,...legacyEdges.rows]){const symmetric=!edge.directed;const key=symmetric?[edge.code,Math.min(edge.a,edge.b),Math.max(edge.a,edge.b)].join(":"):[edge.code,edge.a,edge.b].join(":");if(seen.has(key))continue;seen.add(key);edges.push(edge);}
   return{tree,people,edges,mainLinePersonIds:parseMainLinePersonIds(tree.metadata)};
 }
