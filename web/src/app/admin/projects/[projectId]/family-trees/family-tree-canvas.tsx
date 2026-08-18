@@ -16,6 +16,7 @@ import {
   type FamilyParentRoute,
   type FamilyTreePosition,
 } from "@/lib/family-tree-layout";
+import { buildFamilyExpansionMap, collectFamilyConnectedIds, resolveProgressiveFamilyVisibility } from "@/lib/family-tree-visibility";
 import { removeFamilyTreeMemberAction, updateFamilyTreeMainLineAction } from "./actions";
 import styles from "./family-trees.module.css";
 
@@ -89,44 +90,6 @@ function pairKey(a: number, b: number) {
   return a < b ? `${a}:${b}` : `${b}:${a}`;
 }
 
-function collectBranchMap(mainLine: number[], edges: TreeEdge[]) {
-  const mainSet = new Set(mainLine);
-  const result = new Map<number, Set<number>>(mainLine.map((id) => [id, new Set<number>()]));
-  const adjacency = new Map<number, Set<number>>();
-  for (const edge of edges) {
-    const a = adjacency.get(edge.a) ?? new Set<number>();
-    const b = adjacency.get(edge.b) ?? new Set<number>();
-    a.add(edge.b); b.add(edge.a); adjacency.set(edge.a, a); adjacency.set(edge.b, b);
-  }
-  const offMain = new Set<number>();
-  for (const edge of edges) {
-    if (!mainSet.has(edge.a)) offMain.add(edge.a);
-    if (!mainSet.has(edge.b)) offMain.add(edge.b);
-  }
-  const visited = new Set<number>();
-  for (const start of offMain) {
-    if (visited.has(start)) continue;
-    const component = new Set<number>();
-    const anchors = new Set<number>();
-    const queue = [start];
-    visited.add(start);
-    for (let cursor = 0; cursor < queue.length; cursor += 1) {
-      const id = queue[cursor];
-      component.add(id);
-      for (const next of adjacency.get(id) ?? []) {
-        if (mainSet.has(next)) anchors.add(next);
-        else if (!visited.has(next)) { visited.add(next); queue.push(next); }
-      }
-    }
-    for (const anchor of anchors) {
-      const branch = result.get(anchor) ?? new Set<number>();
-      for (const id of component) branch.add(id);
-      result.set(anchor, branch);
-    }
-  }
-  return result;
-}
-
 function isInteractiveTarget(target: EventTarget | null) {
   return target instanceof Element && Boolean(target.closest(INTERACTIVE_SELECTOR));
 }
@@ -165,14 +128,15 @@ export function FamilyTreeCanvas({ projectId, people, edges, rootPersonId, named
     return result;
   }, [baseGenerations, structuralEdges, personById]);
 
-  const branchNodes = useMemo(() => collectBranchMap(mainLine, structuralEdges), [structuralEdges, mainLine]);
-
+  const familyExpansionMap = useMemo(() => buildFamilyExpansionMap(people.map((person) => person.personId), structuralEdges), [people, structuralEdges]);
+  const progressiveVisibility = useMemo(
+    () => resolveProgressiveFamilyVisibility(people.map((person) => person.personId), mainLine, expandedAnchors, structuralEdges),
+    [expandedAnchors, mainLine, people, structuralEdges],
+  );
   const visibleIds = useMemo(() => {
     if (editingMainLine || showAll) return new Set(people.map((person) => person.personId));
-    const result = new Set(mainLine);
-    for (const anchor of expandedAnchors) for (const personId of branchNodes.get(anchor) ?? []) result.add(personId);
-    return result;
-  }, [branchNodes, editingMainLine, expandedAnchors, mainLine, people, showAll]);
+    return progressiveVisibility.visible;
+  }, [editingMainLine, people, progressiveVisibility.visible, showAll]);
 
   const visibleNodes = useMemo(() => people.filter((person) => visibleIds.has(person.personId)), [people, visibleIds]);
   const visibleEdges = useMemo(() => edges.filter((edge) => visibleIds.has(edge.a) && visibleIds.has(edge.b)), [edges, visibleIds]);
@@ -438,7 +402,8 @@ export function FamilyTreeCanvas({ projectId, people, edges, rootPersonId, named
     const a=layout.positions.get(edge.a);const b=layout.positions.get(edge.b);if(!a||!b)return null;const ax=a.x+FAMILY_NODE_WIDTH/2;const bx=b.x+FAMILY_NODE_WIDTH/2;const laneY=Math.min(a.y,b.y)-20-(index%7)*12;const hoverMatch=hoveredPersonId!=null&&(edge.a===hoveredPersonId||edge.b===hoveredPersonId);const hoverClass=hoveredPersonId==null?"":hoverMatch?styles.edgeHighlighted:styles.edgeDimmed;return <g key={edgeKey(edge)} className={hoverClass}><path d={`M ${ax} ${a.y} V ${laneY} H ${bx} V ${b.y}`} className={styles.otherEdge}/><text x={(ax+bx)/2} y={laneY-7} textAnchor="middle" className={styles.edgeLabel}>{edge.label}</text></g>;
   }), [geometry.otherRelationshipEdges, geometry.siblingEdges, hoveredPersonId, layout]);
 
-  const disconnectedHidden = people.length - new Set([...mainLineSet, ...[...branchNodes.values()].flatMap((set) => [...set])]).size;
+  const connectedFamilyIds = useMemo(() => collectFamilyConnectedIds(mainLine, familyExpansionMap), [familyExpansionMap, mainLine]);
+  const disconnectedHidden = Math.max(0, people.length - connectedFamilyIds.size);
   const startOptions = useMemo(() => [...people].sort((a, b) => (baseGenerations.get(a.personId) ?? 0) - (baseGenerations.get(b.personId) ?? 0) || a.name.localeCompare(b.name) || a.personId - b.personId), [baseGenerations, people]);
 
   return (
@@ -460,7 +425,7 @@ export function FamilyTreeCanvas({ projectId, people, edges, rootPersonId, named
       <div className={styles.zoomSurface} style={{ width: layout.width * zoom, height: layout.height * zoom }}><div className={styles.canvas} style={{ width: layout.width, height: layout.height, transform: `scale(${zoom})` }}>
         {layout.shownGenerations.map((generation)=>{const first=visibleNodes.find((node)=>layout.positions.get(node.personId)?.generation===generation);const position=first?layout.positions.get(first.personId):null;if(!position)return null;return <div key={generation} className={styles.generationMarker} style={{top:position.y-38}}>{generation===0?"Älteste Generation":`Generation ${generation+1}`}</div>;})}
         <svg className={styles.edges} width={layout.width} height={layout.height} aria-hidden="true">{familySvg}{romanticSvg}{relationshipSvg}</svg>
-        {visibleNodes.map((node)=>{const pos=layout.positions.get(node.personId);if(!pos)return null;const main=mainLineSet.has(node.personId);const root=node.personId===rootPersonId;const branchCount=branchNodes.get(node.personId)?.size??0;const branchOpen=expandedAnchors.has(node.personId);const removable=named&&typeof treeId==="number"&&!root&&!editingMainLine;const removeAction=removable?removeFamilyTreeMemberAction.bind(null,projectId,treeId,node.personId):null;const hoverActive=hoveredPersonId!=null;const hoverSelf=hoveredPersonId===node.personId;const hoverConnected=hoveredNeighbors.has(node.personId);const hoverClass=!hoverActive?"":hoverSelf?styles.nodeHovered:hoverConnected?styles.nodeConnected:styles.nodeDimmed;return <article key={node.personId} data-tree-node className={`${styles.node} ${main?styles.mainNode:styles.branchNode} ${root?styles.rootNode:""} ${hoverClass}`} style={{left:pos.x,top:pos.y}} onMouseEnter={()=>setHoveredPersonId(node.personId)} onMouseLeave={()=>setHoveredPersonId(null)} onFocusCapture={()=>setHoveredPersonId(node.personId)} onBlurCapture={handleNodeBlur}><Link href={personHref(projectId,node)} className={styles.nodeLink}><div className={styles.nodeHead}><span className={styles.avatar}>{validImage(node.image)?<img src={node.image} alt="" loading="lazy"/>:node.name.slice(0,1).toUpperCase()}</span><span className={styles.nodeIdentity}><strong>{node.name}</strong><small>{node.kind}{node.title?` · ${node.title}`:""}</small></span></div></Link><div className={styles.nodeBadges}>{main?<span className={styles.mainBadge}>{editingMainLine?"Hauptlinie · Vorschau":"Hauptlinie"}</span>:<span>Seitenzweig</span>}{root?<span>Root</span>:null}{node.roleLabel&&node.roleLabel!=="Root"?<span>{node.roleLabel}</span>:null}{node.branchLabel?<span>{node.branchLabel}</span>:null}</div><div className={styles.nodeActions}>{!editingMainLine&&main&&branchCount>0&&!showAll?<button type="button" className={styles.branchToggle} onClick={()=>toggleBranch(node.personId)}>{branchOpen?"− Seitenzweige":`+ ${branchCount} Zweig${branchCount===1?"":"e"}`}</button>:null}{removeAction?<form action={removeAction}><button className={styles.removeButton}>Entfernen</button></form>:null}</div></article>;})}
+        {visibleNodes.map((node)=>{const pos=layout.positions.get(node.personId);if(!pos)return null;const main=mainLineSet.has(node.personId);const root=node.personId===rootPersonId;const branchOpen=expandedAnchors.has(node.personId);const hiddenRelatives=[...(familyExpansionMap.get(node.personId)??[])].filter((id)=>!visibleIds.has(id));const canToggle=!editingMainLine&&!showAll&&(branchOpen||hiddenRelatives.length>0);const removable=named&&typeof treeId==="number"&&!root&&!editingMainLine;const removeAction=removable?removeFamilyTreeMemberAction.bind(null,projectId,treeId,node.personId):null;const hoverActive=hoveredPersonId!=null;const hoverSelf=hoveredPersonId===node.personId;const hoverConnected=hoveredNeighbors.has(node.personId);const hoverClass=!hoverActive?"":hoverSelf?styles.nodeHovered:hoverConnected?styles.nodeConnected:styles.nodeDimmed;return <article key={node.personId} data-tree-node className={`${styles.node} ${main?styles.mainNode:styles.branchNode} ${root?styles.rootNode:""} ${hoverClass}`} style={{left:pos.x,top:pos.y}} onMouseEnter={()=>setHoveredPersonId(node.personId)} onMouseLeave={()=>setHoveredPersonId(null)} onFocusCapture={()=>setHoveredPersonId(node.personId)} onBlurCapture={handleNodeBlur}><Link href={personHref(projectId,node)} className={styles.nodeLink}><div className={styles.nodeHead}><span className={styles.avatar}>{validImage(node.image)?<img src={node.image} alt="" loading="lazy"/>:node.name.slice(0,1).toUpperCase()}</span><span className={styles.nodeIdentity}><strong>{node.name}</strong><small>{node.kind}{node.title?` · ${node.title}`:""}</small></span></div></Link><div className={styles.nodeBadges}>{main?<span className={styles.mainBadge}>{editingMainLine?"Hauptlinie · Vorschau":"Hauptlinie"}</span>:<span>Seitenzweig</span>}{root?<span>Root</span>:null}{node.roleLabel&&node.roleLabel!=="Root"?<span>{node.roleLabel}</span>:null}{node.branchLabel?<span>{node.branchLabel}</span>:null}</div><div className={styles.nodeActions}>{canToggle?<button type="button" className={styles.branchToggle} onClick={()=>toggleBranch(node.personId)}>{branchOpen?"− Verwandte":`+ ${hiddenRelatives.length} Verwandte`}</button>:null}{removeAction?<form action={removeAction}><button className={styles.removeButton}>Entfernen</button></form>:null}</div></article>;})}
         {!editingMainLine&&!showAll&&disconnectedHidden>0?<div className={styles.disconnectedHint}>{disconnectedHidden} weitere Person{disconnectedHidden===1?"":"en"} liegen in getrennten Familienlinien. <button type="button" onClick={()=>setShowAll(true)}>Alle anzeigen</button></div>:null}
       </div></div>
     </div>
