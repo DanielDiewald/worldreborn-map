@@ -111,24 +111,25 @@ export function FamilyTreeCanvas({ projectId, people, edges, rootPersonId, named
   const [hoveredPersonId, setHoveredPersonId] = useState<number | null>(null);
   const [savingMainLine, startMainLineTransition] = useTransition();
 
-  const structuralEdges = useMemo(() => edges.filter((edge) => edge.category === "family" && isFamilyStructureEdge(edge)), [edges]);
-  const automaticMainLine = useMemo(() => resolveFamilyMainLine(people, structuralEdges, null, rootPersonId), [people, structuralEdges, rootPersonId]);
-  const storedMainLine = useMemo(() => resolveFamilyMainLine(people, structuralEdges, persistedMainLine, rootPersonId), [people, structuralEdges, persistedMainLine, rootPersonId]);
+  const familyEdges = useMemo(() => edges.filter((edge) => edge.category === "family"), [edges]);
+  const structuralEdges = useMemo(() => familyEdges.filter(isFamilyStructureEdge), [familyEdges]);
+  const automaticMainLine = useMemo(() => resolveFamilyMainLine(people, familyEdges, null, rootPersonId), [people, familyEdges, rootPersonId]);
+  const storedMainLine = useMemo(() => resolveFamilyMainLine(people, familyEdges, persistedMainLine, rootPersonId), [people, familyEdges, persistedMainLine, rootPersonId]);
   const mainLine = editingMainLine && draftMainLine.length ? draftMainLine : storedMainLine;
   const mainLineSet = useMemo(() => new Set(mainLine), [mainLine]);
   const baseGenerations = useMemo(() => buildFamilyGenerations(people, structuralEdges), [people, structuralEdges]);
   const personById = useMemo(() => new Map(people.map((person) => [person.personId, person])), [people]);
-  const childrenByParent = useMemo(() => {
+  const successorsByPerson = useMemo(() => {
     const result = new Map<number, number[]>();
-    for (const edge of structuralEdges) {
-      if (!isFamilyParentEdge(edge)) continue;
+    for (const edge of familyEdges) {
+      if (!isFamilyParentEdge(edge) && !(edge.directed && edge.code === "ancestor")) continue;
       result.set(edge.a, [...(result.get(edge.a) ?? []), edge.b]);
     }
-    for (const [parentId, childIds] of result) {
-      result.set(parentId, [...new Set(childIds)].sort((a, b) => (baseGenerations.get(a) ?? 0) - (baseGenerations.get(b) ?? 0) || (personById.get(a)?.name ?? "").localeCompare(personById.get(b)?.name ?? "") || a - b));
+    for (const [personId, successorIds] of result) {
+      result.set(personId, [...new Set(successorIds)].sort((a, b) => (baseGenerations.get(a) ?? 0) - (baseGenerations.get(b) ?? 0) || (personById.get(a)?.name ?? "").localeCompare(personById.get(b)?.name ?? "") || a - b));
     }
     return result;
-  }, [baseGenerations, structuralEdges, personById]);
+  }, [baseGenerations, familyEdges, personById]);
 
   const houseVisibility = useMemo(() => resolveHouseFamilyVisibility(people, mainLine, edges), [edges, mainLine, people]);
   const familyExpansionMap = useMemo(() => buildFamilyExpansionMap(people.map((person) => person.personId), edges), [people, edges]);
@@ -143,8 +144,9 @@ export function FamilyTreeCanvas({ projectId, people, edges, rootPersonId, named
 
   const visibleNodes = useMemo(() => people.filter((person) => visibleIds.has(person.personId)), [people, visibleIds]);
   const visibleEdges = useMemo(() => edges.filter((edge) => visibleIds.has(edge.a) && visibleIds.has(edge.b)), [edges, visibleIds]);
+  const visibleFamilyEdges = useMemo(() => familyEdges.filter((edge) => visibleIds.has(edge.a) && visibleIds.has(edge.b)), [familyEdges, visibleIds]);
   const visibleStructuralEdges = useMemo(() => structuralEdges.filter((edge) => visibleIds.has(edge.a) && visibleIds.has(edge.b)), [structuralEdges, visibleIds]);
-  const layout = useMemo(() => layoutFamilyTree(visibleNodes, visibleStructuralEdges, visibleIds, mainLine), [visibleNodes, visibleStructuralEdges, visibleIds, mainLine]);
+  const layout = useMemo(() => layoutFamilyTree(visibleNodes, visibleFamilyEdges, visibleIds, mainLine), [visibleNodes, visibleFamilyEdges, visibleIds, mainLine]);
   const hiddenCount = Math.max(0, people.length - visibleIds.size);
   const mainPairs = useMemo(() => new Set(mainLine.slice(0, -1).map((id, index) => `${id}:${mainLine[index + 1]}`)), [mainLine]);
   const hoveredNeighbors = useMemo(() => {
@@ -251,14 +253,15 @@ export function FamilyTreeCanvas({ projectId, people, edges, rootPersonId, named
     setMainLineError(null);
   };
 
-  const changeSuccessor = (index: number, childId: number | null) => {
+  const changeSuccessor = (index: number, successorId: number | null) => {
     const prefix = draftMainLine.slice(0, index + 1);
-    if (!childId) {
+    if (!successorId) {
       setDraftMainLine(prefix);
       return;
     }
-    const suffix = findFamilyDescendantLine(people, structuralEdges, childId);
-    setDraftMainLine([...prefix, ...(suffix.length ? suffix : [childId])]);
+    const selectedEdge = familyEdges.find((edge) => edge.a === draftMainLine[index] && edge.b === successorId && edge.directed && edge.code === "ancestor");
+    const suffix = selectedEdge ? [successorId] : findFamilyDescendantLine(people, structuralEdges, successorId);
+    setDraftMainLine([...prefix, ...(suffix.length ? suffix : [successorId])]);
     setMainLineError(null);
   };
 
@@ -422,7 +425,7 @@ export function FamilyTreeCanvas({ projectId, people, edges, rootPersonId, named
         </div>
       </div>
 
-      {editingMainLine ? <section className={styles.mainLineEditor}><div className={styles.mainLineEditorHead}><div><strong>Hauptlinie bearbeiten</strong><p>Wähle die Startperson und danach pro Generation den tatsächlichen Nachfolger. Nur direkte Eltern-Kind-Schritte können gespeichert werden.</p></div><button type="button" className="button ghost" onClick={cancelMainLineEdit} disabled={savingMainLine}>Schließen</button></div><label className={styles.mainLineStart}>Start der Hauptlinie<select value={draftMainLine[0] ?? ""} onChange={(event) => changeMainLineStart(Number(event.target.value))}>{startOptions.map((person) => <option key={person.personId} value={person.personId}>Generation {(baseGenerations.get(person.personId) ?? 0) + 1} · {person.name}</option>)}</select></label><div className={styles.mainLineChain}>{draftMainLine.map((personId,index)=>{const person=personById.get(personId);if(!person)return null;const childIds=childrenByParent.get(personId)??[];const currentNext=draftMainLine[index+1];return <div key={`${personId}-${index}`} className={styles.mainLineStep}><span>Gen. {(baseGenerations.get(personId)??0)+1}</span><strong>{person.name}</strong>{childIds.length?<label>Nachfolger<select value={currentNext&&childIds.includes(currentNext)?currentNext:""} onChange={(event)=>changeSuccessor(index,event.target.value?Number(event.target.value):null)}><option value="">Linie hier beenden</option>{childIds.map((childId)=><option key={childId} value={childId}>{personById.get(childId)?.name??`Person #${childId}`}</option>)}</select></label>:<small>Keine direkten Kinder in diesem Stammbaum</small>}</div>;})}</div>{mainLineError?<div className={styles.mainLineError}>{mainLineError}</div>:null}<div className={styles.mainLineEditorActions}><button type="button" className="primary" onClick={saveMainLine} disabled={savingMainLine||!draftMainLine.length}>{savingMainLine?"Speichere …":"Hauptlinie speichern"}</button><button type="button" className="button ghost" onClick={resetAutomaticMainLine} disabled={savingMainLine}>Automatische Linie verwenden</button><button type="button" className="button ghost" onClick={cancelMainLineEdit} disabled={savingMainLine}>Abbrechen</button></div></section> : null}
+      {editingMainLine ? <section className={styles.mainLineEditor}><div className={styles.mainLineEditorHead}><div><strong>Hauptlinie bearbeiten</strong><p>Wähle die Startperson und danach den tatsächlichen Nachfolger. Direkte Eltern-Kind-Schritte und gerichtete Vorfahre→Nachfahre-Sprünge sind erlaubt.</p></div><button type="button" className="button ghost" onClick={cancelMainLineEdit} disabled={savingMainLine}>Schließen</button></div><label className={styles.mainLineStart}>Start der Hauptlinie<select value={draftMainLine[0] ?? ""} onChange={(event) => changeMainLineStart(Number(event.target.value))}>{startOptions.map((person) => <option key={person.personId} value={person.personId}>Generation {(baseGenerations.get(person.personId) ?? 0) + 1} · {person.name}</option>)}</select></label><div className={styles.mainLineChain}>{draftMainLine.map((personId,index)=>{const person=personById.get(personId);if(!person)return null;const successorIds=successorsByPerson.get(personId)??[];const currentNext=draftMainLine[index+1];return <div key={`${personId}-${index}`} className={styles.mainLineStep}><span>Gen. {(baseGenerations.get(personId)??0)+1}</span><strong>{person.name}</strong>{successorIds.length?<label>Nachfolger<select value={currentNext&&successorIds.includes(currentNext)?currentNext:""} onChange={(event)=>changeSuccessor(index,event.target.value?Number(event.target.value):null)}><option value="">Linie hier beenden</option>{successorIds.map((successorId)=><option key={successorId} value={successorId}>{personById.get(successorId)?.name??`Person #${successorId}`}</option>)}</select></label>:<small>Keine direkten Kinder oder Vorfahre→Nachfahre-Ziele in diesem Stammbaum</small>}</div>;})}</div>{mainLineError?<div className={styles.mainLineError}>{mainLineError}</div>:null}<div className={styles.mainLineEditorActions}><button type="button" className="primary" onClick={saveMainLine} disabled={savingMainLine||!draftMainLine.length}>{savingMainLine?"Speichere …":"Hauptlinie speichern"}</button><button type="button" className="button ghost" onClick={resetAutomaticMainLine} disabled={savingMainLine}>Automatische Linie verwenden</button><button type="button" className="button ghost" onClick={cancelMainLineEdit} disabled={savingMainLine}>Abbrechen</button></div></section> : null}
 
       <div className={styles.zoomSurface} style={{ width: layout.width * zoom, height: layout.height * zoom }}><div className={styles.canvas} style={{ width: layout.width, height: layout.height, transform: `scale(${zoom})` }}>
         {layout.shownGenerations.map((generation)=>{const first=visibleNodes.find((node)=>layout.positions.get(node.personId)?.generation===generation);const position=first?layout.positions.get(first.personId):null;if(!position)return null;return <div key={generation} className={styles.generationMarker} style={{top:position.y-38}}>{generation===0?"Älteste Generation":`Generation ${generation+1}`}</div>;})}
