@@ -20,6 +20,27 @@ export async function saveMediaUpload(projectId:number,file:File,input:unknown){
 
 export async function getMediaRecord(mediaId:number){const r=await pool.query<{media_id:string;project_id:number;entity_type:string|null;entity_id:string|null;storage_path:string|null;external_url:string|null;mime_type:string|null;original_filename:string|null}>("SELECT media_id,project_id,entity_type,entity_id,storage_path,external_url,mime_type,original_filename FROM media WHERE media_id=$1",[mediaId]);return r.rows[0]??null;}
 
+export async function bindMediaToEntity(projectId:number,mediaId:number,entityType:string,entityId:number){const target=await resolveEntityReference({projectId,entityType,entityId});const r=await pool.query("UPDATE media SET entity_type=$3,entity_id=$4,metadata=metadata||$5::jsonb WHERE project_id=$1 AND media_id=$2",[projectId,mediaId,target.type,target.id,JSON.stringify({bound_entity_type:target.type,bound_entity_id:target.id})]);if(r.rowCount!==1)throw new Error("Media not found in this project.");}
+
+export type EntityImageSource={image:string;mediaId:number|null;uploaded:boolean;removed:boolean};
+export async function resolveEntityImageSource(projectId:number,formData:FormData,options:{current?:string|null;pathName?:string;fileName?:string;entityType?:string;entityId?:number;title?:string}={}):Promise<EntityImageSource>{
+  const pathName=options.pathName??"image";const fileName=options.fileName??"imageFile";
+  if(formData.get(`${pathName}Remove`)==="1")return{image:"noimage",mediaId:null,uploaded:false,removed:true};
+  const file=formData.get(fileName);
+  if(file instanceof File&&file.size>0){const mediaId=await saveMediaUpload(projectId,file,{entityType:options.entityType&&options.entityId?options.entityType:null,entityId:options.entityType&&options.entityId?options.entityId:null,title:options.title});return{image:`/api/media/${mediaId}`,mediaId,uploaded:true,removed:false};}
+  const pathValue=String(formData.get(pathName)??"").trim();
+  if(pathValue)return{image:pathValue,mediaId:null,uploaded:false,removed:false};
+  return{image:options.current?.trim()||"noimage",mediaId:null,uploaded:false,removed:false};
+}
+
+export async function setEntityImageReference(projectId:number,entityType:"person"|"group"|"location"|"event"|"campaign",entityId:number,source:EntityImageSource){
+  const configs={person:{table:"npcs",project:"camp_id",id:"n_id"},group:{table:"groups",project:"camp_id",id:"gr_id"},location:{table:"locations",project:"camp_id",id:"loc_id"},event:{table:"events",project:"camp_id",id:"e_id"},campaign:{table:"campaigns",project:"camp_id",id:"camp_id"}} as const;
+  const config=configs[entityType];
+  const result=await pool.query(`UPDATE ${config.table} SET image=$3,image_media_id=$4${entityType==="campaign"?",updated_at=now()":",updated_at=now()"} WHERE ${config.project}=$1 AND ${config.id}=$2`,[projectId,entityId,source.image,source.mediaId]);
+  if(result.rowCount!==1)throw new Error("Bild-Ziel gehört nicht zu diesem Projekt.");
+  if(source.mediaId)await bindMediaToEntity(projectId,source.mediaId,entityType,entityId);
+}
+
 export async function canPlayerReadMedia(mediaId:number,projectId:number,playerId:number){const record=await getMediaRecord(mediaId);if(!record||record.project_id!==projectId)return false;const player=await pool.query("SELECT 1 FROM users WHERE user_id=$1 AND camp_id=$2 AND active=true",[playerId,projectId]);if(player.rowCount!==1)return false;const own=await pool.query<{visible:boolean}>("SELECT visible FROM entity_visibility WHERE project_id=$1 AND player_id=$2 AND entity_type='media' AND entity_id=$3",[projectId,playerId,mediaId]);if(own.rowCount!==1||own.rows[0].visible!==true)return false;if(record.entity_type&&record.entity_id){return canPlayerViewEntity({projectId,playerId,entityType:record.entity_type,entityId:Number(record.entity_id)});}return true;}
 
 export async function readStoredMedia(storagePath:string){return localStorage.read(storagePath);}
