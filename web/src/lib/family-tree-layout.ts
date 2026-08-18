@@ -65,21 +65,26 @@ function parentMaps(nodes: FamilyLayoutNode[], edges: FamilyLayoutEdge[]) {
   return { ids, parentEdges, parents, children };
 }
 
-export function buildFamilyGenerations(nodes: FamilyLayoutNode[], edges: FamilyLayoutEdge[]) {
-  const { ids, parentEdges } = parentMaps(nodes, edges);
-  const parentsByChild = new Map<number, number[]>();
-  for (const edge of parentEdges) parentsByChild.set(edge.b, [...(parentsByChild.get(edge.b) ?? []), edge.a]);
-
+function sameGenerationUnion(ids: Set<number>, edges: FamilyLayoutEdge[], parentEdges: FamilyLayoutEdge[]) {
   const union = new UnionFind([...ids]);
   for (const edge of edges) {
     if (ids.has(edge.a) && ids.has(edge.b) && SAME_GENERATION_CODES.has(edge.code)) union.union(edge.a, edge.b);
   }
-  for (const parents of parentsByChild.values()) {
-    for (let index = 1; index < parents.length; index += 1) union.union(parents[0], parents[index]);
-  }
 
+  const parentsByChild = new Map<number, number[]>();
+  for (const edge of parentEdges) parentsByChild.set(edge.b, [...(parentsByChild.get(edge.b) ?? []), edge.a]);
+  for (const parentIds of parentsByChild.values()) {
+    for (let index = 1; index < parentIds.length; index += 1) union.union(parentIds[0], parentIds[index]);
+  }
+  return union;
+}
+
+export function buildFamilyGenerations(nodes: FamilyLayoutNode[], edges: FamilyLayoutEdge[]) {
+  const { ids, parentEdges } = parentMaps(nodes, edges);
+  const union = sameGenerationUnion(ids, edges, parentEdges);
   const groups = new Set<number>();
   for (const id of ids) groups.add(union.find(id));
+
   const outgoing = new Map<number, Set<number>>();
   const indegree = new Map<number, number>();
   for (const group of groups) indegree.set(group, 0);
@@ -111,7 +116,6 @@ export function buildFamilyGenerations(nodes: FamilyLayoutNode[], edges: FamilyL
     }
   }
 
-  // Defensive fallback for malformed legacy cycles: keep the graph renderable instead of exploding the layout.
   for (const group of groups) if (!generationByGroup.has(group)) generationByGroup.set(group, 0);
 
   const result = new Map<number, number>();
@@ -143,8 +147,8 @@ export function findFamilyMainLine(nodes: FamilyLayoutNode[], edges: FamilyLayou
   const { ids, parents, children } = parentMaps(nodes, edges);
   const ancestorMemo = new Map<number, number[]>();
   const ancestorPath = (id: number, active = new Set<number>()): number[] => {
-    const memo = ancestorMemo.get(id);
-    if (memo) return memo;
+    const cached = ancestorMemo.get(id);
+    if (cached) return cached;
     if (active.has(id)) return [id];
     const nextActive = new Set(active).add(id);
     let best = [id];
@@ -158,8 +162,8 @@ export function findFamilyMainLine(nodes: FamilyLayoutNode[], edges: FamilyLayou
 
   const descendantMemo = new Map<number, number[]>();
   const descendantPath = (id: number, active = new Set<number>()): number[] => {
-    const memo = descendantMemo.get(id);
-    if (memo) return memo;
+    const cached = descendantMemo.get(id);
+    if (cached) return cached;
     if (active.has(id)) return [id];
     const nextActive = new Set(active).add(id);
     let best = [id];
@@ -239,7 +243,9 @@ function alignShortDisconnectedBranches(
   const links = adjacency(edges, visibleIds);
   const visited = new Set<number>();
   const mainGenerations = [...mainLine].filter((id) => visibleIds.has(id)).map((id) => generation.get(id) ?? 0);
-  const mainBottom = mainGenerations.length ? Math.max(...mainGenerations) : Math.max(0, ...[...visibleIds].map((id) => generation.get(id) ?? 0));
+  const mainBottom = mainGenerations.length
+    ? Math.max(...mainGenerations)
+    : Math.max(0, ...[...visibleIds].map((id) => generation.get(id) ?? 0));
 
   for (const start of visibleIds) {
     if (visited.has(start)) continue;
@@ -262,6 +268,57 @@ function alignShortDisconnectedBranches(
     if (!shift) continue;
     for (const id of component) result.set(id, (generation.get(id) ?? 0) + shift);
   }
+  return result;
+}
+
+function compactSideAncestorsTowardAttachments(
+  generation: Map<number, number>,
+  visibleIds: Set<number>,
+  edges: FamilyLayoutEdge[],
+  mainLine: Set<number>,
+) {
+  const result = new Map(generation);
+  const parentEdges = edges.filter((edge) => visibleIds.has(edge.a) && visibleIds.has(edge.b) && isFamilyParentEdge(edge));
+  const union = sameGenerationUnion(visibleIds, edges, parentEdges);
+  const members = new Map<number, number[]>();
+  for (const id of visibleIds) {
+    const root = union.find(id);
+    members.set(root, [...(members.get(root) ?? []), id]);
+  }
+
+  const outgoing = new Map<number, Set<number>>();
+  for (const edge of parentEdges) {
+    const from = union.find(edge.a);
+    const to = union.find(edge.b);
+    if (from === to) continue;
+    const targets = outgoing.get(from) ?? new Set<number>();
+    targets.add(to);
+    outgoing.set(from, targets);
+  }
+
+  const fixed = new Set<number>();
+  for (const id of mainLine) if (visibleIds.has(id)) fixed.add(union.find(id));
+  const groupGeneration = (root: number) => Math.max(...(members.get(root) ?? []).map((id) => result.get(id) ?? 0));
+  const roots = [...members.keys()];
+
+  // Long main-line ancestry may push the attachment generation far down while a short side ancestry still starts at 0.
+  // Shift only the side ancestry groups down to the latest legal generation directly before their earliest child.
+  for (let pass = 0; pass < roots.length; pass += 1) {
+    let changed = false;
+    const ordered = [...roots].sort((a, b) => groupGeneration(b) - groupGeneration(a) || a - b);
+    for (const root of ordered) {
+      if (fixed.has(root)) continue;
+      const childRoots = [...(outgoing.get(root) ?? [])];
+      if (!childRoots.length) continue;
+      const latestLegal = Math.min(...childRoots.map((childRoot) => groupGeneration(childRoot) - 1));
+      const current = groupGeneration(root);
+      if (latestLegal <= current) continue;
+      for (const id of members.get(root) ?? []) result.set(id, latestLegal);
+      changed = true;
+    }
+    if (!changed) break;
+  }
+
   return result;
 }
 
@@ -299,26 +356,17 @@ function stabilizeBranchSides(
   const offMainSet = new Set(offMain);
   const branchUnion = new UnionFind(offMain);
 
-  // Normal family links keep off-main relatives in one branch bundle.
   for (const id of offMain) {
-    for (const next of familyNeighbors.get(id) ?? []) {
-      if (offMainSet.has(next)) branchUnion.union(id, next);
-    }
+    for (const next of familyNeighbors.get(id) ?? []) if (offMainSet.has(next)) branchUnion.union(id, next);
   }
 
-  // Important: a manually selected main-line person can sit in the middle of what is visually one side lineage.
-  // We therefore allow an off-main parent branch to pass THROUGH that exact main-line person to an off-main child
-  // branch. We never traverse from one main-line person to the next, so unrelated spouses/branches elsewhere on the
-  // main spine do not collapse into one giant component.
+  // A selected main-line person can be the bridge inside one side lineage. Cross that one node, but never walk
+  // along the main spine itself, otherwise unrelated side families would collapse into one component.
   const incomingByMain = new Map<number, number[]>();
   const outgoingByMain = new Map<number, number[]>();
   for (const edge of parentEdges) {
-    if (mainLine.has(edge.b) && offMainSet.has(edge.a)) {
-      incomingByMain.set(edge.b, [...(incomingByMain.get(edge.b) ?? []), edge.a]);
-    }
-    if (mainLine.has(edge.a) && offMainSet.has(edge.b)) {
-      outgoingByMain.set(edge.a, [...(outgoingByMain.get(edge.a) ?? []), edge.b]);
-    }
+    if (mainLine.has(edge.b) && offMainSet.has(edge.a)) incomingByMain.set(edge.b, [...(incomingByMain.get(edge.b) ?? []), edge.a]);
+    if (mainLine.has(edge.a) && offMainSet.has(edge.b)) outgoingByMain.set(edge.a, [...(outgoingByMain.get(edge.a) ?? []), edge.b]);
   }
   for (const mainId of mainLine) {
     const incoming = incomingByMain.get(mainId) ?? [];
@@ -339,20 +387,15 @@ function stabilizeBranchSides(
       const rowId = generation.get(id) ?? 0;
       const row = rows.get(rowId) ?? [];
       const nodeIndex = row.findIndex((node) => node.personId === id);
-      const mainIndexes = row
-        .map((node, index) => mainLine.has(node.personId) ? index : -1)
-        .filter((index) => index >= 0);
-      if (nodeIndex < 0 || mainIndexes.length === 0) continue;
+      const mainIndexes = row.map((node, index) => mainLine.has(node.personId) ? index : -1).filter((index) => index >= 0);
+      if (nodeIndex < 0 || !mainIndexes.length) continue;
       const mainIndex = mainIndexes.reduce((sum, index) => sum + index, 0) / mainIndexes.length;
       const direction: BranchSide | 0 = nodeIndex < mainIndex ? -1 : nodeIndex > mainIndex ? 1 : 0;
       if (!direction) continue;
-      const touchesMainLine = [...(familyNeighbors.get(id) ?? [])].some((neighbor) => mainLine.has(neighbor));
+      const touchesMain = [...(familyNeighbors.get(id) ?? [])].some((neighbor) => mainLine.has(neighbor));
       const depthWeight = Math.max(1, rowId + 1);
-      vote += direction * depthWeight * (touchesMainLine ? 12 : 1);
+      vote += direction * depthWeight * (touchesMain ? 12 : 1);
     }
-
-    // If a branch has no row where it can be compared with the main line, use a deterministic side.
-    // The choice itself matters less than keeping the whole connected branch on that same side.
     const fallbackId = Math.min(...component);
     const side: BranchSide = vote < 0 ? -1 : vote > 0 ? 1 : fallbackId % 2 === 0 ? -1 : 1;
     for (const id of component) sideByNode.set(id, side);
@@ -365,7 +408,6 @@ function stabilizeBranchSides(
     const neutral = row.filter((node) => !mainLine.has(node.personId) && !sideByNode.has(node.personId));
     rows.set(rowId, mainNodes.length ? [...left, ...neutral, ...mainNodes, ...right] : [...left, ...neutral, ...right]);
   }
-
   return sideByNode;
 }
 
@@ -387,47 +429,8 @@ function anchorFamilyPositions(
   const maxCenter = width - SIDE_PADDING - FAMILY_NODE_WIDTH / 2;
   const average = (values: number[]) => values.reduce((sum, value) => sum + value, 0) / values.length;
 
-  // Absolute X positions matter more than row order. Walk from descendants upward and place every off-main
-  // parent over the actual children it leads to. When a main-line person sits between a side ancestor and a side
-  // descendant, the off-main continuation below that exact main-line person becomes the anchor instead of the
-  // main spine's center. This is what keeps one lineage visually above the family block it belongs to.
-  for (let pass = 0; pass < 5; pass += 1) {
-    for (const rowId of [...sortedGenerations].reverse()) {
-      for (const node of rows.get(rowId) ?? []) {
-        if (mainLine.has(node.personId)) {
-          centerById.set(node.personId, mainCenter);
-          continue;
-        }
-        const directChildren = (children.get(node.personId) ?? []).filter((id) => visibleSet.has(id) && centerById.has(id));
-        if (!directChildren.length) continue;
-
-        const anchors: number[] = [];
-        for (const childId of directChildren) {
-          if (!mainLine.has(childId)) {
-            const center = centerById.get(childId);
-            if (center !== undefined) anchors.push(center);
-            continue;
-          }
-
-          const continuation = (children.get(childId) ?? [])
-            .filter((id) => visibleSet.has(id) && !mainLine.has(id) && centerById.has(id));
-          if (continuation.length) {
-            anchors.push(...continuation.map((id) => centerById.get(id)!).filter((value) => Number.isFinite(value)));
-          } else {
-            const center = centerById.get(childId);
-            if (center !== undefined) anchors.push(center);
-          }
-        }
-        if (anchors.length) centerById.set(node.personId, average(anchors));
-      }
-    }
-  }
-
-  // Re-pack every generation around those genealogical target centers. This preserves readable card spacing while
-  // allowing a branch to cross the old arbitrary side assignment when its real child anchor is on the other side.
-  for (const rowId of sortedGenerations) {
-    const row = rows.get(rowId) ?? [];
-    if (!row.length) continue;
+  const packRow = (row: FamilyLayoutNode[]) => {
+    if (!row.length) return;
     const mainNodes = row.filter((node) => mainLine.has(node.personId));
     const offMain = row.filter((node) => !mainLine.has(node.personId));
 
@@ -436,58 +439,73 @@ function anchorFamilyPositions(
       const right: FamilyLayoutNode[] = [];
       for (const node of offMain) {
         const desired = centerById.get(node.personId) ?? mainCenter;
-        const oldPosition = positions.get(node.personId);
-        const oldCenter = oldPosition ? oldPosition.x + FAMILY_NODE_WIDTH / 2 : desired;
-        const side = desired < mainCenter
-          ? -1
-          : desired > mainCenter
-            ? 1
-            : oldCenter < mainCenter
-              ? -1
-              : oldCenter > mainCenter
-                ? 1
-                : branchSides.get(node.personId) ?? 1;
+        const side: BranchSide = desired < mainCenter ? -1 : desired > mainCenter ? 1 : branchSides.get(node.personId) ?? 1;
         (side === -1 ? left : right).push(node);
       }
-
       left.sort((a, b) => (centerById.get(a.personId) ?? 0) - (centerById.get(b.personId) ?? 0) || a.personId - b.personId);
       right.sort((a, b) => (centerById.get(a.personId) ?? 0) - (centerById.get(b.personId) ?? 0) || a.personId - b.personId);
 
-      let rightmostLeft = mainCenter - minCenterGap;
+      let nearestLeft = mainCenter - minCenterGap;
       for (let index = left.length - 1; index >= 0; index -= 1) {
         const node = left[index];
-        const desired = Math.min(centerById.get(node.personId) ?? rightmostLeft, rightmostLeft);
-        centerById.set(node.personId, Math.max(minCenter, desired));
-        rightmostLeft = (centerById.get(node.personId) ?? desired) - minCenterGap;
+        const desired = Math.min(centerById.get(node.personId) ?? nearestLeft, nearestLeft);
+        const center = Math.max(minCenter, desired);
+        centerById.set(node.personId, center);
+        nearestLeft = center - minCenterGap;
       }
 
-      let leftmostRight = mainCenter + minCenterGap;
+      let nearestRight = mainCenter + minCenterGap;
       for (const node of right) {
-        const desired = Math.max(centerById.get(node.personId) ?? leftmostRight, leftmostRight);
-        centerById.set(node.personId, Math.min(maxCenter, desired));
-        leftmostRight = (centerById.get(node.personId) ?? desired) + minCenterGap;
+        const desired = Math.max(centerById.get(node.personId) ?? nearestRight, nearestRight);
+        const center = Math.min(maxCenter, desired);
+        centerById.set(node.personId, center);
+        nearestRight = center + minCenterGap;
       }
-
       for (const node of mainNodes) centerById.set(node.personId, mainCenter);
-    } else {
-      const ordered = [...offMain].sort((a, b) => (centerById.get(a.personId) ?? 0) - (centerById.get(b.personId) ?? 0) || a.personId - b.personId);
-      let previous = Number.NEGATIVE_INFINITY;
-      for (const node of ordered) {
-        const desired = Math.max(centerById.get(node.personId) ?? minCenter, previous + minCenterGap, minCenter);
-        centerById.set(node.personId, Math.min(maxCenter, desired));
-        previous = centerById.get(node.personId) ?? desired;
-      }
-      if (ordered.length) {
-        const overflow = (centerById.get(ordered[ordered.length - 1].personId) ?? maxCenter) - maxCenter;
-        if (overflow > 0) for (const node of ordered) centerById.set(node.personId, (centerById.get(node.personId) ?? 0) - overflow);
-      }
+      return;
     }
 
+    const ordered = [...offMain].sort((a, b) => (centerById.get(a.personId) ?? 0) - (centerById.get(b.personId) ?? 0) || a.personId - b.personId);
+    const packed = ordered.map((node) => Math.max(minCenter, Math.min(maxCenter, centerById.get(node.personId) ?? mainCenter)));
+    for (let index = 1; index < packed.length; index += 1) packed[index] = Math.max(packed[index], packed[index - 1] + minCenterGap);
+    for (let index = packed.length - 2; index >= 0; index -= 1) packed[index] = Math.min(packed[index], packed[index + 1] - minCenterGap);
+    if (packed.length && packed[0] < minCenter) {
+      const shift = minCenter - packed[0];
+      for (let index = 0; index < packed.length; index += 1) packed[index] += shift;
+    }
+    if (packed.length && packed[packed.length - 1] > maxCenter) {
+      const shift = packed[packed.length - 1] - maxCenter;
+      for (let index = 0; index < packed.length; index += 1) packed[index] -= shift;
+    }
+    ordered.forEach((node, index) => centerById.set(node.personId, packed[index]));
+  };
+
+  // Descendant positions must be final before their ancestors are anchored. Repeating the bottom-up pass lets a
+  // whole short branch follow a child that itself moved during collision packing.
+  for (let pass = 0; pass < 5; pass += 1) {
+    for (const rowId of [...sortedGenerations].reverse()) {
+      const row = rows.get(rowId) ?? [];
+      for (const node of row) {
+        if (mainLine.has(node.personId)) {
+          centerById.set(node.personId, mainCenter);
+          continue;
+        }
+        const childCenters = (children.get(node.personId) ?? [])
+          .filter((id) => visibleSet.has(id) && centerById.has(id))
+          .map((id) => centerById.get(id)!)
+          .filter((value) => Number.isFinite(value));
+        if (childCenters.length) centerById.set(node.personId, average(childCenters));
+      }
+      packRow(row);
+    }
+  }
+
+  for (const [rowId, row] of rows) {
     for (const node of row) {
       const position = positions.get(node.personId);
       const center = centerById.get(node.personId);
       if (!position || center === undefined) continue;
-      positions.set(node.personId, { ...position, x: center - FAMILY_NODE_WIDTH / 2 });
+      positions.set(node.personId, { ...position, x: center - FAMILY_NODE_WIDTH / 2, generation: rowId });
     }
   }
 }
@@ -502,16 +520,15 @@ export function layoutFamilyTree(
   const visibleNodes = allNodes.filter((node) => visibleIds.has(node.personId));
   const visibleSet = new Set(visibleNodes.map((node) => node.personId));
   const mainLine = new Set(mainLineIds);
-  const generation = alignShortDisconnectedBranches(baseGeneration, visibleSet, edges, mainLine);
+  const bottomAligned = alignShortDisconnectedBranches(baseGeneration, visibleSet, edges, mainLine);
+  const generation = compactSideAncestorsTowardAttachments(bottomAligned, visibleSet, edges, mainLine);
   const nodeById = new Map(visibleNodes.map((node) => [node.personId, node]));
   const rows = new Map<number, FamilyLayoutNode[]>();
   for (const node of visibleNodes) {
-    const row = generation.get(node.personId) ?? 0;
-    rows.set(row, [...(rows.get(row) ?? []), node]);
+    const rowId = generation.get(node.personId) ?? 0;
+    rows.set(rowId, [...(rows.get(rowId) ?? []), node]);
   }
-  // Relationship passes below decide the visual order. IDs are only a deterministic final fallback;
-  // names must never decide which side of the family a branch appears on.
-  for (const [row, values] of rows) rows.set(row, values.sort((a, b) => a.personId - b.personId));
+  for (const [rowId, row] of rows) rows.set(rowId, row.sort((a, b) => a.personId - b.personId));
 
   const parentEdges = edges.filter((edge) => visibleSet.has(edge.a) && visibleSet.has(edge.b) && isFamilyParentEdge(edge));
   const parents = new Map<number, number[]>();
@@ -521,11 +538,11 @@ export function layoutFamilyTree(
     children.set(edge.a, [...(children.get(edge.a) ?? []), edge.b]);
   }
   const familyNeighbors = adjacency(edges, visibleSet);
-
   const sortedGenerations = [...rows.keys()].sort((a, b) => a - b);
+
   const indexMap = () => {
     const result = new Map<number, number>();
-    for (const values of rows.values()) values.forEach((node, index) => result.set(node.personId, index));
+    for (const row of rows.values()) row.forEach((node, index) => result.set(node.personId, index));
     return result;
   };
   const score = (ids: Iterable<number> | undefined, indexes: Map<number, number>) => {
@@ -546,16 +563,11 @@ export function layoutFamilyTree(
     indexes: Map<number, number>,
     primary: Map<number, number[]>,
     secondary: Map<number, number[]>,
-  ) => {
-    return compareScore(score(primary.get(a.personId), indexes), score(primary.get(b.personId), indexes))
-      || compareScore(score(secondary.get(a.personId), indexes), score(secondary.get(b.personId), indexes))
-      || compareScore(score(familyNeighbors.get(a.personId), indexes), score(familyNeighbors.get(b.personId), indexes))
-      || a.personId - b.personId;
-  };
+  ) => compareScore(score(primary.get(a.personId), indexes), score(primary.get(b.personId), indexes))
+    || compareScore(score(secondary.get(a.personId), indexes), score(secondary.get(b.personId), indexes))
+    || compareScore(score(familyNeighbors.get(a.personId), indexes), score(familyNeighbors.get(b.personId), indexes))
+    || a.personId - b.personId;
 
-  // Repeated barycentric passes propagate the position of descendants upward through a whole side branch.
-  // Crucially, the main line is NOT reinserted into the middle of the row here. Its X coordinate is centered
-  // later, after genealogical ordering is complete, so a branch stays above the relatives it actually leads to.
   for (let pass = 0; pass < 7; pass += 1) {
     let indexes = indexMap();
     for (const rowId of sortedGenerations) {
@@ -573,10 +585,7 @@ export function layoutFamilyTree(
     }
   }
 
-  // A side branch must also stay intact when a person from the main line sits in its middle. The bridge-aware
-  // stabilizer keeps that local lineage together without allowing traversal along the whole main spine.
   const branchSides = stabilizeBranchSides(rows, generation, visibleSet, mainLine, familyNeighbors, parentEdges);
-
   const mergePressure = new Map<number, number>();
   for (const childId of visibleSet) {
     const parentIds = (parents.get(childId) ?? []).filter((id) => visibleSet.has(id));
@@ -584,72 +593,48 @@ export function layoutFamilyTree(
     for (const id of [...parentIds, childId]) mergePressure.set(id, (mergePressure.get(id) ?? 0) + parentIds.length - 1);
   }
 
-  const rowWidth = (row: FamilyLayoutNode[]) => {
-    if (row.length === 0) return 0;
-    let width = row.length * FAMILY_NODE_WIDTH;
-    for (let index = 0; index < row.length - 1; index += 1) {
-      const pressure = (mergePressure.get(row[index].personId) ?? 0) + (mergePressure.get(row[index + 1].personId) ?? 0);
-      width += BASE_COLUMN_GAP + Math.min(150, pressure * 30);
-      if (!mainLine.has(row[index].personId) && !mainLine.has(row[index + 1].personId)
-        && branchSides.get(row[index].personId) === -1 && branchSides.get(row[index + 1].personId) === 1) {
-        width += FAMILY_NODE_WIDTH;
-      }
-    }
-    return width;
+  const rowGap = (left: FamilyLayoutNode, right: FamilyLayoutNode) => {
+    const pressure = (mergePressure.get(left.personId) ?? 0) + (mergePressure.get(right.personId) ?? 0);
+    const sideGap = !mainLine.has(left.personId) && !mainLine.has(right.personId)
+      && branchSides.get(left.personId) === -1 && branchSides.get(right.personId) === 1
+      ? FAMILY_NODE_WIDTH
+      : 0;
+    return BASE_COLUMN_GAP + Math.min(150, pressure * 30) + sideGap;
   };
 
-  const widths = new Map<number, number>();
   let widest = 0;
   for (const rowId of sortedGenerations) {
-    const width = rowWidth(rows.get(rowId) ?? []);
-    widths.set(rowId, width);
-    widest = Math.max(widest, width);
+    const row = rows.get(rowId) ?? [];
+    let rowWidth = row.length * FAMILY_NODE_WIDTH;
+    for (let index = 0; index < row.length - 1; index += 1) rowWidth += rowGap(row[index], row[index + 1]);
+    widest = Math.max(widest, rowWidth);
   }
   const width = Math.max(1500, widest + SIDE_PADDING * 2);
+  const mainCenter = width / 2;
   const positions = new Map<number, FamilyTreePosition>();
 
   for (const rowId of sortedGenerations) {
     const row = rows.get(rowId) ?? [];
-    const currentWidth = widths.get(rowId) ?? 0;
-    let x = (width - currentWidth) / 2;
-    const rawPositions = new Map<number, number>();
+    if (!row.length) continue;
+    const mainNodes = row.filter((node) => mainLine.has(node.personId));
+    let x = SIDE_PADDING;
+    const raw = new Map<number, number>();
     for (let index = 0; index < row.length; index += 1) {
-      const node = row[index];
-      rawPositions.set(node.personId, x);
+      raw.set(row[index].personId, x);
       x += FAMILY_NODE_WIDTH;
-      if (index < row.length - 1) {
-        const nextNode = row[index + 1];
-        const pressure = (mergePressure.get(node.personId) ?? 0) + (mergePressure.get(nextNode.personId) ?? 0);
-        x += BASE_COLUMN_GAP + Math.min(150, pressure * 30);
-        if (!mainLine.has(node.personId) && !mainLine.has(nextNode.personId)
-          && branchSides.get(node.personId) === -1 && branchSides.get(nextNode.personId) === 1) {
-          x += FAMILY_NODE_WIDTH;
-        }
-      }
+      if (index < row.length - 1) x += rowGap(row[index], row[index + 1]);
     }
-
-    const mainInRow = row.filter((node) => mainLine.has(node.personId));
-    const rowMin = row.length ? Math.min(...row.map((node) => rawPositions.get(node.personId) ?? 0)) : 0;
-    const rowMax = row.length ? Math.max(...row.map((node) => (rawPositions.get(node.personId) ?? 0) + FAMILY_NODE_WIDTH)) : 0;
-    let shift = 0;
-    if (mainInRow.length) {
-      const currentCenter = mainInRow.reduce((sum, node) => sum + (rawPositions.get(node.personId) ?? 0) + FAMILY_NODE_WIDTH / 2, 0) / mainInRow.length;
-      shift = width / 2 - currentCenter;
-      shift = Math.max(SIDE_PADDING - rowMin, Math.min(shift, width - SIDE_PADDING - rowMax));
-    } else if (row.length) {
-      const rowSides = new Set(row.map((node) => branchSides.get(node.personId)).filter((side): side is BranchSide => Boolean(side)));
-      if (rowSides.size === 1) {
-        const onlySide = [...rowSides][0];
-        const desired = onlySide === -1
-          ? width / 2 - BASE_COLUMN_GAP - rowMax
-          : width / 2 + BASE_COLUMN_GAP - rowMin;
-        shift = Math.max(SIDE_PADDING - rowMin, Math.min(desired, width - SIDE_PADDING - rowMax));
-      }
+    const rowMin = Math.min(...row.map((node) => raw.get(node.personId) ?? 0));
+    const rowMax = Math.max(...row.map((node) => (raw.get(node.personId) ?? 0) + FAMILY_NODE_WIDTH));
+    let shift = (width - (rowMax - rowMin)) / 2 - rowMin;
+    if (mainNodes.length) {
+      const currentMainCenter = mainNodes.reduce((sum, node) => sum + (raw.get(node.personId) ?? 0) + FAMILY_NODE_WIDTH / 2, 0) / mainNodes.length;
+      shift = mainCenter - currentMainCenter;
     }
-
+    shift = Math.max(SIDE_PADDING - rowMin, Math.min(shift, width - SIDE_PADDING - rowMax));
     for (const node of row) {
       positions.set(node.personId, {
-        x: (rawPositions.get(node.personId) ?? 0) + shift,
+        x: (raw.get(node.personId) ?? 0) + shift,
         y: TOP_PADDING + rowId * FAMILY_ROW_GAP,
         generation: rowId,
       });
