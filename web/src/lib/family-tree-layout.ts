@@ -65,62 +65,73 @@ function parentMaps(nodes: FamilyLayoutNode[], edges: FamilyLayoutEdge[]) {
   return { ids, parentEdges, parents, children };
 }
 
-function sameGenerationUnion(ids: Set<number>, edges: FamilyLayoutEdge[], parentEdges: FamilyLayoutEdge[]) {
-  const union = new UnionFind([...ids]);
-  for (const edge of edges) {
-    if (ids.has(edge.a) && ids.has(edge.b) && SAME_GENERATION_CODES.has(edge.code)) union.union(edge.a, edge.b);
-  }
-
-  const parentsByChild = new Map<number, number[]>();
-  for (const edge of parentEdges) parentsByChild.set(edge.b, [...(parentsByChild.get(edge.b) ?? []), edge.a]);
-  for (const parentIds of parentsByChild.values()) {
-    for (let index = 1; index < parentIds.length; index += 1) union.union(parentIds[0], parentIds[index]);
-  }
-  return union;
-}
-
 export function buildFamilyGenerations(nodes: FamilyLayoutNode[], edges: FamilyLayoutEdge[]) {
   const { ids, parentEdges } = parentMaps(nodes, edges);
-  const union = sameGenerationUnion(ids, edges, parentEdges);
-  const groups = new Set<number>();
-  for (const id of ids) groups.add(union.find(id));
-
   const outgoing = new Map<number, Set<number>>();
   const indegree = new Map<number, number>();
-  for (const group of groups) indegree.set(group, 0);
+  for (const id of ids) indegree.set(id, 0);
 
   for (const edge of parentEdges) {
-    const from = union.find(edge.a);
-    const to = union.find(edge.b);
-    if (from === to) continue;
-    const targets = outgoing.get(from) ?? new Set<number>();
-    if (!targets.has(to)) {
-      targets.add(to);
-      outgoing.set(from, targets);
-      indegree.set(to, (indegree.get(to) ?? 0) + 1);
+    if (edge.a === edge.b) continue;
+    const targets = outgoing.get(edge.a) ?? new Set<number>();
+    if (!targets.has(edge.b)) {
+      targets.add(edge.b);
+      outgoing.set(edge.a, targets);
+      indegree.set(edge.b, (indegree.get(edge.b) ?? 0) + 1);
     }
   }
 
-  const generationByGroup = new Map<number, number>();
-  const queue = [...groups].filter((group) => (indegree.get(group) ?? 0) === 0).sort((a, b) => a - b);
-  for (const group of queue) generationByGroup.set(group, 0);
+  // Parent→child is authoritative for vertical depth. Lateral relations such as spouse/sibling must never collapse
+  // generations or create an artificial cycle before the genealogy has been laid out.
+  const generation = new Map<number, number>();
+  const queue = [...ids].filter((id) => (indegree.get(id) ?? 0) === 0).sort((a, b) => a - b);
+  for (const id of queue) generation.set(id, 0);
 
   let cursor = 0;
   while (cursor < queue.length) {
-    const group = queue[cursor++];
-    const nextGeneration = (generationByGroup.get(group) ?? 0) + 1;
-    for (const target of [...(outgoing.get(group) ?? [])].sort((a, b) => a - b)) {
-      generationByGroup.set(target, Math.max(generationByGroup.get(target) ?? 0, nextGeneration));
-      indegree.set(target, (indegree.get(target) ?? 1) - 1);
-      if ((indegree.get(target) ?? 0) === 0) queue.push(target);
+    const id = queue[cursor++];
+    const nextGeneration = (generation.get(id) ?? 0) + 1;
+    for (const child of [...(outgoing.get(id) ?? [])].sort((a, b) => a - b)) {
+      generation.set(child, Math.max(generation.get(child) ?? 0, nextGeneration));
+      indegree.set(child, (indegree.get(child) ?? 1) - 1);
+      if ((indegree.get(child) ?? 0) === 0) queue.push(child);
     }
   }
 
-  for (const group of groups) if (!generationByGroup.has(group)) generationByGroup.set(group, 0);
+  // Keep malformed legacy cycles renderable, but exclude unresolved cycle nodes from the alignment propagation below.
+  const resolved = new Set(generation.keys());
+  for (const id of ids) if (!generation.has(id)) generation.set(id, 0);
 
-  const result = new Map<number, number>();
-  for (const id of ids) result.set(id, generationByGroup.get(union.find(id)) ?? 0);
-  return result;
+  const parentsByChild = new Map<number, number[]>();
+  for (const edge of parentEdges) {
+    if (!resolved.has(edge.a) || !resolved.has(edge.b)) continue;
+    parentsByChild.set(edge.b, [...(parentsByChild.get(edge.b) ?? []), edge.a]);
+  }
+
+  // Co-parents should share a compatible parent row. Raise the shallower parent to the deepest co-parent and then
+  // propagate that lift down the acyclic parent graph. This keeps family units aligned without letting spouse/sibling
+  // links override real ancestry.
+  for (let pass = 0; pass < ids.size; pass += 1) {
+    let changed = false;
+    for (const parentIds of parentsByChild.values()) {
+      const target = Math.max(...parentIds.map((id) => generation.get(id) ?? 0));
+      for (const parentId of parentIds) {
+        if ((generation.get(parentId) ?? 0) >= target) continue;
+        generation.set(parentId, target);
+        changed = true;
+      }
+    }
+    for (const edge of parentEdges) {
+      if (!resolved.has(edge.a) || !resolved.has(edge.b)) continue;
+      const required = (generation.get(edge.a) ?? 0) + 1;
+      if ((generation.get(edge.b) ?? 0) >= required) continue;
+      generation.set(edge.b, required);
+      changed = true;
+    }
+    if (!changed) break;
+  }
+
+  return generation;
 }
 
 export function findFamilyDescendantLine(nodes: FamilyLayoutNode[], edges: FamilyLayoutEdge[], startPersonId: number) {
@@ -280,14 +291,15 @@ function compactSideAncestorsTowardAttachments(
   const result = new Map(generation);
   const parentEdges = edges.filter((edge) => visibleIds.has(edge.a) && visibleIds.has(edge.b) && isFamilyParentEdge(edge));
 
-  // Same-generation links may keep a side family together, but a lateral link to the selected main line must not
-  // freeze that side ancestry at an early generation. Parent→child depth is the stronger genealogical constraint.
+  // Lateral links only bundle nodes that are already genealogically compatible. A cross-main or cross-generation
+  // spouse/sibling link must not pin a side ancestry at the wrong height.
   const union = new UnionFind([...visibleIds]);
   for (const edge of edges) {
     if (!visibleIds.has(edge.a) || !visibleIds.has(edge.b) || !SAME_GENERATION_CODES.has(edge.code)) continue;
     const aOnMain = mainLine.has(edge.a);
     const bOnMain = mainLine.has(edge.b);
     if (aOnMain !== bOnMain) continue;
+    if ((result.get(edge.a) ?? 0) !== (result.get(edge.b) ?? 0)) continue;
     union.union(edge.a, edge.b);
   }
 
