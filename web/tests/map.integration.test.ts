@@ -66,7 +66,20 @@ dbTest("map markers use canonical person+n_id and linked person visibility remai
   const {project_id:projectId,map_id:mapId}=map.rows[0];
   const player=await pool.query<{user_id:number}>("SELECT user_id FROM users WHERE camp_id=$1 AND active=true ORDER BY user_id LIMIT 1",[projectId]);
   assert.equal(player.rowCount,1);
-  const person=await pool.query<{n_id:number;char_id:number}>(`SELECT n.n_id,c.char_id FROM npcs n JOIN charakters c ON c.n_id=n.n_id WHERE n.camp_id=$1 AND n.archived_at IS NULL AND c.char_id<>n.n_id ORDER BY n.n_id LIMIT 1`,[projectId]);
+  const playerId=player.rows[0].user_id;
+  const person=await pool.query<{n_id:number;char_id:number}>(`
+    SELECT n.n_id,c.char_id
+      FROM npcs n
+      JOIN charakters c ON c.n_id=n.n_id
+     WHERE n.camp_id=$1
+       AND n.archived_at IS NULL
+       AND c.char_id<>n.n_id
+       AND NOT EXISTS(
+         SELECT 1 FROM entity_visibility ev
+          WHERE ev.project_id=$1 AND ev.player_id=$2 AND ev.entity_type='person' AND ev.entity_id=n.n_id
+       )
+     ORDER BY n.n_id
+     LIMIT 1`,[projectId,playerId]);
   assert.equal(person.rowCount,1);
   const {n_id:nId,char_id:charId}=person.rows[0];
   assert.notEqual(nId,charId,"fixture must prove subtype ID differs from canonical person ID");
@@ -80,10 +93,10 @@ dbTest("map markers use canonical person+n_id and linked person visibility remai
     assert.equal(stored.rows[0].entity_type,"person");
     assert.equal(Number(stored.rows[0].entity_id),nId);
 
-    await pool.query(`INSERT INTO entity_visibility(project_id,player_id,entity_type,entity_id,visible) VALUES($1,$2,'person',$3,false) ON CONFLICT(project_id,player_id,entity_type,entity_id) DO UPDATE SET visible=false,updated_at=now()`,[projectId,player.rows[0].user_id,nId]);
-    assert.ok(!(await visibleMarkerIds(pool,projectId,mapId,player.rows[0].user_id)).includes(markerId));
+    await pool.query(`INSERT INTO entity_visibility(project_id,player_id,entity_type,entity_id,visible) VALUES($1,$2,'person',$3,false)`,[projectId,playerId,nId]);
+    assert.ok(!(await visibleMarkerIds(pool,projectId,mapId,playerId)).includes(markerId));
   }finally{
-    await pool.query("DELETE FROM entity_visibility WHERE project_id=$1 AND player_id=$2 AND entity_type='person' AND entity_id=$3",[projectId,player.rows[0].user_id,nId]);
+    await pool.query("DELETE FROM entity_visibility WHERE project_id=$1 AND player_id=$2 AND entity_type='person' AND entity_id=$3",[projectId,playerId,nId]);
     await pool.query("DELETE FROM map_markers WHERE project_id=$1 AND map_id=$2 AND marker_id=$3",[projectId,mapId,markerId]);
   }
 });
