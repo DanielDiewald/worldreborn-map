@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireAdminSession } from "@/lib/auth/session";
-import { addFamilyTreeMember, createFamilyTree, refreshFamilyTreeMembers, removeFamilyTreeMember } from "@/lib/entities/family-trees";
+import { addFamilyTreeMember, createFamilyTree, refreshFamilyTreeMembers, removeFamilyTreeMember, updateFamilyTreeMainLine } from "@/lib/entities/family-trees";
 
 function text(formData:FormData,key:string){const value=formData.get(key);return typeof value==="string"&&value.trim()?value.trim():undefined;}
 function positive(value:FormDataEntryValue|null){if(typeof value!=="string"||!value.trim())return undefined;const parsed=Number.parseInt(value,10);return Number.isSafeInteger(parsed)&&parsed>0?parsed:undefined;}
@@ -15,3 +15,11 @@ export async function addFamilyTreeMemberAction(projectId:number,treeId:number,f
 export async function removeFamilyTreeMemberAction(projectId:number,treeId:number,personId:number){await requireAdminSession();await removeFamilyTreeMember(projectId,treeId,personId);revalidatePath(`/admin/projects/${projectId}/family-trees/${treeId}`);}
 
 export async function refreshFamilyTreeAction(projectId:number,treeId:number){await requireAdminSession();await refreshFamilyTreeMembers(projectId,treeId);revalidatePath(`/admin/projects/${projectId}/family-trees/${treeId}`);}
+
+export async function updateFamilyTreeMainLineAction(projectId:number,treeId:number,formData:FormData){
+  await requireAdminSession();
+  const raw=formData.get("personIds");
+  const personIds=typeof raw==="string"&&raw.trim()?raw.split(",").map((value)=>Number.parseInt(value,10)).filter((value)=>Number.isSafeInteger(value)&&value>0):[];
+  await updateFamilyTreeMainLine(projectId,treeId,personIds);
+  revalidatePath(`/admin/projects/${projectId}/family-trees/${treeId}`);
+}
