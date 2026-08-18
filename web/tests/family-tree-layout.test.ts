@@ -199,6 +199,32 @@ test("side ancestors are horizontally anchored above the descendant family block
   assert.ok(Math.abs(ancestorCenter - childCenter) <= 1);
 });
 
+test("short side ancestry feeding a later main-line generation starts directly before its attachment", () => {
+  const compactPeople = [
+    { personId: 100, name: "Main 1" },
+    { personId: 101, name: "Main 2" },
+    { personId: 102, name: "Main 3" },
+    { personId: 103, name: "Main 4" },
+    { personId: 104, name: "Main 5" },
+    { personId: 900, name: "Short side ancestor" },
+    { personId: 901, name: "Short side parent" },
+  ];
+  const compactEdges = [
+    { a: 100, b: 101, code: "parent", directed: true },
+    { a: 101, b: 102, code: "parent", directed: true },
+    { a: 102, b: 103, code: "parent", directed: true },
+    { a: 103, b: 104, code: "parent", directed: true },
+    { a: 900, b: 901, code: "parent", directed: true },
+    { a: 901, b: 104, code: "parent", directed: true },
+  ];
+  const layout = layoutFamilyTree(compactPeople, compactEdges, new Set(compactPeople.map((person) => person.personId)), [100, 101, 102, 103, 104]);
+  assert.equal(layout.positions.get(104)?.generation, 4);
+  assert.equal(layout.positions.get(901)?.generation, 3);
+  assert.equal(layout.positions.get(900)?.generation, 2);
+  assert.equal((layout.positions.get(104)?.y ?? 0) - (layout.positions.get(901)?.y ?? 0), 310);
+  assert.equal((layout.positions.get(901)?.y ?? 0) - (layout.positions.get(900)?.y ?? 0), 310);
+});
+
 test("overlapping parent routes get separate lanes so unrelated families never look connected", () => {
   const lanes = assignFamilyParentRouteLanes([
     { childId: 10, generation: 5, startX: 100, endX: 900 },
