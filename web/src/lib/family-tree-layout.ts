@@ -24,6 +24,10 @@ export function isFamilyPartnerEdge(edge: FamilyLayoutEdge) {
   return !edge.directed && FAMILY_PARTNER_CODES.has(edge.code);
 }
 
+export function isFamilyAncestorEdge(edge: FamilyLayoutEdge) {
+  return edge.directed && edge.code === "ancestor";
+}
+
 export function isFamilyStructureEdge(edge: FamilyLayoutEdge) {
   return isFamilyParentEdge(edge) || SAME_GENERATION_CODES.has(edge.code);
 }
@@ -274,9 +278,9 @@ export function resolveFamilyMainLine(
   focusPersonId?: number | null,
 ) {
   const ids = new Set(nodes.map((node) => node.personId));
-  const parentPairs = new Set(edges.filter(isFamilyParentEdge).map((edge) => `${edge.a}:${edge.b}`));
+  const successionPairs = new Set(edges.filter((edge) => isFamilyParentEdge(edge) || isFamilyAncestorEdge(edge)).map((edge) => `${edge.a}:${edge.b}`));
   const preferred = [...new Set(preferredIds ?? [])].filter((id) => ids.has(id));
-  if (preferred.length > 0 && preferred.every((id, index) => index === 0 || parentPairs.has(`${preferred[index - 1]}:${id}`))) return preferred;
+  if (preferred.length > 0 && preferred.every((id, index) => index === 0 || successionPairs.has(`${preferred[index - 1]}:${id}`))) return preferred;
   return findFamilyMainLine(nodes, edges, focusPersonId);
 }
 
@@ -538,6 +542,58 @@ function alignSameGenerationFamilyComponents(
       if (!shift) continue;
       for (const id of members.get(root) ?? []) result.set(id, (result.get(id) ?? 0) + shift);
     }
+  }
+
+  const minimum = Math.min(0, ...[...visibleIds].map((id) => result.get(id) ?? 0));
+  if (minimum < 0) for (const id of visibleIds) result.set(id, (result.get(id) ?? 0) - minimum);
+  return result;
+}
+
+function enforceAncestorGenerationOrdering(
+  generation: Map<number, number>,
+  visibleIds: Set<number>,
+  edges: FamilyLayoutEdge[],
+  mainLine: Set<number>,
+) {
+  const ancestorEdges = edges.filter((edge) => visibleIds.has(edge.a) && visibleIds.has(edge.b) && isFamilyAncestorEdge(edge));
+  if (!ancestorEdges.length) return generation;
+
+  // An ancestor edge is deliberately weaker than Parent→Child: it only says that A must
+  // be above B. It may skip any number of generations. We move whole structural family
+  // components so spouse/sibling alignment and direct parent distances stay intact.
+  const structureUnion = new UnionFind([...visibleIds]);
+  for (const edge of edges) {
+    if (!visibleIds.has(edge.a) || !visibleIds.has(edge.b) || !isFamilyStructureEdge(edge)) continue;
+    structureUnion.union(edge.a, edge.b);
+  }
+  const members = new Map<number, number[]>();
+  for (const id of visibleIds) {
+    const root = structureUnion.find(id);
+    members.set(root, [...(members.get(root) ?? []), id]);
+  }
+  const rootHasMain = (root: number) => (members.get(root) ?? []).some((id) => mainLine.has(id));
+  const result = new Map(generation);
+  const shiftRoot = (root: number, delta: number) => {
+    if (!delta) return;
+    for (const id of members.get(root) ?? []) result.set(id, (result.get(id) ?? 0) + delta);
+  };
+
+  for (let pass = 0; pass < ancestorEdges.length + members.size; pass += 1) {
+    let changed = false;
+    for (const edge of ancestorEdges) {
+      const ancestorGeneration = result.get(edge.a) ?? 0;
+      const descendantGeneration = result.get(edge.b) ?? 0;
+      if (ancestorGeneration < descendantGeneration) continue;
+      const ancestorRoot = structureUnion.find(edge.a);
+      const descendantRoot = structureUnion.find(edge.b);
+      if (ancestorRoot === descendantRoot) continue;
+      const required = ancestorGeneration - descendantGeneration + 1;
+
+      if (rootHasMain(descendantRoot) && !rootHasMain(ancestorRoot)) shiftRoot(ancestorRoot, -required);
+      else shiftRoot(descendantRoot, required);
+      changed = true;
+    }
+    if (!changed) break;
   }
 
   const minimum = Math.min(0, ...[...visibleIds].map((id) => result.get(id) ?? 0));
@@ -827,7 +883,8 @@ export function layoutFamilyTree(
   const cohortAligned = alignSideComponentsToMainBirthCohorts(allNodes, structuralEdges, bottomAligned, visibleSet, mainLine);
   const bottomUp = compactGenerationsBottomUp(cohortAligned, visibleSet, structuralEdges, mainLine);
   const parentAligned = enforceAdjacentParentGenerations(bottomUp, visibleSet, structuralEdges, mainLine);
-  const generation = alignSameGenerationFamilyComponents(parentAligned, visibleSet, structuralEdges, mainLine);
+  const sameGenerationAligned = alignSameGenerationFamilyComponents(parentAligned, visibleSet, structuralEdges, mainLine);
+  const generation = enforceAncestorGenerationOrdering(sameGenerationAligned, visibleSet, edges, mainLine);
   const nodeById = new Map(visibleNodes.map((node) => [node.personId, node]));
 
   const occupiedLogicalGenerations = [...new Set(visibleNodes.map((node) => generation.get(node.personId) ?? 0))].sort((a, b) => a - b);
