@@ -66,7 +66,7 @@ jobs:
       - run: npm ci
       - name: Require supplied legacy dump
         run: |
-          if [ ! -f ../worldreborn-before-foundation.dump ]; then
+          if [ ! -f worldreborn-before-foundation.dump ]; then
             echo "::error::Required legacy dump worldreborn-before-foundation.dump is not present in the repository checkout. Restore/migration acceptance cannot be verified without the supplied archive."
             exit 1
           fi
@@ -74,7 +74,7 @@ jobs:
         run: |
           CID="$(docker ps --filter ancestor=postgres:17 --format '{{.ID}}' | head -n 1)"
           test -n "$CID"
-          docker exec -i "$CID" pg_restore -U worldreborn -d worldreborn --no-owner --no-privileges < ../worldreborn-before-foundation.dump
+          docker exec -i "$CID" pg_restore -U worldreborn -d worldreborn --no-owner --no-privileges < worldreborn-before-foundation.dump
       - name: Verify legacy baseline before migrations
         run: |
           CID="$(docker ps --filter ancestor=postgres:17 --format '{{.ID}}' | head -n 1)"
