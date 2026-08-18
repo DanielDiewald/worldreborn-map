@@ -280,12 +280,15 @@ function compactSideAncestorsTowardAttachments(
   const result = new Map(generation);
   const parentEdges = edges.filter((edge) => visibleIds.has(edge.a) && visibleIds.has(edge.b) && isFamilyParentEdge(edge));
 
-  // For vertical compaction only explicit same-generation relations are bundled. Co-parents are deliberately NOT
-  // unioned here: one co-parent may be on the fixed main line while the other belongs to a short side ancestry that
-  // must still be allowed to move down to the child's actual generation.
+  // Same-generation links may keep a side family together, but a lateral link to the selected main line must not
+  // freeze that side ancestry at an early generation. Parent→child depth is the stronger genealogical constraint.
   const union = new UnionFind([...visibleIds]);
   for (const edge of edges) {
-    if (visibleIds.has(edge.a) && visibleIds.has(edge.b) && SAME_GENERATION_CODES.has(edge.code)) union.union(edge.a, edge.b);
+    if (!visibleIds.has(edge.a) || !visibleIds.has(edge.b) || !SAME_GENERATION_CODES.has(edge.code)) continue;
+    const aOnMain = mainLine.has(edge.a);
+    const bOnMain = mainLine.has(edge.b);
+    if (aOnMain !== bOnMain) continue;
+    union.union(edge.a, edge.b);
   }
 
   const members = new Map<number, number[]>();
