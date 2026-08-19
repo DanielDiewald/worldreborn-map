@@ -107,7 +107,7 @@ function sharedRuns(ring: MapCoordinate[], shared: Set<string>, tolerance: numbe
   if (!matches.some(Boolean)) return [];
   if (matches.every(Boolean)) return [{ start: 0, count: n, points: closeRing(open), length: polylineLength(closeRing(open)) }];
 
-  let breakAt = matches.findIndex((value) => !value);
+  const breakAt = matches.findIndex((value) => !value);
   const runs: Run[] = [];
   let offset = 1;
   while (offset <= n) {
@@ -139,7 +139,7 @@ export function findSharedPoliticalBorder(a: JsonMapGeometry, b: JsonMapGeometry
     const aKeys = segmentKeys(aOuter.ring, safeTolerance);
     for (const bOuter of outerRings(b)) {
       const bKeys = segmentKeys(bOuter.ring, safeTolerance);
-      const shared = new Set([...aKeys].filter((key) => bKeys.has(key)));
+      const shared = new Set([...aKeys].filter((entry) => bKeys.has(entry)));
       if (!shared.size) continue;
       const aRuns = sharedRuns(aOuter.ring, shared, safeTolerance);
       const bRuns = sharedRuns(bOuter.ring, shared, safeTolerance);
@@ -331,6 +331,52 @@ function randomizePath(base: MapCoordinate[], roughness: number, detail: number,
   });
 }
 
+function removeShortSegmentsOpen(points: MapCoordinate[], minLength: number) {
+  if (points.length <= 2) return points.map((point) => [...point] as MapCoordinate);
+  const result: MapCoordinate[] = [[...points[0]] as MapCoordinate];
+  for (let index = 1; index < points.length - 1; index += 1) {
+    if (distance(result[result.length - 1], points[index]) >= minLength) result.push([...points[index]] as MapCoordinate);
+  }
+  result.push([...points[points.length - 1]] as MapCoordinate);
+  return result;
+}
+
+function removeTinySpikesOpen(points: MapCoordinate[], spanLimit: number, deviationLimit: number) {
+  let current = points.map((point) => [...point] as MapCoordinate);
+  for (let pass = 0; pass < 6 && current.length > 3; pass += 1) {
+    const next: MapCoordinate[] = [[...current[0]] as MapCoordinate];
+    let changed = false;
+    for (let index = 1; index < current.length - 1; index += 1) {
+      const a = next[next.length - 1], b = current[index], c = current[index + 1];
+      const legs = distance(a, b) + distance(b, c);
+      const direct = distance(a, c);
+      const deviation = perpendicularDistance(b, a, c);
+      const backtrack = direct > 0 ? legs / direct : Number.POSITIVE_INFINITY;
+      const tinyHook = legs <= spanLimit && deviation <= deviationLimit;
+      const sharpMicroTurn = legs <= spanLimit * 1.45 && backtrack >= 1.35 && deviation <= deviationLimit * 1.5;
+      if (tinyHook || sharpMicroTurn) { changed = true; continue; }
+      next.push([...b] as MapCoordinate);
+    }
+    next.push([...current[current.length - 1]] as MapCoordinate);
+    current = next;
+    if (!changed) break;
+  }
+  return current;
+}
+
+function postProcessGeneratedBorder(points: MapCoordinate[], referenceLength: number, roughness: number, detail: number) {
+  if (points.length <= 2) return points;
+  const nominalStep = referenceLength / Math.max(16, 28 + detail * 62);
+  let current = removeShortSegmentsOpen(points, nominalStep * (0.22 + roughness * 0.08));
+  current = removeTinySpikesOpen(current, nominalStep * (2.2 + detail * 0.8), nominalStep * (0.7 + roughness * 0.35));
+  const smoothingIterations = roughness > 0.82 && current.length > 5 ? 2 : 1;
+  current = chaikinOpen(current, smoothingIterations, 0.22 + detail * 0.18);
+  current = resamplePolyline(current, Math.max(14, Math.round(18 + detail * 58)));
+  current[0] = [...points[0]] as MapCoordinate;
+  current[current.length - 1] = [...points[points.length - 1]] as MapCoordinate;
+  return current;
+}
+
 function buildResult(a: JsonMapGeometry, b: JsonMapGeometry, shared: SharedPoliticalBorder, border: MapCoordinate[]): BorderShapeResult {
   const aGeometry = replaceSharedRun(a, shared.a, border);
   const bGeometry = replaceSharedRun(b, shared.b, border);
@@ -366,9 +412,10 @@ export function randomizeSharedPoliticalBorder(a: JsonMapGeometry, b: JsonMapGeo
   const base = chaikinOpen(simplified, 2, 0.72);
 
   for (const scale of [1, 0.78, 0.58, 0.42, 0.28]) {
-    const randomBorder = randomizePath(base, roughness, detail, seed, scale);
-    if (!pathInsideUnion(randomBorder, a, b)) continue;
-    return buildResult(a, b, shared, randomBorder);
+    const rawBorder = randomizePath(base, roughness, detail, seed, scale);
+    const cleanedBorder = postProcessGeneratedBorder(rawBorder, shared.length, roughness, detail);
+    if (pathInsideUnion(cleanedBorder, a, b)) return buildResult(a, b, shared, cleanedBorder);
+    if (pathInsideUnion(rawBorder, a, b)) return buildResult(a, b, shared, rawBorder);
   }
   return null;
 }
