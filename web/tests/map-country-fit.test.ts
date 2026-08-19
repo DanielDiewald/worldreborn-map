@@ -38,6 +38,16 @@ test("new neighboring country automatically removes already occupied country are
   assert.equal(contains(result.geometry, [90, 40]), true);
 });
 
+test("authoritative repeated fit keeps thin overlap remnants out while preserving free area", () => {
+  const preview = fitCountryAroundExistingCountries(subject, [existing], 1200);
+  assert.ok(preview);
+  const authoritative = fitCountryAroundExistingCountries(preview.geometry, [existing], 1800);
+  assert.ok(authoritative);
+  assert.ok(authoritative.keptPixels > 0);
+  assert.equal(contains(authoritative.geometry, [20, 40]), false);
+  assert.equal(contains(authoritative.geometry, [90, 40]), true);
+});
+
 test("country fit leaves geometry untouched when no existing country intersects", () => {
   const farAway = { type: "Polygon", coordinates: [[[300, 0], [340, 0], [340, 40], [300, 40], [300, 0]]] };
   const result = fitCountryAroundExistingCountries(subject, [farAway], 900);
