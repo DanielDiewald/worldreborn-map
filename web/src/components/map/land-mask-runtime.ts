@@ -6,7 +6,7 @@ function layerUrl(layer: WorldMapLayer) {
   return layer.source_url;
 }
 
-async function blobToImage(blob: Blob) {
+async function blobToImage(blob: Blob): Promise<ImageBitmap | HTMLImageElement> {
   if (typeof createImageBitmap === "function") return createImageBitmap(blob);
   const objectUrl = URL.createObjectURL(blob);
   try {
@@ -32,8 +32,8 @@ export async function loadLandMaskGuide(layer: WorldMapLayer | undefined, extent
   if (!response.ok) throw new Error("Rock-3-Land-Mask konnte nicht geladen werden.");
   const blob = await response.blob();
   const image = await blobToImage(blob);
-  const sourceWidth = "naturalWidth" in image ? image.naturalWidth : image.width;
-  const sourceHeight = "naturalHeight" in image ? image.naturalHeight : image.height;
+  const sourceWidth = image instanceof HTMLImageElement ? image.naturalWidth : image.width;
+  const sourceHeight = image instanceof HTMLImageElement ? image.naturalHeight : image.height;
   if (!sourceWidth || !sourceHeight) throw new Error("Rock-3-Land-Mask hat keine gültigen Bildmaße.");
 
   const scale = Math.min(1, maxWidth / sourceWidth);
@@ -45,8 +45,8 @@ export async function loadLandMaskGuide(layer: WorldMapLayer | undefined, extent
   const context = canvas.getContext("2d", { willReadFrequently: true });
   if (!context) throw new Error("Land-Mask-Analyse wird von diesem Browser nicht unterstützt.");
   context.imageSmoothingEnabled = false;
-  context.drawImage(image as CanvasImageSource, 0, 0, width, height);
+  context.drawImage(image, 0, 0, width, height);
   const pixels = context.getImageData(0, 0, width, height);
-  if ("close" in image && typeof image.close === "function") image.close();
+  if (typeof ImageBitmap !== "undefined" && image instanceof ImageBitmap) image.close();
   return buildLandMaskGuide(pixels.data, width, height, extent);
 }
