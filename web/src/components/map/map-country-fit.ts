@@ -38,17 +38,18 @@ function polygons(geometry: JsonMapGeometry): Polygon[] {
   if (geometry.type === "MultiPolygon" && Array.isArray(geometry.coordinates)) return geometry.coordinates.map(readPolygon).filter((value): value is Polygon => Boolean(value));
   return [];
 }
-function extentFor(geometries: JsonMapGeometry[]): MapExtent | null {
+function geometryExtent(geometry: JsonMapGeometry): MapExtent | null {
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const geometry of geometries) for (const polygon of polygons(geometry)) for (const ring of polygon) for (const [x, y] of ring) {
+  for (const polygon of polygons(geometry)) for (const ring of polygon) for (const [x, y] of ring) {
     minX = Math.min(minX, x); minY = Math.min(minY, y); maxX = Math.max(maxX, x); maxY = Math.max(maxY, y);
   }
   return Number.isFinite(minX) ? [minX, minY, maxX, maxY] : null;
 }
-function createGrid(subject: JsonMapGeometry, blockers: JsonMapGeometry[], maxSide: number): Grid | null {
-  const extent = extentFor([subject, ...blockers]); if (!extent) return null;
+function extentIntersects(a: MapExtent, b: MapExtent) { return a[0] <= b[2] && a[2] >= b[0] && a[1] <= b[3] && a[3] >= b[1]; }
+function createGrid(subject: JsonMapGeometry, maxSide: number): Grid | null {
+  const extent = geometryExtent(subject); if (!extent) return null;
   const rawWidth = Math.max(1e-6, extent[2] - extent[0]), rawHeight = Math.max(1e-6, extent[3] - extent[1]);
-  const padX = rawWidth * 0.004 + 1e-6, padY = rawHeight * 0.004 + 1e-6;
+  const padX = rawWidth * 0.006 + 1e-6, padY = rawHeight * 0.006 + 1e-6;
   const padded: MapExtent = [extent[0] - padX, extent[1] - padY, extent[2] + padX, extent[3] + padY];
   const aspect = rawWidth / rawHeight;
   const safeMax = clamp(Math.round(maxSide), 600, 3600);
@@ -173,9 +174,14 @@ function groupRings(rings: Ring[]) {
 
 export function fitCountryAroundExistingCountries(subject: JsonMapGeometry, blockers: JsonMapGeometry[], maxSide = 2600): CountryFitResult | null {
   if (!["Polygon", "MultiPolygon"].includes(subject.type)) return null;
-  const validBlockers = blockers.filter((geometry) => ["Polygon", "MultiPolygon"].includes(geometry.type));
+  const subjectExtent = geometryExtent(subject); if (!subjectExtent) return null;
+  const validBlockers = blockers.filter((geometry) => {
+    if (!["Polygon", "MultiPolygon"].includes(geometry.type)) return false;
+    const extent = geometryExtent(geometry);
+    return Boolean(extent && extentIntersects(subjectExtent, extent));
+  });
   if (!validBlockers.length) return { geometry: subject, keptPixels: 0, removedPixels: 0, grid: { width: 0, height: 0 } };
-  const grid = createGrid(subject, validBlockers, maxSide); if (!grid) return null;
+  const grid = createGrid(subject, maxSide); if (!grid) return null;
   const subjectMask = rasterize(pixelPolygons(subject, grid), grid.width, grid.height);
   const blockerMask = new Uint8Array(grid.width * grid.height);
   for (const blocker of validBlockers) {
