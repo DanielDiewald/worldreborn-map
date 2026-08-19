@@ -9,6 +9,7 @@ import {
   featureContentCategory,
   type MapContentVisibility,
 } from "./map-content-visibility";
+import { rankSelectionCandidates, selectionCandidateFromRow } from "./map-selection";
 import type { MapSearchItem, WorldMapConfig, WorldMapFeature, WorldMapLayer, WorldMapMarker } from "./map-types";
 import styles from "./map-workspace.module.css";
 
@@ -90,6 +91,7 @@ export function WorldMapViewer({
   const [contentVisibility, setContentVisibility] = useState<MapContentVisibility>({ ...DEFAULT_MAP_CONTENT_VISIBILITY });
   const rasterLayers = useMemo(() => layers.filter((layer) => layer.layer_type === "raster"), [layers]);
   const vectorLayers = useMemo(() => layers.filter((layer) => layer.layer_type === "vector"), [layers]);
+  const featureRows = useMemo(() => new Map(features.map((row) => [Number(row.feature_id), row] as const)), [features]);
 
   function refreshContentVisibility(next: MapContentVisibility) {
     contentVisibilityRef.current = next;
@@ -97,7 +99,7 @@ export function WorldMapViewer({
     for (const layer of vectorLayers) layerRefs.current.get(Number(layer.layer_id))?.changed();
     markerLayerRef.current?.setVisible(next.markers);
     if (selection?.featureId) {
-      const row = features.find((item) => Number(item.feature_id) === selection.featureId);
+      const row = featureRows.get(selection.featureId);
       if (row && !next[featureContentCategory(row)]) setSelection(null);
     }
     if (selection?.markerId && !next.markers) setSelection(null);
@@ -109,7 +111,7 @@ export function WorldMapViewer({
   }
 
   function focusFeature(id: number) {
-    const row = features.find((item) => Number(item.feature_id) === id);
+    const row = featureRows.get(id);
     if (row && !contentVisibilityRef.current[featureContentCategory(row)]) return false;
     const feature = featureRefs.current.get(id), map = mapRef.current;
     if (!feature || !map) return false;
@@ -244,21 +246,60 @@ export function WorldMapViewer({
       const view = simple ? new ol.View({ projection, center: ol.extent.getCenter(extent), zoom: 0, minZoom: mapConfig.minZoom, maxZoom: mapConfig.maxZoom, extent }) : new ol.View({ center: ol.proj.fromLonLat([mapConfig.centerLng ?? 0, mapConfig.centerLat ?? 0]), zoom: Math.max(mapConfig.minZoom, 2), minZoom: mapConfig.minZoom, maxZoom: mapConfig.maxZoom });
       const map = new ol.Map({ target: targetRef.current, layers: renderedLayers, view }); mapRef.current = map;
       if (simple) view.fit(extent, { padding: [24, 24, 24, 24] });
+
+      const collectVisibleHits = (pixel: number[]) => {
+        const seen = new Set<number>();
+        const mapCandidates: ReturnType<typeof selectionCandidateFromRow>[] = [];
+        let markerHit: any = null;
+        map.forEachFeatureAtPixel(pixel, (feature: any) => {
+          const markerId = Number(feature.get("markerId"));
+          if (markerId) {
+            if (contentVisibilityRef.current.markers && !markerHit) markerHit = feature;
+            return undefined;
+          }
+          const featureId = Number(feature.get("featureId"));
+          if (!featureId || seen.has(featureId)) return undefined;
+          const row = featureRows.get(featureId);
+          if (!row || !contentVisibilityRef.current[featureContentCategory(row)]) return undefined;
+          seen.add(featureId);
+          const featureExtent = feature.getGeometry()?.getExtent();
+          const extentArea = featureExtent ? Math.max(0, (featureExtent[2] - featureExtent[0]) * (featureExtent[3] - featureExtent[1])) : 0;
+          mapCandidates.push(selectionCandidateFromRow(featureId, row, extentArea));
+          return undefined;
+        }, { hitTolerance: 10 });
+        return { markerHit, mapCandidates: rankSelectionCandidates(mapCandidates) };
+      };
+
       map.on("singleclick", (event: any) => {
-        const hit = map.forEachFeatureAtPixel(event.pixel, (feature: any) => {
-          const category = feature.get("contentCategory") as keyof MapContentVisibility | undefined;
-          if (category && !contentVisibilityRef.current[category]) return undefined;
-          if (feature.get("markerId") && !contentVisibilityRef.current.markers) return undefined;
-          return feature;
-        }, { hitTolerance: 8 });
-        if (!hit) { setSelection(null); return; }
-        const featureId = Number(hit.get("featureId")) || null, markerId = Number(hit.get("markerId")) || null;
-        setSelection({ label: String(hit.get("label") ?? "Kartenobjekt"), subtitle: hit.get("subtitle") ? String(hit.get("subtitle")) : null, href: null, featureId, markerId });
+        const { markerHit, mapCandidates } = collectVisibleHits(event.pixel);
+        if (markerHit) {
+          const markerId = Number(markerHit.get("markerId")) || null;
+          setSelection({ label: String(markerHit.get("label") ?? "Marker"), subtitle: markerHit.get("subtitle") ? String(markerHit.get("subtitle")) : null, href: null, featureId: null, markerId });
+          return;
+        }
+        const candidate = mapCandidates[0];
+        if (!candidate) { setSelection(null); return; }
+        const feature = featureRefs.current.get(candidate.featureId);
+        if (!feature) { setSelection(null); return; }
+        setSelection({
+          label: String(feature.get("label") ?? candidate.label ?? "Kartenobjekt"),
+          subtitle: feature.get("subtitle") ? String(feature.get("subtitle")) : null,
+          href: null,
+          featureId: candidate.featureId,
+          markerId: null,
+        });
       });
+      map.on("pointermove", (event: any) => {
+        if (event.dragging) return;
+        const { markerHit, mapCandidates } = collectVisibleHits(event.pixel);
+        const element = map.getTargetElement();
+        if (element) element.style.cursor = markerHit || mapCandidates.length ? "pointer" : "";
+      });
+
       if (focusFeatureId) focusFeature(focusFeatureId); else if (focusMarkerId) focusMarker(focusMarkerId);
     }).catch((cause) => setError(cause instanceof Error ? cause.message : "Karte konnte nicht geladen werden."));
     return () => { active = false; mapRef.current?.setTarget(undefined); mapRef.current = null; markerLayerRef.current = null; layerRefs.current.clear(); featureRefs.current.clear(); markerRefs.current.clear(); };
-  }, [mapConfig, rasterLayers, vectorLayers, features, markers, focusFeatureId, focusMarkerId]);
+  }, [mapConfig, rasterLayers, vectorLayers, features, featureRows, markers, focusFeatureId, focusMarkerId]);
 
   useEffect(() => {
     const term = query.trim();
