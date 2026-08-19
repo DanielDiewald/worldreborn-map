@@ -2,60 +2,58 @@ import "server-only";
 
 import type { PoolClient } from "pg";
 import { z } from "zod";
+import { autoSubdividePolygon } from "@/components/map/map-auto-subdivide";
 import { pool } from "@/lib/db";
-
-const polygonGeometrySchema = z.object({
-  type: z.enum(["Polygon", "MultiPolygon"]),
-  coordinates: z.unknown(),
-}).passthrough();
-
-const subdivisionPartSchema = z.object({
-  name: z.string().trim().min(1).max(200),
-  geometry: polygonGeometrySchema,
-  color: z.string().regex(/^#[0-9a-f]{6}$/i),
-});
 
 const subdivisionInputSchema = z.object({
   targetKind: z.enum(["region", "province", "district"]),
+  count: z.coerce.number().int().min(2).max(24),
   seed: z.coerce.number().int().min(1).max(2_147_483_647).default(1),
   irregularity: z.coerce.number().min(0).max(1).default(0.42),
   balance: z.coerce.number().min(0).max(1).default(0.82),
-  parts: z.array(subdivisionPartSchema).min(2).max(24),
-}).superRefine((value, ctx) => {
-  const names = new Set<string>();
-  value.parts.forEach((part, index) => {
-    const normalized = part.name.toLocaleLowerCase();
-    if (names.has(normalized)) ctx.addIssue({ code: "custom", path: ["parts", index, "name"], message: "Teilgebiets-Namen müssen eindeutig sein." });
-    names.add(normalized);
-  });
+  namePrefix: z.string().trim().min(1).max(160),
+  colors: z.array(z.string().regex(/^#[0-9a-f]{6}$/i)).max(24).default([]),
 });
 
+type JsonGeometry = { type: string; coordinates: unknown };
+type Coordinate = [number, number];
+type TargetKind = "region" | "province" | "district";
 type ParentRow = {
   feature_id: string;
   layer_id: string;
   entity_id: string;
   label: string;
+  geometry: JsonGeometry;
   visibility_mode: "admin_only" | "all_players" | "selected_players";
   metadata: Record<string, unknown> | null;
   location_kind: string;
 };
 
-type JsonGeometry = { type: string; coordinates: unknown };
-type Coordinate = [number, number];
+type GeneratedPart = { name: string; geometry: JsonGeometry; color: string };
 
-const CHILD_KIND_LABEL: Record<"region" | "province" | "district", string> = {
+const CHILD_KIND_LABEL: Record<TargetKind, string> = {
   region: "Region",
   province: "Provinz",
   district: "Bezirk",
 };
 
-const ALLOWED_TARGETS: Record<string, Array<"region" | "province" | "district">> = {
+const ALLOWED_TARGETS: Record<string, TargetKind[]> = {
   country: ["region", "province"],
   region: ["province", "district"],
   province: ["district"],
 };
 
 function isLocked(row: ParentRow) { return row.metadata?.editorLocked === true; }
+function fallbackColor(index: number, count: number) {
+  const hue = Math.round((248 + (index * 310) / Math.max(1, count)) % 360);
+  const saturation = 54 + (index % 3) * 4;
+  const lightness = 52 + (index % 2) * 5;
+  const c = (1 - Math.abs((2 * lightness) / 100 - 1)) * saturation / 100;
+  const h = hue / 60, x = c * (1 - Math.abs((h % 2) - 1)), m = lightness / 100 - c / 2;
+  let rgb: [number, number, number];
+  if (h < 1) rgb = [c, x, 0]; else if (h < 2) rgb = [x, c, 0]; else if (h < 3) rgb = [0, c, x]; else if (h < 4) rgb = [0, x, c]; else if (h < 5) rgb = [x, 0, c]; else rgb = [c, 0, x];
+  return `#${rgb.map((value) => Math.round((value + m) * 255).toString(16).padStart(2, "0")).join("")}`;
+}
 
 function readRing(value: unknown): Coordinate[] | null {
   if (!Array.isArray(value)) return null;
@@ -109,8 +107,8 @@ async function createChildArea(client: PoolClient, options: {
   parentLocationId: number;
   parentFeatureId: number;
   visibilityMode: ParentRow["visibility_mode"];
-  targetKind: "region" | "province" | "district";
-  part: z.infer<typeof subdivisionPartSchema>;
+  targetKind: TargetKind;
+  part: GeneratedPart;
   generation: { seed: number; irregularity: number; balance: number; index: number; total: number };
 }) {
   const location = await client.query<{ loc_id: number }>(
@@ -154,7 +152,7 @@ export async function autoSubdividePoliticalFeature(projectId: number, mapId: nu
   try {
     await client.query("BEGIN");
     const parentResult = await client.query<ParentRow>(
-      `SELECT f.feature_id,f.layer_id,f.entity_id,f.label,f.visibility_mode,f.metadata,loc.location_kind
+      `SELECT f.feature_id,f.layer_id,f.entity_id,f.label,f.geometry,f.visibility_mode,f.metadata,loc.location_kind
          FROM map_features f
          JOIN locations loc ON f.entity_type='location' AND loc.loc_id=f.entity_id AND loc.camp_id=f.project_id AND loc.archived_at IS NULL
          JOIN project_map_layers l ON l.layer_id=f.layer_id AND l.project_id=f.project_id AND l.map_id=f.map_id AND l.layer_type='vector'
@@ -185,11 +183,26 @@ export async function autoSubdividePoliticalFeature(projectId: number, mapId: nu
       throw new Error(`Dieses Gebiet besitzt bereits gezeichnete Unterflächen (${polygonChildren.rows.map((row) => row.name).join(", ")}). Entferne oder ordne sie zuerst neu, damit keine Flächen überlappen.`);
     }
 
+    const generated = autoSubdividePolygon(parent.geometry, {
+      count: data.count,
+      seed: data.seed,
+      irregularity: data.irregularity,
+      balance: data.balance,
+      maxSide: 520,
+    });
+    if (!generated || generated.parts.length !== data.count) throw new Error("Für diese Form konnte keine stabile automatische Unterteilung erzeugt werden. Versuche weniger Teilgebiete oder eine andere Verteilung.");
+
+    const parts: GeneratedPart[] = generated.parts.map((geometry, index) => ({
+      name: `${data.namePrefix} ${index + 1}`,
+      geometry,
+      color: data.colors[index] ?? fallbackColor(index, data.count),
+    }));
+
     const created: Array<{ featureId: number; locationId: number; name: string; geometry: JsonGeometry }> = [];
-    for (let index = 0; index < data.parts.length; index += 1) {
+    for (let index = 0; index < parts.length; index += 1) {
       created.push(await createChildArea(client, {
         projectId, mapId, layerId, parentLocationId, parentFeatureId: featureId, visibilityMode: parent.visibility_mode,
-        targetKind: data.targetKind, part: data.parts[index], generation: { seed: data.seed, irregularity: data.irregularity, balance: data.balance, index, total: data.parts.length },
+        targetKind: data.targetKind, part: parts[index], generation: { seed: data.seed, irregularity: data.irregularity, balance: data.balance, index, total: parts.length },
       }));
     }
 
@@ -210,7 +223,7 @@ export async function autoSubdividePoliticalFeature(projectId: number, mapId: nu
     }
 
     await client.query("COMMIT");
-    return { targetKind: data.targetKind, created: created.map(({ geometry: _geometry, ...area }) => area), reassigned };
+    return { targetKind: data.targetKind, created: created.map(({ geometry: _geometry, ...area }) => area), reassigned, seed: generated.seed };
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
