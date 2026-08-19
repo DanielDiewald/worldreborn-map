@@ -60,8 +60,110 @@ async function baselineFoundationIfAlreadyApplied(client: Client) {
   }
 }
 
+/**
+ * Development databases created while the old Windows entrypoint bug existed can
+ * contain the complete 0008 schema without a ledger row. Never re-run CREATE TABLE
+ * over that data. If all 0008 relations and their core columns exist, repair the
+ * ledger and seed rows instead. A partial schema is deliberately rejected because
+ * guessing whether it is safe to complete it could destroy user data.
+ */
+async function baselineMapLayersIfAlreadyApplied(client: Client) {
+  const ledger = await client.query(
+    `SELECT 1 FROM public.worldreborn_schema_migrations
+      WHERE migration_name='0008_map_layers_and_features.sql'`,
+  );
+  if (ledger.rowCount) return;
+
+  const result = await client.query<{
+    project_map_layers: boolean;
+    map_layer_visibility: boolean;
+    map_features: boolean;
+    map_feature_visibility: boolean;
+    layer_core_columns: boolean;
+    feature_core_columns: boolean;
+  }>(`
+    SELECT
+      to_regclass('public.project_map_layers') IS NOT NULL AS project_map_layers,
+      to_regclass('public.map_layer_visibility') IS NOT NULL AS map_layer_visibility,
+      to_regclass('public.map_features') IS NOT NULL AS map_features,
+      to_regclass('public.map_feature_visibility') IS NOT NULL AS map_feature_visibility,
+      (
+        SELECT count(*)=6
+        FROM information_schema.columns
+        WHERE table_schema='public' AND table_name='project_map_layers'
+          AND column_name IN ('layer_id','project_id','map_id','name','layer_type','source_type')
+      ) AS layer_core_columns,
+      (
+        SELECT count(*)=7
+        FROM information_schema.columns
+        WHERE table_schema='public' AND table_name='map_features'
+          AND column_name IN ('feature_id','project_id','map_id','layer_id','geometry_type','geometry','label')
+      ) AS feature_core_columns
+  `);
+
+  const state = result.rows[0];
+  const checks = {
+    project_map_layers: state?.project_map_layers ?? false,
+    map_layer_visibility: state?.map_layer_visibility ?? false,
+    map_features: state?.map_features ?? false,
+    map_feature_visibility: state?.map_feature_visibility ?? false,
+    layer_core_columns: state?.layer_core_columns ?? false,
+    feature_core_columns: state?.feature_core_columns ?? false,
+  };
+  const present = Object.values(checks).filter(Boolean).length;
+  if (present === 0) return;
+
+  const missing = Object.entries(checks).filter(([, ok]) => !ok).map(([name]) => name);
+  if (missing.length) {
+    throw new Error(
+      `Partial 0008 map schema detected without migration ledger entry. Missing checks: ${missing.join(", ")}. ` +
+      "Refusing to recreate tables automatically; inspect the database before continuing.",
+    );
+  }
+
+  await client.query("BEGIN");
+  try {
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS project_map_layers_map_idx
+        ON public.project_map_layers(project_id, map_id, z_index, layer_id);
+      CREATE INDEX IF NOT EXISTS map_features_map_layer_idx
+        ON public.map_features(project_id, map_id, layer_id, feature_id);
+      CREATE INDEX IF NOT EXISTS map_features_entity_idx
+        ON public.map_features(project_id, entity_type, entity_id)
+        WHERE entity_type IS NOT NULL AND entity_id IS NOT NULL;
+    `);
+    await client.query(`
+      INSERT INTO public.project_map_layers(project_id,map_id,name,layer_type,source_type,opacity,z_index,visible_by_default,visibility_mode,style)
+      SELECT project_id,map_id,'Political','vector','drawn',0.35,100,true,'admin_only',
+             '{"fill":"#7c6ee6","stroke":"#ffffff","strokeWidth":2}'::jsonb
+      FROM public.project_maps
+      ON CONFLICT (project_id,map_id,name) DO NOTHING;
+
+      INSERT INTO public.project_map_layers(project_id,map_id,name,layer_type,source_type,opacity,z_index,visible_by_default,visibility_mode,style)
+      SELECT project_id,map_id,'Routes & Rivers','vector','drawn',1,120,true,'admin_only',
+             '{"stroke":"#67a9cf","strokeWidth":3}'::jsonb
+      FROM public.project_maps
+      ON CONFLICT (project_id,map_id,name) DO NOTHING;
+    `);
+    const inserted = await client.query(
+      `INSERT INTO public.worldreborn_schema_migrations (migration_name)
+       VALUES ('0008_map_layers_and_features.sql')
+       ON CONFLICT (migration_name) DO NOTHING
+       RETURNING migration_name`,
+    );
+    await client.query("COMMIT");
+    if (inserted.rowCount) {
+      console.log("Baselined 0008_map_layers_and_features.sql (existing schema detected).");
+    }
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  }
+}
+
 async function migrateUp(client: Client, migrationsDir: string) {
   await baselineFoundationIfAlreadyApplied(client);
+  await baselineMapLayersIfAlreadyApplied(client);
 
   const appliedResult = await client.query<{ migration_name: string }>(
     "SELECT migration_name FROM public.worldreborn_schema_migrations",
