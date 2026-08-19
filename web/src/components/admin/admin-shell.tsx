@@ -6,7 +6,7 @@ import { ProjectSwitcher } from "./project-switcher";
 import styles from "./admin-shell.module.css";
 
 type Section = "dashboard" | "npcs" | "gods" | "characters" | "groups" | "locations" | "relationships" | "family-trees" | "timeline" | "media" | "calendar" | "players" | "audit" | "projects" | "map" | "settings";
-type Props = {children:ReactNode;projectId?:number;projectName?:string;section?:Section;eyebrow?:string;title?:string};
+type Props = {children:ReactNode;projectId?:number;projectName?:string;section?:Section;eyebrow?:string;title?:string;immersive?:boolean};
 type IconName="home"|"map"|"timeline"|"person"|"god"|"character"|"group"|"location"|"link"|"tree"|"graph"|"media"|"players"|"shield"|"settings"|"world";
 
 function Icon({name}:{name:IconName}){
@@ -33,8 +33,9 @@ function Icon({name}:{name:IconName}){
 
 function NavItem({href,icon,children,active,disabled}:{href?:string;icon:IconName;children:ReactNode;active?:boolean;disabled?:boolean}){
   const className=`admin-nav-item${active?" active":""}${disabled?" disabled":""}`;
-  if(!href||disabled)return <span className={className}><Icon name={icon}/><span>{children}</span>{disabled?<span className="soon-dot" title="Noch nicht umgesetzt"/>:null}</span>;
-  return <Link className={className} href={href}><Icon name={icon}/><span>{children}</span></Link>;
+  const title=typeof children==="string"?children:undefined;
+  if(!href||disabled)return <span className={className} title={title}><Icon name={icon}/><span>{children}</span>{disabled?<span className="soon-dot" title="Noch nicht umgesetzt"/>:null}</span>;
+  return <Link className={className} href={href} title={title}><Icon name={icon}/><span>{children}</span></Link>;
 }
 
 function ProjectNavigation({projectId,section,compact=false}:{projectId?:number;section:Section;compact?:boolean}){
@@ -48,10 +49,10 @@ function ProjectNavigation({projectId,section,compact=false}:{projectId?:number;
   </nav>;
 }
 
-export async function AdminShell({children,projectId,projectName,section="dashboard",eyebrow,title}:Props){
+export async function AdminShell({children,projectId,projectName,section="dashboard",eyebrow,title,immersive=false}:Props){
   const projects=await listProjects();
-  return <div className="admin-shell">
-    <aside className="admin-sidebar"><Link href="/admin" className="admin-brand"><span className="brand-mark">WR</span><span><strong>WorldReborn</strong><small>World Archive</small></span></Link>{projectId?<div className="sidebar-project"><span className="sidebar-project-label">Aktive Welt</span><strong>{projectName??`Projekt #${projectId}`}</strong><span>Projekt #{projectId}</span></div>:null}<ProjectNavigation projectId={projectId} section={section}/><div className="sidebar-footer"><span className="sidebar-admin-avatar">A</span><div><strong>Administrator</strong><span>Volle Sichtbarkeit</span></div><form action={logoutAdmin}><button type="submit" className="logout-icon" title="Abmelden" aria-label="Abmelden">↗</button></form></div></aside>
+  return <div className={`admin-shell${immersive?` ${styles.immersiveShell}`:""}`}>
+    <aside className="admin-sidebar"><Link href="/admin" className="admin-brand" title="WorldReborn"><span className="brand-mark">WR</span><span><strong>WorldReborn</strong><small>World Archive</small></span></Link>{projectId?<div className="sidebar-project"><span className="sidebar-project-label">Aktive Welt</span><strong>{projectName??`Projekt #${projectId}`}</strong><span>Projekt #{projectId}</span></div>:null}<ProjectNavigation projectId={projectId} section={section}/><div className="sidebar-footer"><span className="sidebar-admin-avatar">A</span><div><strong>Administrator</strong><span>Volle Sichtbarkeit</span></div><form action={logoutAdmin}><button type="submit" className="logout-icon" title="Abmelden" aria-label="Abmelden">↗</button></form></div></aside>
     <div className="admin-workspace"><header className="admin-topbar"><details className={styles.mobileMenu}><summary className="button ghost" aria-label="Navigation öffnen">☰</summary><div className={styles.mobilePanel}><div className={styles.mobileHeading}><strong>{projectName??"WorldReborn"}</strong><span>{projectId?`Projekt #${projectId}`:"Administration"}</span></div><ProjectNavigation projectId={projectId} section={section} compact/><form action={logoutAdmin}><button type="submit" className="button ghost">Abmelden</button></form></div></details><div className="topbar-context"><span className="topbar-eyebrow">{eyebrow??(projectName?"WorldReborn / Welt":"WorldReborn")}</span><strong>{title??projectName??"Administration"}</strong></div><div className="topbar-actions"><ProjectSwitcher projects={projects.map((project)=>({id:project.id,name:project.name}))} currentProjectId={projectId}/><span className="admin-mode-pill"><span/> Admin Mode</span></div></header><main className="admin-content">{children}</main></div>
   </div>;
 }
