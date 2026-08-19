@@ -19,3 +19,9 @@ test("divider rejects a split where one side would be negligible", () => {
   const divider = { type: "LineString", coordinates: [[0.2,-10],[0.2,110]] };
   assert.equal(splitPolygonByDivider(parent, divider, 512), null);
 });
+
+test("divider rejects a floating line that never reaches the outer boundary", () => {
+  const parent = { type: "Polygon", coordinates: [[[0,0],[100,0],[100,100],[0,100],[0,0]]] };
+  const divider = { type: "LineString", coordinates: [[50,30],[50,70]] };
+  assert.equal(splitPolygonByDivider(parent, divider, 512), null);
+});
