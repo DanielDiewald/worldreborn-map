@@ -12,7 +12,7 @@ import styles from "./map-workspace.module.css";
 
 type ToolId = "country" | "province" | "region" | "city" | "place" | "river" | "road";
 type DrawMode = "Point" | "LineString" | "Polygon";
-type ExistingLocation = { id: number; name: string; kind: LocationKind };
+type ExistingLocation = { id: number; name: string; kind: LocationKind; parentId: number | null };
 type HistoryEntry = { featureId: number; before: JsonMapGeometry; after: JsonMapGeometry; label: string };
 type LandMaskState = "missing" | "loading" | "ready" | "error";
 
@@ -34,6 +34,7 @@ function toolFromString(value: string | null | undefined): ToolId | null { retur
 function toolForLocationKind(kind: LocationKind): ToolId { if (kind === "country") return "country"; if (kind === "province") return "province"; if (kind === "region") return "region"; if (["city", "town", "village"].includes(kind)) return "city"; return "place"; }
 function geometryLabel(type: string) { return type.includes("Polygon") ? "Fläche" : type.includes("Line") ? "Linie" : "Punkt"; }
 function searchKindLabel(kind: MapSearchItem["kind"]) { if (kind === "location") return "Ort"; if (kind === "person") return "Person"; if (kind === "marker") return "Marker"; return "Objekt"; }
+function geometryEqual(a: JsonMapGeometry, b: JsonMapGeometry) { return JSON.stringify(a) === JSON.stringify(b); }
 function layerGroup(layer: WorldMapLayer) {
   if (layer.layer_type === "vector") return "Eigene Inhalte";
   const role = layer.layer_role ?? "";
@@ -66,11 +67,12 @@ export function MapEditor({ projectId, mapConfig, layers, features, initialTool,
   const parentConformStep = useMemo(() => Math.max(2, Math.max(mapExtent[2] - mapExtent[0], mapExtent[3] - mapExtent[1]) / 900), [mapExtent]);
   const firstTool = existingLocation ? toolForLocationKind(existingLocation.kind) : toolFromString(initialTool);
   const [tool, setTool] = useState<ToolId | null>(firstTool), [name, setName] = useState(existingLocation?.name ?? ""), [color, setColor] = useState(firstTool ? TOOLS[firstTool].color : "#7c6ee6");
-  const [parentId, setParentId] = useState<number | null>(null), [drawing, setDrawing] = useState(false), [selectedId, setSelectedId] = useState<number | null>(null), [deletingId, setDeletingId] = useState<number | null>(null);
+  const [parentId, setParentId] = useState<number | null>(existingLocation?.parentId ?? null), [drawing, setDrawing] = useState(false), [selectedId, setSelectedId] = useState<number | null>(null), [deletingId, setDeletingId] = useState<number | null>(null);
   const [status, setStatus] = useState(existingLocation ? `${locationKindLabel(existingLocation.kind)} „${existingLocation.name}“ kann jetzt platziert werden.` : "Auswahlwerkzeug aktiv."), [error, setError] = useState("");
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle"), [query, setQuery] = useState(""), [searchResults, setSearchResults] = useState<MapSearchItem[]>([]), [searching, setSearching] = useState(false);
   const [undoStack, setUndoStack] = useState<HistoryEntry[]>([]), [redoStack, setRedoStack] = useState<HistoryEntry[]>([]), [activeView, setActiveView] = useState("default"), [layersOpen, setLayersOpen] = useState(false), [landMaskState, setLandMaskState] = useState<LandMaskState>(landMaskLayer ? "loading" : "missing");
   const activeTool = tool ? TOOLS[tool] : null, selectedRow = selectedId ? rowRefs.current.get(selectedId) ?? null : null;
+  const selectedKind = selectedRow ? kindFromFeature(selectedRow) : null;
   const groupedLayers = useMemo(() => { const groups = new Map<string, WorldMapLayer[]>(); for (const layer of layers) { const group = layerGroup(layer); groups.set(group, [...(groups.get(group) ?? []), layer]); } return [...groups.entries()]; }, [layers]);
 
   function chooseTool(next: ToolId) { if (existingLocation) return; setTool(next); setColor(TOOLS[next].color); setParentId(null); setDrawing(false); setSelectedId(null); selectRef.current?.getFeatures().clear(); setError(""); setStatus(`${TOOLS[next].label} gewählt. Daten eingeben und Zeichnen starten.`); }
@@ -97,10 +99,29 @@ export function MapEditor({ projectId, mapConfig, layers, features, initialTool,
     return result;
   }
 
+  async function conformChildrenToParent(parentRow: WorldMapFeature, parentGeometry: JsonMapGeometry) {
+    if (parentRow.entity_type !== "location" || !parentRow.entity_id || !["Polygon", "MultiPolygon"].includes(parentGeometry.type)) return 0;
+    const parentLocationId = Number(parentRow.entity_id);
+    if (!Number.isSafeInteger(parentLocationId) || parentLocationId <= 0) return 0;
+    const ol = await ensureOpenLayers();
+    const format = new ol.format.GeoJSON();
+    let changed = 0;
+    for (const [featureId, child] of rowRefs.current.entries()) {
+      if (child.location_parent_id !== parentLocationId || !["province", "region"].includes(kindFromFeature(child) ?? "") || !["Polygon", "MultiPolygon"].includes(child.geometry.type)) continue;
+      const next = conformPolygonToParent(child.geometry as JsonMapGeometry, parentGeometry, parentConformStep);
+      if (geometryEqual(child.geometry as JsonMapGeometry, next)) continue;
+      const feature = featureRefs.current.get(featureId);
+      if (feature) feature.setGeometry(format.readGeometry(next));
+      await patchGeometry(featureId, next);
+      changed += 1;
+    }
+    return changed;
+  }
+
   function beginDrawing() {
     if (!activeTool || !name.trim()) return;
-    if (activeTool.kind === "province" && !parentId && !existingLocation) {
-      setError("Wähle zuerst unter „Gehört zu“ das Land oder die Region der Provinz. Nur so kann WorldReborn die Außengrenze automatisch übernehmen.");
+    if (activeTool.kind === "province" && !parentId) {
+      setError(existingLocation ? "Diese Provinz besitzt keine übergeordnete Location. Setze zuerst auf der Location-Seite ein Land oder eine Region als Parent." : "Wähle zuerst unter „Gehört zu“ das Land oder die Region der Provinz. Nur so kann WorldReborn die Außengrenze automatisch übernehmen.");
       return;
     }
     if ((activeTool.kind === "province" || activeTool.kind === "region") && parentId && !geometryForLocation(parentId)) {
@@ -148,7 +169,26 @@ export function MapEditor({ projectId, mapConfig, layers, features, initialTool,
       const view = simple ? new ol.View({ projection, center: ol.extent.getCenter(extent), zoom: 0, minZoom: mapConfig.minZoom, maxZoom: mapConfig.maxZoom, extent }) : new ol.View({ center: ol.proj.fromLonLat([mapConfig.centerLng ?? 0, mapConfig.centerLat ?? 0]), zoom: Math.max(mapConfig.minZoom, 2), minZoom: mapConfig.minZoom, maxZoom: mapConfig.maxZoom });
       const map = new ol.Map({ target: targetRef.current, layers: mapLayers, view }); mapRef.current = map; if (simple) view.fit(extent, { padding: [20, 20, 20, 20] });
       const select = new ol.interaction.Select({ layers: (candidate: any) => Boolean(candidate.get("worldrebornLayerId")) && sourceRefs.current.has(Number(candidate.get("worldrebornLayerId"))) }); selectRef.current = select; map.addInteraction(select); select.on("select", (event: any) => setSelectedId(event.selected?.[0] ? Number(event.selected[0].get("featureId")) : null));
-      const modify = new ol.interaction.Modify({ features: select.getFeatures(), pixelTolerance: 14 }); modifyRef.current = modify; map.addInteraction(modify); modify.on("modifystart", (event: any) => { for (const feature of event.features.getArray()) { const id = Number(feature.get("featureId")); if (id) beforeGeometry.current.set(id, geojson.writeGeometryObject(feature.getGeometry()) as JsonMapGeometry); } }); modify.on("modifyend", async (event: any) => { setError(""); try { for (const feature of event.features.getArray()) { const id = Number(feature.get("featureId")); if (!id) continue; const row = rowRefs.current.get(id); const rawAfter = geojson.writeGeometryObject(feature.getGeometry()) as JsonMapGeometry; const parentLocationId = row?.location_parent_id ?? (typeof row?.metadata?.parentLocationId === "number" ? row.metadata.parentLocationId : null); const after = row ? conformSemanticGeometry(rawAfter, kindFromFeature(row), parentLocationId) : rawAfter; if (after !== rawAfter) feature.setGeometry(geojson.readGeometry(after)); const before = beforeGeometry.current.get(id); await patchGeometry(id, after); if (before) { const label = row?.label ?? "Element"; setUndoStack((current) => [...current.slice(-29), { featureId: id, before, after, label }]); setRedoStack([]); } beforeGeometry.current.delete(id); } setStatus("Grenze / Position aktualisiert und an übergeordnete Geometrie angepasst."); } catch (cause) { setError(cause instanceof Error ? cause.message : "Änderung konnte nicht gespeichert werden."); } });
+      const modify = new ol.interaction.Modify({ features: select.getFeatures(), pixelTolerance: 14 }); modifyRef.current = modify; map.addInteraction(modify); modify.on("modifystart", (event: any) => { for (const feature of event.features.getArray()) { const id = Number(feature.get("featureId")); if (id) beforeGeometry.current.set(id, geojson.writeGeometryObject(feature.getGeometry()) as JsonMapGeometry); } }); modify.on("modifyend", async (event: any) => {
+        setError("");
+        try {
+          let adaptedChildren = 0;
+          for (const feature of event.features.getArray()) {
+            const id = Number(feature.get("featureId")); if (!id) continue;
+            const row = rowRefs.current.get(id);
+            const rawAfter = geojson.writeGeometryObject(feature.getGeometry()) as JsonMapGeometry;
+            const parentLocationId = row?.location_parent_id ?? (typeof row?.metadata?.parentLocationId === "number" ? row.metadata.parentLocationId : null);
+            const after = row ? conformSemanticGeometry(rawAfter, kindFromFeature(row), parentLocationId) : rawAfter;
+            if (!geometryEqual(after, rawAfter)) feature.setGeometry(geojson.readGeometry(after));
+            const before = beforeGeometry.current.get(id);
+            await patchGeometry(id, after);
+            if (row) adaptedChildren += await conformChildrenToParent(row, after);
+            if (before) { const label = row?.label ?? "Element"; setUndoStack((current) => [...current.slice(-29), { featureId: id, before, after, label }]); setRedoStack([]); }
+            beforeGeometry.current.delete(id);
+          }
+          setStatus(adaptedChildren ? `Grenze aktualisiert. ${adaptedChildren} untergeordnete Fläche${adaptedChildren===1?" wurde":"n wurden"} an die neue Außengrenze angepasst.` : "Grenze / Position aktualisiert und an die gültige Geometrie angepasst.");
+        } catch (cause) { setError(cause instanceof Error ? cause.message : "Änderung konnte nicht gespeichert werden."); }
+      });
       for (const source of sourceRefs.current.values()) map.addInteraction(new ol.interaction.Snap({ source, pixelTolerance: 16 }));
       if (focusFeatureId) window.setTimeout(() => focusFeature(focusFeatureId), 0);
     }).catch((cause) => setError(cause instanceof Error ? cause.message : "Karte konnte nicht geladen werden."));
@@ -168,12 +208,12 @@ export function MapEditor({ projectId, mapConfig, layers, features, initialTool,
         try {
           const geojson = new ol.format.GeoJSON();
           const rawGeometry = geojson.writeGeometryObject(event.feature.getGeometry()) as JsonMapGeometry;
-          const constraintParentId = existingLocation ? null : parentId;
+          const constraintParentId = parentId;
           const geometry = conformSemanticGeometry(rawGeometry, activeTool.kind, constraintParentId);
-          if (geometry !== rawGeometry) event.feature.setGeometry(geojson.readGeometry(geometry));
+          if (!geometryEqual(geometry, rawGeometry)) event.feature.setGeometry(geojson.readGeometry(geometry));
           const style = activeTool.mode === "LineString" ? { stroke: color, strokeWidth: 3 } : { fill: color, stroke: "#ffffff", strokeWidth: 2 };
           const linkedLocationId = existingLocation?.id ?? null;
-          const metadata = { createdIn: "map-editor-v5", tool, existingLocationId: linkedLocationId, parentLocationId: constraintParentId, geometryConformance: activeTool.kind === "country" ? "land-mask" : constraintParentId ? "parent-polygon" : "none" };
+          const metadata = { createdIn: "map-editor-v6", tool, existingLocationId: linkedLocationId, parentLocationId: constraintParentId, geometryConformance: activeTool.kind === "country" ? "land-mask" : constraintParentId ? "parent-polygon" : "none" };
           const response = await fetch(`/api/admin/projects/${projectId}/maps/${mapConfig.mapId}/features`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ layerId: Number(layer.layer_id), geometry, entityType: linkedLocationId ? "location" : null, entityId: linkedLocationId, label: name.trim(), visibilityMode: "admin_only", selectedPlayerIds: [], style, metadata, createLocation: !linkedLocationId && activeTool.kind ? { kind: activeTool.kind, parentLocationId: parentId, locationType: locationKindLabel(activeTool.kind) } : null }) });
           const body = await response.json().catch(() => ({})); if (!response.ok) throw new Error(body.error || "Element konnte nicht gespeichert werden.");
           const featureId = Number(body.featureId), locationId = linkedLocationId ?? (body.locationId ? Number(body.locationId) : null);
@@ -212,6 +252,27 @@ export function MapEditor({ projectId, mapConfig, layers, features, initialTool,
     finally { setDeletingId(null); }
   }
 
+  async function reconformSelected() {
+    if (!selectedId) return;
+    const row = rowRefs.current.get(selectedId);
+    const feature = featureRefs.current.get(selectedId);
+    if (!row || !feature) return;
+    const kind = kindFromFeature(row);
+    const parentLocationId = row.location_parent_id ?? (typeof row.metadata?.parentLocationId === "number" ? row.metadata.parentLocationId : null);
+    if (kind === "country" && landMaskLayer && landMaskState !== "ready") { setError("Die Rock-3-Land-Mask ist noch nicht bereit."); return; }
+    if ((kind === "province" || kind === "region") && (!parentLocationId || !geometryForLocation(parentLocationId))) { setError("Für diese Fläche ist keine gezeichnete übergeordnete politische Grenze verfügbar."); return; }
+    try {
+      setError("");
+      const next = conformSemanticGeometry(row.geometry as JsonMapGeometry, kind, parentLocationId);
+      if (geometryEqual(row.geometry as JsonMapGeometry, next)) { setStatus(`„${row.label}“ liegt bereits innerhalb der gültigen Grenze.`); return; }
+      const ol = await ensureOpenLayers();
+      feature.setGeometry(new ol.format.GeoJSON().readGeometry(next));
+      await patchGeometry(selectedId, next);
+      const children = await conformChildrenToParent(row, next);
+      setStatus(children ? `„${row.label}“ wurde angepasst; ${children} untergeordnete Fläche${children===1?" wurde":"n wurden"} ebenfalls aktualisiert.` : `„${row.label}“ wurde an die gültige Grenze angepasst.`);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Geometrie konnte nicht angepasst werden."); }
+  }
+
   async function changeSelectedColor(next: string) { if (!selectedId) return; const row = rowRefs.current.get(selectedId); if (!row) return; const key = row.geometry.type.includes("Line") ? "stroke" : "fill"; try { await patchStyle(selectedId, { [key]: next }); sourceRefs.current.get(Number(row.layer_id))?.changed(); setStatus("Farbe gespeichert."); } catch (cause) { setError(cause instanceof Error ? cause.message : "Farbe konnte nicht gespeichert werden."); } }
   async function applyHistory(entry: HistoryEntry, direction: "undo" | "redo") { const geometry = direction === "undo" ? entry.before : entry.after, feature = featureRefs.current.get(entry.featureId); if (!feature) return; const ol = await ensureOpenLayers(); feature.setGeometry(new ol.format.GeoJSON().readGeometry(geometry)); await patchGeometry(entry.featureId, geometry); sourceRefs.current.get(Number(rowRefs.current.get(entry.featureId)?.layer_id))?.changed(); focusFeature(entry.featureId); }
   async function undo() { const entry = undoStack.at(-1); if (!entry) return; try { await applyHistory(entry, "undo"); setUndoStack((current) => current.slice(0, -1)); setRedoStack((current) => [...current, entry]); setStatus(`Änderung an „${entry.label}“ rückgängig gemacht.`); } catch (cause) { setError(cause instanceof Error ? cause.message : "Rückgängig fehlgeschlagen."); } }
@@ -221,8 +282,9 @@ export function MapEditor({ projectId, mapConfig, layers, features, initialTool,
   function applyView(view: string) { setActiveView(view); for (const layer of layers) { const id = Number(layer.layer_id), ref = layerRefs.current.get(id); if (!ref) continue; let visible = layer.visible_by_default; if (view === "political") visible = layer.layer_type === "vector" && ["political", "settlements"].includes(layer.layer_role ?? ""); if (view === "climate") visible = layer.layer_role === "biomes" || (layer.layer_type === "vector" && layer.layer_role === "political"); if (view === "rainfall") visible = layer.layer_role === "rainfall_annual" || (layer.layer_type === "vector" && layer.layer_role === "political"); if (view === "topography") visible = ["elevation_full", "elevation_land", "land_mask"].includes(layer.layer_role ?? "") || (layer.layer_type === "vector" && layer.layer_role === "political"); ref.setVisible(visible); const checkbox = document.querySelector<HTMLInputElement>(`[data-editor-layer="${id}"]`); if (checkbox) checkbox.checked = visible; } }
   function chooseSearch(item: MapSearchItem) { if (item.featureId && focusFeature(item.featureId)) { setQuery(""); setSearchResults([]); return; } if (item.markerId) { window.location.assign(`/admin/projects/${projectId}/map?mapId=${mapConfig.mapId}&markerId=${item.markerId}`); return; } if (item.href) window.location.assign(item.href); }
 
-  const provinceNeedsParent = activeTool?.kind === "province" && !existingLocation;
+  const provinceNeedsParent = activeTool?.kind === "province";
   const countryMaskMessage = activeTool?.kind === "country" && landMaskLayer ? (landMaskState === "ready" ? "Land-Mask aktiv: Küsten werden beim Abschluss automatisch angepasst." : landMaskState === "loading" ? "Land-Mask wird vorbereitet …" : "Land-Mask konnte nicht als Geometrie-Führung geladen werden.") : null;
+  const canReconformSelected = selectedRow && ["country", "province", "region"].includes(selectedKind ?? "") && ["Polygon", "MultiPolygon"].includes(selectedRow.geometry.type);
 
   return <div className={styles.workspace} style={{ height }}>
     <div ref={targetRef} className={styles.canvas}/>
@@ -244,7 +306,7 @@ export function MapEditor({ projectId, mapConfig, layers, features, initialTool,
         <label className={styles.field}>Name<input value={name} onChange={(event) => setName(event.target.value)} readOnly={Boolean(existingLocation)} placeholder={`Name für ${activeTool.label}`}/></label>
         <label className={styles.field}>Farbe<div className={styles.colorRow}><input type="color" value={color} onChange={(event) => setColor(event.target.value)}/><span className={styles.colorValue}>{color}</span></div></label>
         {!existingLocation && activeTool.kind ? <MapLocationPicker projectId={projectId} parentFor={activeTool.kind} value={parentId} onChange={(id) => { setParentId(id); setError(""); }}/> : null}
-        {provinceNeedsParent && !parentId ? <div className={styles.drawHint}>Eine Provinz braucht ein übergeordnetes Land oder eine Region. Deren Polygon wird als harte Außengrenze verwendet.</div> : null}
+        {provinceNeedsParent && !parentId ? <div className={styles.drawHint}>{existingLocation?"Diese Provinz hat keine Parent-Location. Setze zuerst auf der Location-Seite ein Land oder eine Region als Parent.":"Eine Provinz braucht ein übergeordnetes Land oder eine Region. Deren Polygon wird als harte Außengrenze verwendet."}</div> : null}
         {countryMaskMessage ? <div className={styles.drawHint}>{countryMaskMessage}</div> : null}
         <button type="button" className={`button primary ${styles.primaryAction}`} disabled={!name.trim() || drawing || (provinceNeedsParent && !parentId)} onClick={beginDrawing}>{drawing ? "Zeichnen läuft …" : "Zeichnen beginnen"}</button>
         {drawing ? <div className={styles.drawHint}>{activeTool.mode === "Polygon" ? activeTool.kind === "country" ? "Zeichne die Fläche grob entlang der Küste. Wasserabschnitte werden nach Abschluss automatisch auf die Rock-3-Landmaske gezogen." : "Klicke entlang der Grenze. Am Startpunkt schließen. Die Fläche wird anschließend automatisch innerhalb ihrer übergeordneten politischen Grenze gehalten." : activeTool.mode === "Point" ? "Klicke auf die gewünschte Position." : "Klicke entlang des Verlaufs. Doppelklick beendet die Linie."}</div> : null}
@@ -267,9 +329,14 @@ export function MapEditor({ projectId, mapConfig, layers, features, initialTool,
     {selectedRow ? <aside className={`${styles.inspector} ${styles.glass}`}>
       <div className={styles.panelHeader}><div><span className={styles.kicker}>AUSGEWÄHLT</span><h3 className={styles.panelTitle}>{selectedRow.label}</h3></div><button type="button" className={styles.closeButton} onClick={() => { selectRef.current?.getFeatures().clear(); setSelectedId(null); }} aria-label="Auswahl schließen">×</button></div>
       <span className={styles.inspectorBadge}>{geometryLabel(selectedRow.geometry.type)}</span>
-      <p className={styles.inspectorText}>{kindFromFeature(selectedRow) === "country" && landMaskLayer ? "Ziehe die Formpunkte. Nach dem Loslassen wird die Küste wieder an die Rock-3-Landmaske angepasst." : selectedRow.location_parent_id ? "Ziehe die Formpunkte. Nach dem Loslassen bleibt die Fläche innerhalb der übergeordneten politischen Grenze." : "Ziehe die Formpunkte direkt auf der Karte. Änderungen werden automatisch gespeichert."}</p>
+      <p className={styles.inspectorText}>{selectedKind === "country" && landMaskLayer ? "Ziehe die Formpunkte. Nach dem Loslassen wird die Küste wieder an die Rock-3-Landmaske angepasst." : selectedRow.location_parent_id ? "Ziehe die Formpunkte. Nach dem Loslassen bleibt die Fläche innerhalb der übergeordneten politischen Grenze." : "Ziehe die Formpunkte direkt auf der Karte. Änderungen werden automatisch gespeichert."}</p>
       <div className={styles.fieldStack}><label className={styles.field}>Farbe<div className={styles.colorRow}><input key={selectedId ?? 0} type="color" defaultValue={mapColor(selectedRow.style?.fill ?? selectedRow.style?.stroke, "#7c6ee6")} onChange={(event) => void changeSelectedColor(event.target.value)}/><span className={styles.colorValue}>Darstellung</span></div></label></div>
-      <div className={styles.inspectorActions}>{selectedRow.entity_type === "location" && selectedRow.entity_id ? <a className="button primary" href={`/admin/projects/${projectId}/locations/${selectedRow.entity_id}`}>Location öffnen</a> : null}<button type="button" className={`button danger ${styles.dangerAction}`} disabled={deletingId === selectedId} onClick={() => void deleteSelected()}>{deletingId === selectedId ? "Wird entfernt …" : "Von Karte entfernen"}</button><small className={styles.panelText}>Die Karten-Geometrie wird gelöscht. Der Lore-Datensatz bleibt bestehen.</small></div>
+      <div className={styles.inspectorActions}>
+        {selectedRow.entity_type === "location" && selectedRow.entity_id ? <a className="button primary" href={`/admin/projects/${projectId}/locations/${selectedRow.entity_id}`}>Location öffnen</a> : null}
+        {canReconformSelected ? <button type="button" className="button ghost" onClick={() => void reconformSelected()}>{selectedKind === "country" ? "An Landmaske anpassen" : "An Parent-Grenze anpassen"}</button> : null}
+        <button type="button" className={`button danger ${styles.dangerAction}`} disabled={deletingId === selectedId} onClick={() => void deleteSelected()}>{deletingId === selectedId ? "Wird entfernt …" : "Von Karte entfernen"}</button>
+        <small className={styles.panelText}>Die Karten-Geometrie wird gelöscht. Der Lore-Datensatz bleibt bestehen.</small>
+      </div>
     </aside> : null}
 
     <div className={`${styles.statusDock} ${styles.glass}`}><span className={`${styles.statusDot}${saveState === "saved" ? ` ${styles.statusDotSaved}` : saveState === "saving" ? ` ${styles.statusDotSaving}` : ""}`}/><span className={styles.statusText}>{saveState === "saving" ? "Speichert …" : saveState === "saved" ? "Gespeichert" : drawing ? "Zeichenmodus aktiv" : status}</span></div>
