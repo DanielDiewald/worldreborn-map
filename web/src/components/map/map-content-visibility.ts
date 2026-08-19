@@ -11,6 +11,16 @@ export type MapContentCategory =
   | "other";
 
 export type MapContentVisibility = Record<MapContentCategory | "markers" | "labels", boolean>;
+export type MapSelectionScope = "all" | "countries" | "provinces" | "regions" | "places" | "lines";
+
+export const MAP_SELECTION_SCOPES: Array<{ id: MapSelectionScope; label: string; hint: string }> = [
+  { id: "all", label: "Alles", hint: "Alle sichtbaren Kartenobjekte auswählen" },
+  { id: "countries", label: "Länder", hint: "Nur Länder auswählen" },
+  { id: "provinces", label: "Provinzen", hint: "Nur Provinzen auswählen" },
+  { id: "regions", label: "Regionen", hint: "Nur Regionen auswählen" },
+  { id: "places", label: "Orte", hint: "Städte, Dörfer und Orte auswählen" },
+  { id: "lines", label: "Linien", hint: "Flüsse und Straßen auswählen" },
+];
 
 export const MAP_CONTENT_FILTERS: Array<{ id: keyof MapContentVisibility; label: string; hint: string; icon: string }> = [
   { id: "countries", label: "Länder", hint: "Landesflächen und Grenzen", icon: "◇" },
@@ -56,6 +66,16 @@ export function featureContentCategory(row: Pick<WorldMapFeature, "geometry" | "
   if (tool === "road") return "roads";
 
   return "other";
+}
+
+export function selectionScopeMatchesFeature(scope: MapSelectionScope, row: Pick<WorldMapFeature, "geometry" | "location_kind" | "metadata">) {
+  if (scope === "all") return true;
+  const category = featureContentCategory(row);
+  if (scope === "countries") return category === "countries";
+  if (scope === "provinces") return category === "provinces";
+  if (scope === "regions") return category === "regions";
+  if (scope === "places") return category === "settlements" || category === "places";
+  return category === "rivers" || category === "roads" || row.geometry.type.includes("Line");
 }
 
 export function allContentVisibility(visible: boolean): MapContentVisibility {
