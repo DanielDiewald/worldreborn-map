@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { hasValidAdminSession } from "@/lib/auth/session";
-import { patchMapFeatureGeometry, patchMapFeatureGeometryBatch, patchMapFeatureMetadata, patchMapFeatureStyle } from "@/lib/map-feature-patches";
+import { assertMapFeatureUnlocked, patchMapFeatureGeometry, patchMapFeatureGeometryBatch, patchMapFeatureMetadata, patchMapFeatureStyle } from "@/lib/map-feature-patches";
 import { deleteMapFeature, updateMapFeature } from "@/lib/map-features";
 
 function positiveInt(value:string){const parsed=Number.parseInt(value,10);return Number.isSafeInteger(parsed)&&parsed>0?parsed:null;}
@@ -25,6 +25,7 @@ export async function DELETE(_request:Request,{params}:{params:Promise<{projectI
   const raw=await params;const projectId=positiveInt(raw.projectId);const mapId=positiveInt(raw.mapId);const featureId=positiveInt(raw.featureId);
   if(!projectId||!mapId||!featureId)return NextResponse.json({error:"Invalid ID"},{status:400});
   try{
+    await assertMapFeatureUnlocked(projectId,mapId,featureId);
     const deleted=await deleteMapFeature(projectId,mapId,featureId);
     return NextResponse.json({ok:true,...deleted});
   }
