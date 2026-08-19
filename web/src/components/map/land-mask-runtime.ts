@@ -23,7 +23,7 @@ async function blobToImage(blob: Blob): Promise<ImageBitmap | HTMLImageElement> 
   }
 }
 
-export async function loadLandMaskGuide(layer: WorldMapLayer | undefined, extent: MapExtent, maxWidth = 1024): Promise<LandMaskGuide | null> {
+export async function loadLandMaskGuide(layer: WorldMapLayer | undefined, extent: MapExtent, maxWidth = 1536): Promise<LandMaskGuide | null> {
   if (!layer) return null;
   const url = layerUrl(layer);
   if (!url) return null;
