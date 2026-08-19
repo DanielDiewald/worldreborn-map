@@ -1,6 +1,6 @@
 import "server-only";
 
-const MAX_BYTES = Number.parseInt(process.env.MEDIA_MAX_BYTES ?? String(10 * 1024 * 1024), 10);
+const MAX_BYTES = Number.parseInt(process.env.MEDIA_MAX_BYTES ?? String(50 * 1024 * 1024), 10);
 const MAX_DIMENSION = Number.parseInt(process.env.MEDIA_MAX_DIMENSION ?? "20000", 10);
 const MAX_PIXELS = Number.parseInt(process.env.MEDIA_MAX_PIXELS ?? "100000000", 10);
 
