@@ -13,7 +13,7 @@ export async function listProjectMapsPaginated(projectId:number,filters:MapAdmin
     `SELECT COUNT(*)::text AS count
        FROM project_maps
       WHERE project_id=$1
-        AND ($2='' OR name ILIKE $3 OR map_type ILIKE $3)`,
+        AND ($2='' OR name ILIKE $3 OR map_type ILIKE $3 OR COALESCE(config->>'map_kind','') ILIKE $3)`,
     [projectId,query,like],
   );
   const total=Number(count.rows[0]?.count??0);
@@ -28,8 +28,14 @@ export async function listProjectMapsPaginated(projectId:number,filters:MapAdmin
     max_zoom:number;
     center_lat:number|null;
     center_lng:number|null;
+    config:Record<string,unknown>;
     is_primary:boolean;
     marker_count:number;
+    layer_count:number;
+    rock3_layer_count:number;
+    feature_count:number;
+    country_count:number;
+    location_count:number;
   }>(
     `SELECT pm.map_id,
             pm.name,
@@ -40,14 +46,17 @@ export async function listProjectMapsPaginated(projectId:number,filters:MapAdmin
             pm.max_zoom,
             pm.center_lat,
             pm.center_lng,
+            pm.config,
             pm.is_primary,
-            COUNT(mm.marker_id)::int AS marker_count
+            (SELECT COUNT(*)::int FROM map_markers mm WHERE mm.project_id=pm.project_id AND mm.map_id=pm.map_id) AS marker_count,
+            (SELECT COUNT(*)::int FROM project_map_layers ml WHERE ml.project_id=pm.project_id AND ml.map_id=pm.map_id) AS layer_count,
+            (SELECT COUNT(*)::int FROM project_map_layers ml WHERE ml.project_id=pm.project_id AND ml.map_id=pm.map_id AND COALESCE((ml.config->>'rock3')::boolean,false)) AS rock3_layer_count,
+            (SELECT COUNT(*)::int FROM map_features mf WHERE mf.project_id=pm.project_id AND mf.map_id=pm.map_id) AS feature_count,
+            (SELECT COUNT(*)::int FROM locations l WHERE l.camp_id=pm.project_id AND l.map_id=pm.map_id AND l.location_kind='country' AND l.archived_at IS NULL) AS country_count,
+            (SELECT COUNT(*)::int FROM locations l WHERE l.camp_id=pm.project_id AND l.map_id=pm.map_id AND l.archived_at IS NULL) AS location_count
        FROM project_maps pm
-       LEFT JOIN map_markers mm
-         ON mm.project_id=pm.project_id AND mm.map_id=pm.map_id
       WHERE pm.project_id=$1
-        AND ($2='' OR pm.name ILIKE $3 OR pm.map_type ILIKE $3)
-      GROUP BY pm.map_id,pm.name,pm.map_type,pm.tile_url,pm.image_path,pm.min_zoom,pm.max_zoom,pm.center_lat,pm.center_lng,pm.is_primary
+        AND ($2='' OR pm.name ILIKE $3 OR pm.map_type ILIKE $3 OR COALESCE(pm.config->>'map_kind','') ILIKE $3)
       ORDER BY pm.is_primary DESC,pm.name,pm.map_id
       LIMIT $4 OFFSET $5`,
     [projectId,query,like,page.limit,page.offset],
