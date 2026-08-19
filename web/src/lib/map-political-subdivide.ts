@@ -9,7 +9,7 @@ const subdivisionInputSchema = z.object({
   targetKind: z.enum(["region", "province", "district"]),
   count: z.coerce.number().int().min(2).max(24),
   seed: z.coerce.number().int().min(1).max(2_147_483_647).default(1),
-  irregularity: z.coerce.number().min(0).max(1).default(0.42),
+  irregularity: z.coerce.number().min(0).max(1).default(0.7),
   balance: z.coerce.number().min(0).max(1).default(0.82),
   namePrefix: z.string().trim().min(1).max(160),
   colors: z.array(z.string().regex(/^#[0-9a-f]{6}$/i)).max(24).default([]),
