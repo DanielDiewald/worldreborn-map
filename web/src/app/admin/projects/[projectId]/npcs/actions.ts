@@ -5,80 +5,23 @@ import { redirect } from "next/navigation";
 import { z } from "zod";
 import { requireAdminSession } from "@/lib/auth/session";
 import { savePersonFantasyDate } from "@/lib/calendar";
-import { archiveNpc, createNpc, getNpc, updateNpc } from "@/lib/entities/npcs";
+import { archiveNpc,createNpc,getNpc,updateNpc } from "@/lib/entities/npcs";
 import { parseFantasyDateFields } from "@/lib/fantasy-calendar";
-import { resolveEntityImageSource, setEntityImageReference } from "@/lib/media";
-import { clearPersonDeathDate, savePersonDeathMetadata } from "@/lib/person-death";
+import { resolveEntityImageSource,setEntityImageReference } from "@/lib/media";
+import { removePersonLocation,setPersonLocation } from "@/lib/person-locations";
+import { clearPersonDeathDate,savePersonDeathMetadata } from "@/lib/person-death";
 import { getProject } from "@/lib/projects";
 
-const npcSchema = z.object({
-  name: z.string().trim().min(1).max(100),
-  gender: z.string().trim().max(10).optional(),
-  image: z.string().trim().max(4000).optional(),
-  publicDescription: z.string().trim().max(100_000).optional(),
-  adminNotes: z.string().trim().max(100_000).optional(),
-  title: z.string().trim().max(120).optional(),
-  profession: z.string().trim().max(120).optional(),
-  locationId: z.coerce.number().int().positive(),
-  race: z.string().trim().min(1).max(80),
-  alive: z.boolean(),
-  follower: z.boolean(),
-  className: z.string().trim().max(50).optional(),
-});
+const npcSchema=z.object({name:z.string().trim().min(1).max(100),gender:z.string().trim().max(10).optional(),image:z.string().trim().max(4000).optional(),publicDescription:z.string().trim().max(100_000).optional(),adminNotes:z.string().trim().max(100_000).optional(),title:z.string().trim().max(120).optional(),profession:z.string().trim().max(120).optional(),locationId:z.coerce.number().int().positive(),race:z.string().trim().min(1).max(80),alive:z.boolean(),follower:z.boolean(),className:z.string().trim().max(50).optional()});
+function readNpcForm(formData:FormData,image:string){return npcSchema.safeParse({name:formData.get("name"),gender:formData.get("gender")||undefined,image,publicDescription:formData.get("publicDescription")||undefined,adminNotes:formData.get("adminNotes")||undefined,title:formData.get("title")||undefined,profession:formData.get("profession")||undefined,locationId:formData.get("locationId"),race:formData.get("race")||"unknown",alive:formData.get("alive")==="on",follower:formData.get("follower")==="on",className:formData.get("className")||undefined});}
+function dateValues(formData:FormData,prefix:string){return Object.fromEntries(["Precision","Era","Year","Month","Day"].map(suffix=>[`${prefix}${suffix}`,formData.get(`${prefix}${suffix}`)]));}
+async function saveLifeFields(projectId:number,personId:number,alive:boolean,formData:FormData){await savePersonDeathMetadata(projectId,personId,alive,formData.get("deathCauseCode"),formData.get("deathCauseDetail"));if(alive){await clearPersonDeathDate(projectId,personId);return;}if(formData.has("deathPrecision"))await savePersonFantasyDate(projectId,personId,"death",parseFantasyDateFields(dateValues(formData,"death"),"death"));}
+async function assertProject(projectId:number){if(!Number.isSafeInteger(projectId)||projectId<=0||!(await getProject(projectId)))throw new Error("Invalid project context");}
 
-function readNpcForm(formData: FormData, image: string) {
-  return npcSchema.safeParse({
-    name: formData.get("name"),
-    gender: formData.get("gender") || undefined,
-    image,
-    publicDescription: formData.get("publicDescription") || undefined,
-    adminNotes: formData.get("adminNotes") || undefined,
-    title: formData.get("title") || undefined,
-    profession: formData.get("profession") || undefined,
-    locationId: formData.get("locationId"),
-    race: formData.get("race") || "unknown",
-    alive: formData.get("alive") === "on",
-    follower: formData.get("follower") === "on",
-    className: formData.get("className") || undefined,
-  });
-}
+export async function createNpcAction(projectId:number,formData:FormData){await requireAdminSession();await assertProject(projectId);const source=await resolveEntityImageSource(projectId,formData,{title:String(formData.get("name")??"NPC")});const parsed=readNpcForm(formData,source.image);if(!parsed.success)throw new Error("Invalid NPC input");const created=await createNpc(projectId,parsed.data);await setPersonLocation(projectId,created.nId,{locationId:parsed.data.locationId,role:"current",isPrimary:true});if(source.uploaded)await setEntityImageReference(projectId,"person",created.nId,source);if(formData.has("birthPrecision"))await savePersonFantasyDate(projectId,created.nId,"birth",parseFantasyDateFields(dateValues(formData,"birth"),"birth"));await saveLifeFields(projectId,created.nId,parsed.data.alive,formData);redirect(`/admin/projects/${projectId}/npcs/${created.nId}`);}
 
-function dateValues(formData:FormData,prefix:string){return Object.fromEntries(["Precision","Era","Year","Month","Day"].map((suffix)=>[`${prefix}${suffix}`,formData.get(`${prefix}${suffix}`)]));}
+export async function updateNpcAction(projectId:number,npcId:number,formData:FormData){await requireAdminSession();await assertProject(projectId);const current=await getNpc(projectId,npcId);if(!current)throw new Error("NPC not found in this project");const source=await resolveEntityImageSource(projectId,formData,{current:current.image,entityType:"person",entityId:npcId,title:current.name});const parsed=readNpcForm(formData,source.image);if(!parsed.success)throw new Error("Invalid NPC input");const updated=await updateNpc(projectId,npcId,parsed.data);if(!updated)throw new Error("NPC not found in this project");await setPersonLocation(projectId,npcId,{locationId:parsed.data.locationId,role:"current",isPrimary:true});if(source.uploaded||source.removed||source.image!==current.image)await setEntityImageReference(projectId,"person",npcId,source);if(formData.has("birthPrecision"))await savePersonFantasyDate(projectId,npcId,"birth",parseFantasyDateFields(dateValues(formData,"birth"),"birth"));await saveLifeFields(projectId,npcId,parsed.data.alive,formData);revalidatePath(`/admin/projects/${projectId}/npcs/${npcId}`);revalidatePath(`/admin/projects/${projectId}/npcs`);revalidatePath(`/admin/projects/${projectId}/family-trees`);}
 
-async function saveLifeFields(projectId:number,personId:number,alive:boolean,formData:FormData){
-  await savePersonDeathMetadata(projectId,personId,alive,formData.get("deathCauseCode"),formData.get("deathCauseDetail"));
-  if(alive){await clearPersonDeathDate(projectId,personId);return;}
-  if(formData.has("deathPrecision"))await savePersonFantasyDate(projectId,personId,"death",parseFantasyDateFields(dateValues(formData,"death"),"death"));
-}
-
-async function assertProject(projectId: number) {
-  if (!Number.isSafeInteger(projectId) || projectId <= 0 || !(await getProject(projectId))) throw new Error("Invalid project context");
-}
-
-export async function createNpcAction(projectId: number, formData: FormData) {
-  await requireAdminSession();await assertProject(projectId);
-  const source=await resolveEntityImageSource(projectId,formData,{title:String(formData.get("name")??"NPC")});
-  const parsed=readNpcForm(formData,source.image);if(!parsed.success)throw new Error("Invalid NPC input");
-  const created=await createNpc(projectId,parsed.data);
-  if(source.uploaded)await setEntityImageReference(projectId,"person",created.nId,source);
-  if(formData.has("birthPrecision"))await savePersonFantasyDate(projectId,created.nId,"birth",parseFantasyDateFields(dateValues(formData,"birth"),"birth"));
-  await saveLifeFields(projectId,created.nId,parsed.data.alive,formData);
-  redirect(`/admin/projects/${projectId}/npcs/${created.nId}`);
-}
-
-export async function updateNpcAction(projectId: number, npcId: number, formData: FormData) {
-  await requireAdminSession();await assertProject(projectId);
-  const current=await getNpc(projectId,npcId);if(!current)throw new Error("NPC not found in this project");
-  const source=await resolveEntityImageSource(projectId,formData,{current:current.image,entityType:"person",entityId:npcId,title:current.name});
-  const parsed=readNpcForm(formData,source.image);if(!parsed.success)throw new Error("Invalid NPC input");
-  const updated=await updateNpc(projectId,npcId,parsed.data);if(!updated)throw new Error("NPC not found in this project");
-  if(source.uploaded||source.removed||source.image!==current.image)await setEntityImageReference(projectId,"person",npcId,source);
-  if(formData.has("birthPrecision"))await savePersonFantasyDate(projectId,npcId,"birth",parseFantasyDateFields(dateValues(formData,"birth"),"birth"));
-  await saveLifeFields(projectId,npcId,parsed.data.alive,formData);
-  revalidatePath(`/admin/projects/${projectId}/npcs/${npcId}`);revalidatePath(`/admin/projects/${projectId}/npcs`);revalidatePath(`/admin/projects/${projectId}/family-trees`);
-}
-
-export async function archiveNpcAction(projectId: number, npcId: number) {
-  await requireAdminSession();await assertProject(projectId);
-  const archived=await archiveNpc(projectId,npcId);if(!archived)throw new Error("NPC not found in this project");redirect(`/admin/projects/${projectId}/npcs`);
-}
+export async function addNpcLocationAction(projectId:number,npcId:number,formData:FormData){await requireAdminSession();await assertProject(projectId);await setPersonLocation(projectId,npcId,{locationId:formData.get("linkedLocationId"),role:formData.get("locationRole"),isPrimary:formData.get("locationPrimary")==="on",notes:formData.get("locationNotes")||null});revalidatePath(`/admin/projects/${projectId}/npcs/${npcId}`);}
+export async function removeNpcLocationAction(projectId:number,npcId:number,assignmentId:number){await requireAdminSession();await assertProject(projectId);await removePersonLocation(projectId,npcId,assignmentId);revalidatePath(`/admin/projects/${projectId}/npcs/${npcId}`);}
+export async function archiveNpcAction(projectId:number,npcId:number){await requireAdminSession();await assertProject(projectId);const archived=await archiveNpc(projectId,npcId);if(!archived)throw new Error("NPC not found in this project");redirect(`/admin/projects/${projectId}/npcs`);}
