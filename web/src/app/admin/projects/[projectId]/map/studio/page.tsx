@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { AdminShell } from "@/components/admin/admin-shell";
+import { LandMaskPrecisionControl } from "@/components/map/land-mask-precision-control";
 import { MapEditor } from "@/components/map/map-editor";
 import mapStyles from "@/components/map/map-workspace.module.css";
 import { Rock3LayerImporter } from "@/components/rock3-layer-importer";
@@ -42,6 +43,7 @@ export default async function MapStudioPage({params,searchParams}:{params:Promis
           {maps.length>1&&(!existingLocation||placementLocation)?<form method="get" className="row" style={{gap:5}}>{placementLocation?<input type="hidden" name="locationId" value={placementLocation.id}/>:null}{!placementLocation&&search.tool?<input type="hidden" name="tool" value={search.tool}/>:null}<select className={mapStyles.mapSelect} name="mapId" defaultValue={String(mapId)} aria-label={placementLocation?"Zielkarte auswählen":"Karte wechseln"}>{maps.map(map=><option key={map.map_id} value={map.map_id}>{map.name}{map.is_primary?" · Hauptkarte":""}</option>)}</select><button className={`${mapStyles.toolbarButton} button ghost`}>Öffnen</button></form>:null}
           {existingLocation?<Link className={`${mapStyles.toolbarButton} button ghost ${mapStyles.secondaryMobileHide}`} href={`/admin/projects/${projectId}/locations/${existingLocation.loc_id}`}>Location</Link>:null}
           <Link className={`${mapStyles.toolbarButton} button ghost ${mapStyles.secondaryMobileHide}`} href={`/admin/projects/${projectId}/map/marker-editor?mapId=${mapId}`}>⌖ Marker</Link>
+          {isRock3?<details style={{position:"relative"}}><summary className={`${mapStyles.toolbarButton} button ghost`} style={{listStyle:"none",cursor:"pointer"}}>⌁ Küste</summary><div className={mapStyles.glass} style={{position:"absolute",right:0,top:"calc(100% + 8px)",width:250,padding:14,borderRadius:14,zIndex:80}}><LandMaskPrecisionControl/></div></details>:null}
           <details style={{position:"relative"}}><summary className={`${mapStyles.toolbarButton} button ghost`} style={{listStyle:"none",cursor:"pointer"}}>⋯ Weltdaten</summary><div className={mapStyles.glass} style={{position:"absolute",right:0,top:"calc(100% + 8px)",width:"min(390px,calc(100vw - 100px))",maxHeight:"70vh",overflow:"auto",padding:14,borderRadius:14,zIndex:80}}><Rock3LayerImporter projectId={projectId} mapId={mapId}/></div></details>
         </div>
       </header>
