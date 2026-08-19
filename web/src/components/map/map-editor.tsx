@@ -3,6 +3,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { MapLocationPicker } from "./map-location-picker";
 import { colorWithAlpha, ensureOpenLayers, mapColor, mediaMapUrl, parseMapBounds } from "./openlayers-runtime";
+import {
+  DEFAULT_MAP_CONTENT_VISIBILITY,
+  MAP_CONTENT_FILTERS,
+  allContentVisibility,
+  featureContentCategory,
+  type MapContentCategory,
+  type MapContentVisibility,
+} from "./map-content-visibility";
 import type { MapSearchItem, WorldMapConfig, WorldMapFeature, WorldMapLayer } from "./map-types";
 import { conformPolygonToParent, type JsonMapGeometry, type LandMaskGuide, type MapExtent } from "./map-geometry-guides";
 import { clipPolygonToLandMask } from "./map-raster-clip";
@@ -57,6 +65,15 @@ function candidateKindLabel(candidate: MapSelectionCandidate) {
   if (candidate.locationKind && ["world","continent","country","region","province","city","town","village","district","building","landmark","wilderness","other"].includes(candidate.locationKind)) return locationKindLabel(candidate.locationKind as LocationKind);
   return geometryLabel(candidate.geometryType);
 }
+function categoryForTool(tool: ToolId): MapContentCategory {
+  if (tool === "country") return "countries";
+  if (tool === "province") return "provinces";
+  if (tool === "region") return "regions";
+  if (tool === "city") return "settlements";
+  if (tool === "place") return "places";
+  if (tool === "river") return "rivers";
+  return "roads";
+}
 
 export function MapEditor({ projectId, mapConfig, layers, features, initialTool, focusFeatureId, existingLocation = null, height = "calc(100vh - 110px)" }: {
   projectId: number; mapConfig: WorldMapConfig; layers: WorldMapLayer[]; features: WorldMapFeature[]; initialTool?: string | null;
@@ -65,6 +82,7 @@ export function MapEditor({ projectId, mapConfig, layers, features, initialTool,
   const targetRef = useRef<HTMLDivElement>(null), mapRef = useRef<any>(null), drawRef = useRef<any>(null), selectRef = useRef<any>(null), modifyRef = useRef<any>(null);
   const sourceRefs = useRef(new Map<number, any>()), layerRefs = useRef(new Map<number, any>()), featureRefs = useRef(new Map<number, any>()), rowRefs = useRef(new Map<number, WorldMapFeature>());
   const beforeGeometry = useRef(new Map<number, JsonMapGeometry>()), saveTimers = useRef(new Map<number, ReturnType<typeof setTimeout>>()), landMaskRef = useRef<LandMaskGuide | null>(null), highlightRef = useRef<HighlightController | null>(null);
+  const contentVisibilityRef = useRef<MapContentVisibility>({ ...DEFAULT_MAP_CONTENT_VISIBILITY });
   const vectorLayers = useMemo(() => layers.filter((layer) => layer.layer_type === "vector"), [layers]);
   const rasterLayers = useMemo(() => layers.filter((layer) => layer.layer_type === "raster"), [layers]);
   const landMaskLayer = useMemo(() => rasterLayers.find((layer) => layer.layer_role === "land_mask"), [rasterLayers]);
@@ -79,6 +97,7 @@ export function MapEditor({ projectId, mapConfig, layers, features, initialTool,
   const [status, setStatus] = useState(existingLocation ? `${locationKindLabel(existingLocation.kind)} „${existingLocation.name}“ kann jetzt platziert werden.` : "Auswahlwerkzeug aktiv."), [error, setError] = useState("");
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle"), [query, setQuery] = useState(""), [searchResults, setSearchResults] = useState<MapSearchItem[]>([]), [searching, setSearching] = useState(false);
   const [undoStack, setUndoStack] = useState<HistoryEntry[]>([]), [redoStack, setRedoStack] = useState<HistoryEntry[]>([]), [activeView, setActiveView] = useState("default"), [layersOpen, setLayersOpen] = useState(false), [landMaskState, setLandMaskState] = useState<LandMaskState>(landMaskLayer ? "loading" : "missing"), [pickMenu, setPickMenu] = useState<PickMenu | null>(null);
+  const [contentVisibility, setContentVisibility] = useState<MapContentVisibility>({ ...DEFAULT_MAP_CONTENT_VISIBILITY });
   const activeTool = tool ? TOOLS[tool] : null, selectedRow = selectedId ? rowRefs.current.get(selectedId) ?? null : null;
   const selectedKind = selectedRow ? kindFromFeature(selectedRow) : null;
   const groupedLayers = useMemo(() => { const groups = new Map<string, WorldMapLayer[]>(); for (const layer of layers) { const group = layerGroup(layer); groups.set(group, [...(groups.get(group) ?? []), layer]); } return [...groups.entries()]; }, [layers]);
@@ -86,6 +105,10 @@ export function MapEditor({ projectId, mapConfig, layers, features, initialTool,
   function selectFeature(featureId: number | null) {
     const collection = selectRef.current?.getFeatures();
     collection?.clear();
+    if (featureId) {
+      const row = rowRefs.current.get(featureId);
+      if (row && !contentVisibilityRef.current[featureContentCategory(row)]) featureId = null;
+    }
     if (featureId) {
       const feature = featureRefs.current.get(featureId);
       if (feature) collection?.push(feature);
@@ -95,8 +118,30 @@ export function MapEditor({ projectId, mapConfig, layers, features, initialTool,
     highlightRef.current?.select(featureId);
   }
 
-  function chooseTool(next: ToolId) { if (existingLocation) return; setTool(next); setColor(TOOLS[next].color); setParentId(null); setDrawing(false); selectFeature(null); setError(""); setStatus(`${TOOLS[next].label} gewählt. Daten eingeben und Zeichnen starten.`); }
-  function chooseSelect() { if (existingLocation) return; setTool(null); setDrawing(false); setError(""); setPickMenu(null); setStatus("Auswahlwerkzeug aktiv. Fahre über ein Objekt oder klicke es an. Bei Überlagerungen kannst du gezielt wählen."); }
+  function refreshContentVisibility(next: MapContentVisibility) {
+    contentVisibilityRef.current = next;
+    setContentVisibility(next);
+    try { window.localStorage.setItem(`worldreborn:map-content:${mapConfig.mapId}`, JSON.stringify(next)); } catch { /* optional preference */ }
+    if (selectedId) {
+      const row = rowRefs.current.get(selectedId);
+      if (row && !next[featureContentCategory(row)]) selectFeature(null);
+    }
+    for (const layer of vectorLayers) layerRefs.current.get(Number(layer.layer_id))?.changed();
+    setPickMenu(null);
+    setActiveView("custom");
+  }
+
+  function toggleContent(key: keyof MapContentVisibility, visible: boolean) {
+    refreshContentVisibility({ ...contentVisibilityRef.current, [key]: visible });
+  }
+
+  function chooseTool(next: ToolId) {
+    if (existingLocation) return;
+    const category = categoryForTool(next);
+    if (!contentVisibilityRef.current[category]) refreshContentVisibility({ ...contentVisibilityRef.current, [category]: true });
+    setTool(next); setColor(TOOLS[next].color); setParentId(null); setDrawing(false); selectFeature(null); setError(""); setStatus(`${TOOLS[next].label} gewählt. Daten eingeben und Zeichnen starten.`);
+  }
+  function chooseSelect() { if (existingLocation) return; setTool(null); setDrawing(false); setError(""); setPickMenu(null); setStatus("Auswahlwerkzeug aktiv. Fahre über ein sichtbares Objekt oder klicke es an. Bei Überlagerungen kannst du gezielt wählen."); }
   function layerForRole(role: string) { return vectorLayers.find((layer) => layer.layer_role === role) ?? vectorLayers[0] ?? null; }
   function scheduleLayerPatch(id: number, patch: Record<string, unknown>) { const previous = saveTimers.current.get(id); if (previous) clearTimeout(previous); saveTimers.current.set(id, setTimeout(async () => { const response = await fetch(`/api/admin/projects/${projectId}/maps/${mapConfig.mapId}/layers/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch) }); if (!response.ok) { const body = await response.json().catch(() => ({})); setError(body.error || "Kartenebene konnte nicht gespeichert werden."); } }, 280)); }
 
@@ -157,7 +202,14 @@ export function MapEditor({ projectId, mapConfig, layers, features, initialTool,
 
   async function patchGeometry(featureId: number, geometry: JsonMapGeometry) { setSaveState("saving"); const response = await fetch(`/api/admin/projects/${projectId}/maps/${mapConfig.mapId}/features/${featureId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ patchType: "geometry", geometry }) }); const body = await response.json().catch(() => ({})); if (!response.ok) throw new Error(body.error || "Grenze konnte nicht gespeichert werden."); const row = rowRefs.current.get(featureId); if (row) row.geometry = geometry; setSaveState("saved"); window.setTimeout(() => setSaveState("idle"), 1200); }
   async function patchStyle(featureId: number, style: Record<string, unknown>) { setSaveState("saving"); const response = await fetch(`/api/admin/projects/${projectId}/maps/${mapConfig.mapId}/features/${featureId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ patchType: "style", style }) }); const body = await response.json().catch(() => ({})); if (!response.ok) throw new Error(body.error || "Darstellung konnte nicht gespeichert werden."); const row = rowRefs.current.get(featureId); if (row) row.style = { ...row.style, ...style }; setSaveState("saved"); window.setTimeout(() => setSaveState("idle"), 1200); }
-  function focusFeature(id: number) { const feature = featureRefs.current.get(id), map = mapRef.current; if (!feature || !map) return false; const extent = feature.getGeometry()?.getExtent(); if (extent) map.getView().fit(extent, { padding: [90, 90, 90, 90], maxZoom: Math.min(mapConfig.maxZoom, 5), duration: 250 }); selectFeature(id); return true; }
+  function focusFeature(id: number) {
+    const row = rowRefs.current.get(id) ?? features.find((item) => Number(item.feature_id) === id);
+    if (row && !contentVisibilityRef.current[featureContentCategory(row)]) { setStatus(`„${row.label}“ ist aktuell ausgeblendet. Aktiviere den Inhalt unter Sichtbarkeit.`); return false; }
+    const feature = featureRefs.current.get(id), map = mapRef.current;
+    if (!feature || !map) return false;
+    const extent = feature.getGeometry()?.getExtent(); if (extent) map.getView().fit(extent, { padding: [90, 90, 90, 90], maxZoom: Math.min(mapConfig.maxZoom, 5), duration: 250 });
+    selectFeature(id); return true;
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -175,6 +227,17 @@ export function MapEditor({ projectId, mapConfig, layers, features, initialTool,
   }, [landMaskLayer, mapConfig.mapType, mapExtent]);
 
   useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem(`worldreborn:map-content:${mapConfig.mapId}`);
+      if (!saved) return;
+      const parsed = JSON.parse(saved) as Partial<MapContentVisibility>;
+      const next = { ...DEFAULT_MAP_CONTENT_VISIBILITY, ...parsed };
+      contentVisibilityRef.current = next;
+      setContentVisibility(next);
+    } catch { /* optional preference */ }
+  }, [mapConfig.mapId]);
+
+  useEffect(() => {
     let active = true;
     ensureOpenLayers().then((ol) => {
       if (!active || !targetRef.current) return;
@@ -184,7 +247,25 @@ export function MapEditor({ projectId, mapConfig, layers, features, initialTool,
       else if (mapConfig.tileUrl) mapLayers.push(new ol.layer.Tile({ zIndex: -1000, source: new ol.source.XYZ({ url: mapConfig.tileUrl, wrapX: false, minZoom: mapConfig.minZoom, maxZoom: mapConfig.maxZoom }) }));
       for (const layer of rasterLayers) { const id = Number(layer.layer_id), isBase = layer.layer_role === "satellite" && layer.media_id != null && String(layer.media_id) === String(mapConfig.imagePath); if (isBase) continue; const url = layer.source_type === "media" && layer.media_id ? `/api/media/${layer.media_id}` : layer.source_url; if (!url) continue; let rendered: any = null; if (simple && (layer.source_type === "media" || layer.source_type === "image")) rendered = new ol.layer.Image({ opacity: layer.opacity, zIndex: layer.z_index, visible: layer.visible_by_default, source: new ol.source.ImageStatic({ url, projection, imageExtent: extent }) }); else if (layer.source_type === "tile") rendered = new ol.layer.Tile({ opacity: layer.opacity, zIndex: layer.z_index, visible: layer.visible_by_default, source: new ol.source.XYZ({ url, wrapX: false }) }); if (rendered) { rendered.set("worldrebornLayerId", id); layerRefs.current.set(id, rendered); mapLayers.push(rendered); } }
       const geojson = new ol.format.GeoJSON();
-      for (const layer of vectorLayers) { const id = Number(layer.layer_id), source = new ol.source.Vector(); sourceRefs.current.set(id, source); const baseFill = mapColor(layer.style?.fill, "#7c6ee6"), baseStroke = mapColor(layer.style?.stroke, "#f5f5f5"), baseWidth = Number(layer.style?.strokeWidth ?? 2); const rendered = new ol.layer.Vector({ source, zIndex: layer.z_index || 500, visible: layer.visible_by_default, opacity: layer.opacity, style: (feature: any) => { const row = rowRefs.current.get(Number(feature.get("featureId"))), type = feature.getGeometry()?.getType(), fill = mapColor(row?.style?.fill, baseFill), stroke = mapColor(row?.style?.stroke, baseStroke); return new ol.style.Style({ fill: type?.includes("Polygon") ? new ol.style.Fill({ color: colorWithAlpha(fill, 0.3) }) : undefined, stroke: new ol.style.Stroke({ color: stroke, width: Number(row?.style?.strokeWidth ?? baseWidth) }), image: new ol.style.Circle({ radius: 7, fill: new ol.style.Fill({ color: fill }), stroke: new ol.style.Stroke({ color: stroke, width: 2 }) }), text: feature.get("label") ? new ol.style.Text({ text: String(feature.get("label")), offsetY: -13, fill: new ol.style.Fill({ color: "#fff" }), stroke: new ol.style.Stroke({ color: "#111", width: 3 }) }) : undefined }); } }); rendered.set("worldrebornLayerId", id); layerRefs.current.set(id, rendered); mapLayers.push(rendered); for (const row of features.filter((item) => Number(item.layer_id) === id)) { try { const featureId = Number(row.feature_id), feature = geojson.readFeature({ type: "Feature", geometry: row.geometry, properties: { featureId, label: row.label } }); source.addFeature(feature); featureRefs.current.set(featureId, feature); rowRefs.current.set(featureId, { ...row }); } catch { /* malformed legacy geometry remains isolated */ } } }
+      for (const layer of vectorLayers) {
+        const id = Number(layer.layer_id), source = new ol.source.Vector(); sourceRefs.current.set(id, source);
+        const baseFill = mapColor(layer.style?.fill, "#7c6ee6"), baseStroke = mapColor(layer.style?.stroke, "#f5f5f5"), baseWidth = Number(layer.style?.strokeWidth ?? 2);
+        const rendered = new ol.layer.Vector({ source, zIndex: layer.z_index || 500, visible: layer.visible_by_default, opacity: layer.opacity, style: (feature: any) => {
+          const row = rowRefs.current.get(Number(feature.get("featureId")));
+          if (row && !contentVisibilityRef.current[featureContentCategory(row)]) return null;
+          const type = feature.getGeometry()?.getType(), fill = mapColor(row?.style?.fill, baseFill), stroke = mapColor(row?.style?.stroke, baseStroke);
+          return new ol.style.Style({
+            fill: type?.includes("Polygon") ? new ol.style.Fill({ color: colorWithAlpha(fill, 0.3) }) : undefined,
+            stroke: new ol.style.Stroke({ color: stroke, width: Number(row?.style?.strokeWidth ?? baseWidth) }),
+            image: new ol.style.Circle({ radius: 7, fill: new ol.style.Fill({ color: fill }), stroke: new ol.style.Stroke({ color: stroke, width: 2 }) }),
+            text: contentVisibilityRef.current.labels && feature.get("label") ? new ol.style.Text({ text: String(feature.get("label")), offsetY: -13, fill: new ol.style.Fill({ color: "#fff" }), stroke: new ol.style.Stroke({ color: "#111", width: 3 }) }) : undefined,
+          });
+        } });
+        rendered.set("worldrebornLayerId", id); layerRefs.current.set(id, rendered); mapLayers.push(rendered);
+        for (const row of features.filter((item) => Number(item.layer_id) === id)) {
+          try { const featureId = Number(row.feature_id), feature = geojson.readFeature({ type: "Feature", geometry: row.geometry, properties: { featureId, label: row.label } }); source.addFeature(feature); featureRefs.current.set(featureId, feature); rowRefs.current.set(featureId, { ...row }); } catch { /* malformed legacy geometry remains isolated */ }
+        }
+      }
 
       const highlightSource = new ol.source.Vector();
       const highlightLayer = new ol.layer.Vector({ source: highlightSource, zIndex: 100000, style: (feature: any) => {
@@ -206,6 +287,8 @@ export function MapEditor({ projectId, mapConfig, layers, features, initialTool,
         highlightSource.clear();
         const add = (id: number | null, visualState: "selected" | "hover") => {
           if (!id) return;
+          const row = rowRefs.current.get(id);
+          if (row && !contentVisibilityRef.current[featureContentCategory(row)]) return;
           const original = featureRefs.current.get(id);
           if (!original?.getGeometry()) return;
           const visual = new ol.Feature({ geometry: original.getGeometry(), visualState });
@@ -232,7 +315,7 @@ export function MapEditor({ projectId, mapConfig, layers, features, initialTool,
           const featureId = Number(feature.get("featureId"));
           if (!featureId || seen.has(featureId)) return undefined;
           const row = rowRefs.current.get(featureId);
-          if (!row) return undefined;
+          if (!row || !contentVisibilityRef.current[featureContentCategory(row)]) return undefined;
           seen.add(featureId);
           const featureExtent = feature.getGeometry()?.getExtent();
           const extentArea = featureExtent ? Math.max(0, (featureExtent[2] - featureExtent[0]) * (featureExtent[3] - featureExtent[1])) : 0;
@@ -254,7 +337,7 @@ export function MapEditor({ projectId, mapConfig, layers, features, initialTool,
         if (candidates.length === 1) { chooseCandidate(candidates[0].featureId); return; }
         const width = targetRef.current?.clientWidth ?? 800, height = targetRef.current?.clientHeight ?? 600;
         setPickMenu({ x: Math.max(58, Math.min(event.pixel[0] + 14, width - 286)), y: Math.max(58, Math.min(event.pixel[1] + 14, height - 250)), items: candidates.slice(0, 10) });
-        setStatus(`${candidates.length} Objekte liegen hier. Wähle gezielt das gewünschte Element.`);
+        setStatus(`${candidates.length} sichtbare Objekte liegen hier. Wähle gezielt das gewünschte Element.`);
       };
       const pointerMove = (event: any) => {
         if (event.dragging || drawRef.current) return;
@@ -312,12 +395,12 @@ export function MapEditor({ projectId, mapConfig, layers, features, initialTool,
           if (!geometryEqual(geometry, rawGeometry)) event.feature.setGeometry(geojson.readGeometry(geometry));
           const style = activeTool.mode === "LineString" ? { stroke: color, strokeWidth: 3 } : { fill: color, stroke: "#ffffff", strokeWidth: 2 };
           const linkedLocationId = existingLocation?.id ?? null;
-          const metadata = { createdIn: "map-editor-v7", tool, existingLocationId: linkedLocationId, parentLocationId: constraintParentId, geometryConformance: activeTool.kind === "country" ? "land-mask-raster-clip" : constraintParentId ? "parent-polygon" : "none" };
+          const metadata = { createdIn: "map-editor-v8", tool, existingLocationId: linkedLocationId, parentLocationId: constraintParentId, geometryConformance: activeTool.kind === "country" ? "land-mask-raster-clip" : constraintParentId ? "parent-polygon" : "none" };
           const response = await fetch(`/api/admin/projects/${projectId}/maps/${mapConfig.mapId}/features`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ layerId: Number(layer.layer_id), geometry, entityType: linkedLocationId ? "location" : null, entityId: linkedLocationId, label: name.trim(), visibilityMode: "admin_only", selectedPlayerIds: [], style, metadata, createLocation: !linkedLocationId && activeTool.kind ? { kind: activeTool.kind, parentLocationId: parentId, locationType: locationKindLabel(activeTool.kind) } : null }) });
           const body = await response.json().catch(() => ({})); if (!response.ok) throw new Error(body.error || "Element konnte nicht gespeichert werden.");
           const featureId = Number(body.featureId), locationId = linkedLocationId ?? (body.locationId ? Number(body.locationId) : null);
           const row: WorldMapFeature = { feature_id: String(featureId), layer_id: String(layer.layer_id), geometry, entity_type: locationId ? "location" : null, entity_id: locationId ? String(locationId) : null, label: name.trim(), short_description: null, visibility_mode: "admin_only", style, metadata, location_parent_id: constraintParentId, location_kind: activeTool.kind };
-          rowRefs.current.set(featureId, row); featureRefs.current.set(featureId, event.feature); event.feature.set("featureId", featureId); event.feature.set("label", row.label); selectRef.current?.getFeatures().clear(); selectRef.current?.getFeatures().push(event.feature); setSelectedId(featureId); highlightRef.current?.select(featureId); setDrawing(false); if (!existingLocation) { setName(""); setParentId(null); } setSaveState("saved");
+          rowRefs.current.set(featureId, row); featureRefs.current.set(featureId, event.feature); event.feature.set("featureId", featureId); event.feature.set("label", row.label); source.changed(); selectRef.current?.getFeatures().clear(); selectRef.current?.getFeatures().push(event.feature); setSelectedId(featureId); highlightRef.current?.select(featureId); setDrawing(false); if (!existingLocation) { setName(""); setParentId(null); } setSaveState("saved");
           if (activeTool.kind === "country" && landMaskRef.current) setStatus(`Land „${row.label}“ wurde mit der Rock-3-Landmaske verschnitten. Wasser wurde entfernt und Inseln bleiben erhalten.`);
           else if ((activeTool.kind === "province" || activeTool.kind === "region") && constraintParentId) setStatus(`${activeTool.label} „${row.label}“ wurde an die übergeordnete politische Grenze angepasst.`);
           else setStatus(existingLocation ? `„${existingLocation.name}“ wurde auf der Karte platziert.` : `${activeTool.label} „${row.label}“ wurde erstellt.`);
@@ -395,6 +478,7 @@ export function MapEditor({ projectId, mapConfig, layers, features, initialTool,
   const provinceNeedsParent = activeTool?.kind === "province";
   const countryMaskMessage = activeTool?.kind === "country" && landMaskLayer ? (landMaskState === "ready" ? "Land-Mask-Clipping aktiv: Wasser wird aus der Fläche entfernt; getrennte Inseln bleiben erhalten." : landMaskState === "loading" ? "Land-Mask wird hochauflösend vorbereitet …" : "Land-Mask konnte nicht als Geometrie-Führung geladen werden.") : null;
   const canReconformSelected = selectedRow && ["country", "province", "region"].includes(selectedKind ?? "") && ["Polygon", "MultiPolygon"].includes(selectedRow.geometry.type);
+  const editorContentFilters = MAP_CONTENT_FILTERS.filter((filter) => filter.id !== "markers");
 
   return <div className={styles.workspace} style={{ height }}>
     <div ref={targetRef} className={styles.canvas}/>
@@ -431,12 +515,25 @@ export function MapEditor({ projectId, mapConfig, layers, features, initialTool,
     <div className={styles.actionDock}>
       <button type="button" className={`${styles.iconAction} ${styles.iconActionSquare} ${styles.glass}`} disabled={!undoStack.length} onClick={() => void undo()} aria-label="Rückgängig" title="Rückgängig">↶</button>
       <button type="button" className={`${styles.iconAction} ${styles.iconActionSquare} ${styles.glass}`} disabled={!redoStack.length} onClick={() => void redo()} aria-label="Wiederholen" title="Wiederholen">↷</button>
-      <button type="button" className={`${styles.iconAction} ${styles.glass}${layersOpen ? ` ${styles.actionActive}` : ""}`} onClick={() => setLayersOpen((value) => !value)} aria-expanded={layersOpen}>☷ Ebenen</button>
+      <button type="button" className={`${styles.iconAction} ${styles.glass}${layersOpen ? ` ${styles.actionActive}` : ""}`} onClick={() => setLayersOpen((value) => !value)} aria-expanded={layersOpen}>☷ Sichtbarkeit</button>
     </div>
 
     {layersOpen ? <aside className={`${styles.layerDrawer} ${styles.glass}`}>
-      <div className={styles.drawerHeader}><div><strong>Kartenebenen</strong><span>Sichtbarkeit und Deckkraft</span></div><button type="button" className={styles.closeButton} onClick={() => setLayersOpen(false)} aria-label="Ebenen schließen">×</button></div>
-      <div className={styles.layerList}>{groupedLayers.map(([group, rows]) => <div key={group}><div className={styles.layerSection}>{group}</div>{rows.map((layer) => { const id = Number(layer.layer_id), isBase = layer.layer_role === "satellite" && layer.media_id != null && String(layer.media_id) === String(mapConfig.imagePath); return <div className={styles.layerRow} key={id}><div className={styles.layerInfo}><strong>{layer.name}</strong><small>{isBase ? "Basiskarte" : layer.layer_type === "vector" ? "Eigene Inhalte" : "Rock-3-Daten"}</small></div><div className={styles.layerControl}><input data-editor-layer={id} type="checkbox" defaultChecked={isBase || layer.visible_by_default} disabled={isBase} onChange={(event) => toggleLayer(layer, event.target.checked)} aria-label={`${layer.name} ein- oder ausblenden`}/></div>{!isBase ? <label className={styles.opacityRow}><span>Deckkraft</span><input type="range" min="0" max="1" step="0.05" defaultValue={layer.opacity} onChange={(event) => setOpacity(layer, Number(event.target.value))}/></label> : null}</div>; })}</div>)}</div>
+      <div className={styles.drawerHeader}><div><strong>Sichtbarkeit</strong><span>Karteninhalte und Ebenen getrennt steuern</span></div><button type="button" className={styles.closeButton} onClick={() => setLayersOpen(false)} aria-label="Sichtbarkeit schließen">×</button></div>
+      <div className={styles.layerList}>
+        <div>
+          <div className={styles.layerSection}>Karteninhalte</div>
+          <div className="row" style={{ gap: 6, padding: "4px 8px 7px" }}>
+            <button type="button" className="button ghost" style={{ minHeight: 28, height: 28, padding: "0 8px", fontSize: 9 }} onClick={() => refreshContentVisibility(allContentVisibility(true))}>Alle an</button>
+            <button type="button" className="button ghost" style={{ minHeight: 28, height: 28, padding: "0 8px", fontSize: 9 }} onClick={() => refreshContentVisibility(allContentVisibility(false))}>Alle aus</button>
+          </div>
+          {editorContentFilters.map((filter) => <div className={styles.layerRow} key={filter.id}>
+            <div className={styles.layerInfo}><strong>{filter.icon} {filter.label}</strong><small>{filter.hint}</small></div>
+            <div className={styles.layerControl}><input type="checkbox" checked={contentVisibility[filter.id]} onChange={(event) => toggleContent(filter.id, event.target.checked)} aria-label={`${filter.label} ein- oder ausblenden`}/></div>
+          </div>)}
+        </div>
+        {groupedLayers.map(([group, rows]) => <div key={group}><div className={styles.layerSection}>{group}</div>{rows.map((layer) => { const id = Number(layer.layer_id), isBase = layer.layer_role === "satellite" && layer.media_id != null && String(layer.media_id) === String(mapConfig.imagePath); return <div className={styles.layerRow} key={id}><div className={styles.layerInfo}><strong>{layer.name}</strong><small>{isBase ? "Basiskarte" : layer.layer_type === "vector" ? "Eigene Inhalte" : "Rock-3-Daten"}</small></div><div className={styles.layerControl}><input data-editor-layer={id} type="checkbox" defaultChecked={isBase || layer.visible_by_default} disabled={isBase} onChange={(event) => toggleLayer(layer, event.target.checked)} aria-label={`${layer.name} ein- oder ausblenden`}/></div>{!isBase ? <label className={styles.opacityRow}><span>Deckkraft</span><input type="range" min="0" max="1" step="0.05" defaultValue={layer.opacity} onChange={(event) => setOpacity(layer, Number(event.target.value))}/></label> : null}</div>; })}</div>)}
+      </div>
     </aside> : null}
 
     <div className={`${styles.viewSwitcher} ${styles.glass}`}>{VIEWS.map(([id, label]) => <button key={id} type="button" className={`${styles.viewButton}${activeView === id ? ` ${styles.viewActive}` : ""}`} onClick={() => applyView(id)}>{label}</button>)}</div>
