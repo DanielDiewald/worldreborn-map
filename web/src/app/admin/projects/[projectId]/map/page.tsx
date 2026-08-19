@@ -41,15 +41,15 @@ export default async function AdminMapPage({ params, searchParams }: {
     <div className={mapStyles.routeShell}>
       <header className={mapStyles.routeToolbar}>
         <div className={mapStyles.routeIdentity}>
-          <Link href={`/admin/projects/${projectId}`} className={mapStyles.backButton} aria-label="Zum Dashboard" title="Zum Dashboard">←</Link>
+          <Link href={`/admin/projects/${projectId}`} className={`button ${mapStyles.backButton}`} aria-label="Zum Dashboard" title="Zum Dashboard">←</Link>
           <div className={mapStyles.routeTitle}><strong>{selected.name}</strong><span>{selected.is_primary ? "Hauptkarte" : "Zusätzliche Karte"} · {layers.length} Ebenen · {features.length} Kartenobjekte</span></div>
         </div>
         <div className={mapStyles.routeActions}>
           {maps.length > 1 ? <form method="get" className="row" style={{ gap: 5 }}><select className={mapStyles.mapSelect} name="mapId" defaultValue={String(mapId)} aria-label="Karte auswählen">{maps.map((map) => <option key={map.map_id} value={map.map_id}>{map.name}{map.is_primary ? " · Hauptkarte" : ""}</option>)}</select><button className={`${mapStyles.toolbarButton} button ghost`} aria-label="Gewählte Karte öffnen">Öffnen</button></form> : null}
           <div className={mapStyles.toolbarStats}><span className={mapStyles.statChip}><strong>{features.length}</strong> Objekte</span><span className={mapStyles.statChip}><strong>{markers.length}</strong> Marker</span></div>
-          <Link className={`${mapStyles.toolbarButton} ${mapStyles.toolbarPrimary}`} href={`/admin/projects/${projectId}/map/studio?mapId=${mapId}`}>✎ Bearbeiten</Link>
-          <Link className={`${mapStyles.toolbarButton} button ghost ${mapStyles.secondaryMobileHide}`} href={`/admin/projects/${projectId}/map/marker-editor?mapId=${mapId}`}>⌖ Marker</Link>
-          <Link className={`${mapStyles.toolbarButton} button ghost ${mapStyles.secondaryMobileHide}`} href={`/admin/projects/${projectId}/map/maps`}>Alle Karten</Link>
+          <Link className={`button ${mapStyles.toolbarButton} ${mapStyles.toolbarPrimary}`} href={`/admin/projects/${projectId}/map/studio?mapId=${mapId}`}>✎ Bearbeiten</Link>
+          <Link className={`button ghost ${mapStyles.toolbarButton} ${mapStyles.secondaryMobileHide}`} href={`/admin/projects/${projectId}/map/marker-editor?mapId=${mapId}`}>⌖ Marker</Link>
+          <Link className={`button ghost ${mapStyles.toolbarButton} ${mapStyles.secondaryMobileHide}`} href={`/admin/projects/${projectId}/map/maps`}>Alle Karten</Link>
         </div>
       </header>
       <WorldMapViewer mapConfig={config} layers={layers} features={features} markers={markers} searchEndpoint={`/api/admin/projects/${projectId}/maps/${mapId}/search`} focusFeatureId={positive(search.featureId)} focusMarkerId={positive(search.markerId)} height="100%"/>
