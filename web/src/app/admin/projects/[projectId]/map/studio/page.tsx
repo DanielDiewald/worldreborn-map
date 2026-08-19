@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { AdminShell } from "@/components/admin/admin-shell";
 import { MapEditor } from "@/components/map/map-editor";
+import mapStyles from "@/components/map/map-workspace.module.css";
 import { Rock3LayerImporter } from "@/components/rock3-layer-importer";
 import { requireAdminSession } from "@/lib/auth/session";
 import { getLocation, type LocationKind } from "@/lib/entities/locations";
@@ -30,11 +31,25 @@ export default async function MapStudioPage({params,searchParams}:{params:Promis
   const initialTool=placementLocation?toolForKind(placementLocation.kind):(search.tool??null);
   const editorKey=[mapId,focusFeatureId??0,placementLocation?.id??0,initialTool??""].join(":");
 
-  return <AdminShell projectId={projectId} projectName={project.name} section="map" eyebrow={`${project.name} / Karte`} title={`${selected.name} · Bearbeiten`}>
-    <div className="page-heading compact-heading"><div><div className="breadcrumb"><Link href={`/admin/projects/${projectId}`}>{project.name}</Link><span>/</span><Link href={`/admin/projects/${projectId}/map?mapId=${mapId}`}>{selected.name}</Link><span>/</span><strong>Bearbeiten</strong></div><h1>{placementLocation?`${placementLocation.name} platzieren`:"Welt bearbeiten"}</h1><p>{placementLocation?"Zeichne nur die Kartenposition oder Grenze. Die bestehende Location bleibt der kanonische Lore-Datensatz.":"Arbeite mit Ländern, Regionen, Städten, Flüssen und Straßen – WorldReborn kümmert sich um die technischen Geometrien und Ebenen."}</p></div><div className="row wrap-row">{maps.length>1&&(!existingLocation||placementLocation)?<form method="get" className="row">{placementLocation?<input type="hidden" name="locationId" value={placementLocation.id}/>:null}{!placementLocation&&search.tool?<input type="hidden" name="tool" value={search.tool}/>:null}<select name="mapId" defaultValue={String(mapId)} aria-label={placementLocation?"Zielkarte auswählen":"Karte wechseln"}>{maps.map(map=><option key={map.map_id} value={map.map_id}>{map.name}{map.is_primary?" · Hauptkarte":""}</option>)}</select><button className="button ghost">{placementLocation?"Zielkarte wählen":"Wechseln"}</button></form>:null}<Link className="button primary" href={`/admin/projects/${projectId}/map?mapId=${mapId}${focusFeatureId?`&featureId=${focusFeatureId}`:""}`}>Kartenansicht</Link><Link className="button ghost" href={`/admin/projects/${projectId}/map/marker-editor?mapId=${mapId}`}>Marker</Link>{existingLocation?<Link className="button ghost" href={`/admin/projects/${projectId}/locations/${existingLocation.loc_id}`}>Zur Location</Link>:null}</div></div>
-    {!isRock3?<section className="notice warning" style={{marginBottom:12}}><strong>Noch keine Rock-3-Weltdaten verbunden.</strong><div>Du kannst trotzdem zeichnen oder unten eine Rock-3-ZIP mit dieser Karte verbinden.</div></section>:null}
-    {existingLocation?.map_feature_id?<section className="notice" style={{marginBottom:12}}><strong>{existingLocation.name} ist bereits auf einer Karte platziert.</strong><div>Die bestehende Geometrie wurde fokussiert. Ziehe ihre Punkte, um Grenze oder Position zu ändern.</div></section>:null}
-    <section className="panel-card" style={{padding:10}}><MapEditor key={editorKey} projectId={projectId} mapConfig={config} layers={layers} features={features} initialTool={initialTool} focusFeatureId={focusFeatureId} existingLocation={placementLocation}/></section>
-    <details className="panel-card" style={{marginTop:12}}><summary style={{cursor:"pointer",fontWeight:600}}>{isRock3?"Rock-3-Weltdaten aktualisieren":"Rock-3-ZIP verbinden"}</summary><div style={{paddingTop:12}}><Rock3LayerImporter projectId={projectId} mapId={mapId}/></div></details>
+  return <AdminShell immersive projectId={projectId} projectName={project.name} section="map" eyebrow={`${project.name} / Karte`} title={`${selected.name} · Bearbeiten`}>
+    <div className={mapStyles.routeShell}>
+      <header className={mapStyles.routeToolbar}>
+        <div className={mapStyles.routeIdentity}>
+          <Link href={`/admin/projects/${projectId}/map?mapId=${mapId}${focusFeatureId?`&featureId=${focusFeatureId}`:""}`} className={mapStyles.backButton} aria-label="Zur Kartenansicht" title="Zur Kartenansicht">←</Link>
+          <div className={mapStyles.routeTitle}><strong>{placementLocation?`${placementLocation.name} platzieren`:`${selected.name} bearbeiten`}</strong><span>{placementLocation?"Bestehende Location mit Karten-Geometrie verknüpfen":isRock3?"Weltkarte · Rock-3-Daten verbunden":"Karteneditor"}</span></div>
+        </div>
+        <div className={mapStyles.routeActions}>
+          {maps.length>1&&(!existingLocation||placementLocation)?<form method="get" className="row" style={{gap:5}}>{placementLocation?<input type="hidden" name="locationId" value={placementLocation.id}/>:null}{!placementLocation&&search.tool?<input type="hidden" name="tool" value={search.tool}/>:null}<select className={mapStyles.mapSelect} name="mapId" defaultValue={String(mapId)} aria-label={placementLocation?"Zielkarte auswählen":"Karte wechseln"}>{maps.map(map=><option key={map.map_id} value={map.map_id}>{map.name}{map.is_primary?" · Hauptkarte":""}</option>)}</select><button className={`${mapStyles.toolbarButton} button ghost`}>Öffnen</button></form>:null}
+          {existingLocation?<Link className={`${mapStyles.toolbarButton} button ghost ${mapStyles.secondaryMobileHide}`} href={`/admin/projects/${projectId}/locations/${existingLocation.loc_id}`}>Location</Link>:null}
+          <Link className={`${mapStyles.toolbarButton} button ghost ${mapStyles.secondaryMobileHide}`} href={`/admin/projects/${projectId}/map/marker-editor?mapId=${mapId}`}>⌖ Marker</Link>
+          <details style={{position:"relative"}}><summary className={`${mapStyles.toolbarButton} button ghost`} style={{listStyle:"none",cursor:"pointer"}}>⋯ Weltdaten</summary><div className={mapStyles.glass} style={{position:"absolute",right:0,top:"calc(100% + 8px)",width:"min(390px,calc(100vw - 100px))",maxHeight:"70vh",overflow:"auto",padding:14,borderRadius:14,zIndex:80}}><Rock3LayerImporter projectId={projectId} mapId={mapId}/></div></details>
+        </div>
+      </header>
+      <div style={{position:"relative",minHeight:0}}>
+        {!isRock3?<div className={mapStyles.errorToast} style={{top:14,bottom:"auto"}}>Noch keine Rock-3-Weltdaten verbunden. Zeichnen funktioniert trotzdem; über „Weltdaten“ kannst du eine ZIP verbinden.</div>:null}
+        {existingLocation?.map_feature_id?<div className={mapStyles.successToast} style={{top:14,bottom:"auto"}}>„{existingLocation.name}“ ist bereits platziert. Die Geometrie ist ausgewählt und kann direkt bearbeitet werden.</div>:null}
+        <MapEditor key={editorKey} projectId={projectId} mapConfig={config} layers={layers} features={features} initialTool={initialTool} focusFeatureId={focusFeatureId} existingLocation={placementLocation} height="100%"/>
+      </div>
+    </div>
   </AdminShell>;
 }
