@@ -22,6 +22,9 @@ export async function DELETE(_request:Request,{params}:{params:Promise<{projectI
   if(!(await hasValidAdminSession()))return NextResponse.json({error:"Unauthorized"},{status:401});
   const raw=await params;const projectId=positiveInt(raw.projectId);const mapId=positiveInt(raw.mapId);const featureId=positiveInt(raw.featureId);
   if(!projectId||!mapId||!featureId)return NextResponse.json({error:"Invalid ID"},{status:400});
-  try{await deleteMapFeature(projectId,mapId,featureId);return NextResponse.json({ok:true});}
+  try{
+    const deleted=await deleteMapFeature(projectId,mapId,featureId);
+    return NextResponse.json({ok:true,...deleted});
+  }
   catch(error){return NextResponse.json({error:error instanceof Error?error.message:"Feature could not be deleted"},{status:400});}
 }
