@@ -30,7 +30,7 @@ export function ProvinceDividerTool({ projectId, mapId, map, row, hasProvinceChi
   const drawRef = useRef<any>(null), layerRef = useRef<any>(null), sourceRef = useRef<any>(null), disabledModifyRef = useRef<any[]>([]);
   const locked = isMapFeatureEditorLocked(row);
   const currentColor = mapColor(row.style?.fill, "#9a8be8");
-  const supported = row.entity_type === "location" && row.entity_id && ["country", "region", "province"].includes(row.location_kind ?? "") && ["Polygon", "MultiPolygon"].includes(row.geometry.type);
+  const supported = row.entity_type === "location" && Boolean(row.entity_id) && ["country", "region", "province"].includes(row.location_kind ?? "") && ["Polygon", "MultiPolygon"].includes(row.geometry.type);
   const canDraw = useMemo(() => supported && !locked && !(mode === "parent_to_two" && hasProvinceChildren) && (mode === "province_to_sibling" ? newName.trim().length > 0 : leftName.trim().length > 0 && rightName.trim().length > 0 && leftName.trim().toLocaleLowerCase() !== rightName.trim().toLocaleLowerCase()), [supported, locked, mode, hasProvinceChildren, newName, leftName, rightName]);
 
   function cleanupInteraction() {
@@ -40,10 +40,16 @@ export function ProvinceDividerTool({ projectId, mapId, map, row, hasProvinceChi
     disabledModifyRef.current = [];
   }
 
-  useEffect(() => () => {
-    cleanupInteraction();
-    if (layerRef.current && map) map.removeLayer(layerRef.current);
-    layerRef.current = null; sourceRef.current = null;
+  useEffect(() => {
+    return () => {
+      if (drawRef.current && map) map.removeInteraction(drawRef.current);
+      drawRef.current = null;
+      for (const interaction of disabledModifyRef.current) interaction.setActive(true);
+      disabledModifyRef.current = [];
+      if (layerRef.current && map) map.removeLayer(layerRef.current);
+      layerRef.current = null;
+      sourceRef.current = null;
+    };
   }, [map]);
 
   async function ensureSketchLayer(ol: any) {
@@ -57,30 +63,42 @@ export function ProvinceDividerTool({ projectId, mapId, map, row, hasProvinceChi
         image: new ol.style.Circle({ radius: 5, fill: new ol.style.Fill({ color: "#f0ce7d" }), stroke: new ol.style.Stroke({ color: "#17130b", width: 2 }) }),
       }),
     });
-    map.addLayer(layer); sourceRef.current = source; layerRef.current = layer; return source;
+    map.addLayer(layer);
+    sourceRef.current = source;
+    layerRef.current = layer;
+    return source;
   }
 
   async function startDrawing() {
     if (!map || !canDraw || drawing || saving) return;
-    setError(""); setDrawing(true);
+    setError("");
+    setDrawing(true);
     const ol = await ensureOpenLayers();
-    const source = await ensureSketchLayer(ol); source.clear();
+    const source = await ensureSketchLayer(ol);
+    source.clear();
     disabledModifyRef.current = [];
     map.getInteractions().forEach((interaction: any) => {
-      if (interaction instanceof ol.interaction.Modify && interaction.getActive()) { interaction.setActive(false); disabledModifyRef.current.push(interaction); }
+      if (interaction instanceof ol.interaction.Modify && interaction.getActive()) {
+        interaction.setActive(false);
+        disabledModifyRef.current.push(interaction);
+      }
     });
     const draw = new ol.interaction.Draw({ source, type: "LineString", stopClick: true, snapTolerance: 18 });
-    drawRef.current = draw; map.addInteraction(draw);
+    drawRef.current = draw;
+    map.addInteraction(draw);
     draw.on("drawend", async (event: any) => {
-      cleanupInteraction(); setDrawing(false); setSaving(true); setError("");
+      cleanupInteraction();
+      setDrawing(false);
+      setSaving(true);
+      setError("");
       try {
         const divider = new ol.format.GeoJSON().writeGeometryObject(event.feature.getGeometry());
         const split = splitPolygonByDivider(row.geometry, divider, 1200);
-        if (!split) throw new Error("Die Trennlinie teilt die Fläche nicht sauber. Zeichne sie von einer Außengrenze bis zur gegenüberliegenden Außengrenze und lasse auf beiden Seiten genügend Fläche.");
+        if (!split) throw new Error("Die Trennlinie teilt die Fläche nicht sauber. Starte und ende auf der Außengrenze und lasse auf beiden Seiten genügend Fläche.");
 
         let parts: Array<{ name: string; geometry: unknown; color: string }>;
         if (mode === "parent_to_two") {
-          // The raster grid flips the Y axis, therefore part 0 is visually right of the drawn direction and part 1 left.
+          // The local raster grid flips Y, therefore part 1 is visually left and part 0 right of the drawn direction.
           parts = [
             { name: rightName.trim(), geometry: split.parts[0], color: rightColor },
             { name: leftName.trim(), geometry: split.parts[1], color: leftColor },
@@ -95,13 +113,17 @@ export function ProvinceDividerTool({ projectId, mapId, map, row, hasProvinceChi
         }
 
         const response = await fetch(`/api/admin/projects/${projectId}/maps/${mapId}/features/${row.feature_id}/split-province`, {
-          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode, parts }),
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ mode, parts }),
         });
         const body = await response.json().catch(() => ({}));
         if (!response.ok || body.ok !== true) throw new Error(body.error || "Provinzen konnten nicht gespeichert werden.");
         window.setTimeout(() => window.location.reload(), 220);
       } catch (cause) {
-        source.removeFeature(event.feature); setError(cause instanceof Error ? cause.message : "Provinzen konnten nicht geteilt werden."); setSaving(false);
+        source.removeFeature(event.feature);
+        setError(cause instanceof Error ? cause.message : "Provinzen konnten nicht geteilt werden.");
+        setSaving(false);
       }
     });
   }
@@ -124,7 +146,7 @@ export function ProvinceDividerTool({ projectId, mapId, map, row, hasProvinceChi
         <label className={styles.field}>Farbe rechts<div className={styles.colorRow}><input type="color" value={rightColor} onChange={(event) => setRightColor(event.target.value)}/><span className={styles.colorValue}>{rightColor}</span></div></label>
       </>}
       <button type="button" className={`button primary ${styles.primaryAction}`} disabled={!canDraw || drawing || saving} onClick={() => void startDrawing()}>{saving ? "Provinzen werden gespeichert …" : drawing ? "Trennlinie zeichnen …" : "Trennlinie zeichnen"}</button>
-      <div className={styles.drawHint}>{drawing ? "Klicke entlang der gewünschten inneren Grenze. Doppelklick beendet die Linie." : "Am besten startest und endest du direkt auf oder knapp außerhalb der Außengrenze. Snapping hilft beim Treffen der vorhandenen Grenze."}</div>
+      <div className={styles.drawHint}>{drawing ? "Klicke entlang der gewünschten inneren Grenze. Doppelklick beendet die Linie." : "Start und Ende müssen auf oder sehr nah an der Außengrenze liegen. Snapping hilft beim Treffen der vorhandenen Grenze."}</div>
       {error ? <div className={styles.errorToast} style={{ position: "static", transform: "none", maxWidth: "none" }}>{error}</div> : null}
     </div>
   </aside>;
