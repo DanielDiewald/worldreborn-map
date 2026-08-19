@@ -1,10 +1,11 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { logoutPlayer } from "@/app/player/actions";
+import styles from "./player-shell.module.css";
 
-export function PlayerShell({ children, projectName, playerName }: { children: ReactNode; projectName: string; playerName: string }) {
+export function PlayerShell({ children, projectName, playerName, immersive = false }: { children: ReactNode; projectName: string; playerName: string; immersive?: boolean }) {
   return (
-    <div className="player-shell">
+    <div className={`player-shell${immersive ? ` ${styles.immersive}` : ""}`}>
       <header className="player-topbar">
         <Link href="/player/home" className="admin-brand"><span className="brand-mark">WR</span><span><strong>{projectName}</strong><small>WorldReborn</small></span></Link>
         <nav aria-label="Spieler Navigation" className="player-nav">
