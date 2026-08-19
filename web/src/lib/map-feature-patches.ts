@@ -16,7 +16,13 @@ const topologyPeerSchema = z.object({
 });
 
 type LockRow = { feature_id: string; label: string; metadata: Record<string, unknown> | null };
+type TopologyRow = LockRow & { location_kind: string | null; parent_loc_id: number | null };
 function rowLocked(row: LockRow) { return row.metadata?.editorLocked === true; }
+function topologyGroup(row: TopologyRow) {
+  if (row.location_kind === "country") return "country";
+  if (row.location_kind === "province" || row.location_kind === "region") return `${row.location_kind}:${row.parent_loc_id ?? "root"}`;
+  return null;
+}
 
 export async function assertMapFeatureUnlocked(projectId: number, mapId: number, featureId: number) {
   const result = await pool.query<LockRow>(
@@ -60,16 +66,29 @@ export async function patchMapFeatureGeometryBatch(
   try {
     await client.query("BEGIN");
     const ids = [featureId, ...uniquePeers.keys()];
-    const existing = await client.query<LockRow>(
-      `SELECT feature_id,label,metadata
-         FROM map_features
-        WHERE project_id=$1 AND map_id=$2 AND feature_id=ANY($3::bigint[])
-        FOR UPDATE`,
+    const existing = await client.query<TopologyRow>(
+      `SELECT f.feature_id,f.label,f.metadata,loc.location_kind,loc.parent_loc_id
+         FROM map_features f
+         LEFT JOIN locations loc
+           ON f.entity_type='location' AND loc.loc_id=f.entity_id AND loc.camp_id=f.project_id AND loc.archived_at IS NULL
+        WHERE f.project_id=$1 AND f.map_id=$2 AND f.feature_id=ANY($3::bigint[])
+        FOR UPDATE OF f`,
       [projectId, mapId, ids],
     );
     if (existing.rowCount !== ids.length) throw new Error("One or more topology features no longer exist on this map.");
     const locked = existing.rows.filter(rowLocked);
     if (locked.length) throw new Error(`Gesperrte Kartenobjekte verhindern die Grenzänderung: ${locked.map((row) => row.label).join(", ")}.`);
+
+    if (uniquePeers.size) {
+      const byId = new Map(existing.rows.map((row) => [Number(row.feature_id), row]));
+      const primaryRow = byId.get(featureId);
+      const primaryGroup = primaryRow ? topologyGroup(primaryRow) : null;
+      if (!primaryGroup) throw new Error("Gemeinsame Grenzen können nur für Länder, Provinzen oder Regionen atomar geändert werden.");
+      for (const peerId of uniquePeers.keys()) {
+        const peer = byId.get(peerId);
+        if (!peer || topologyGroup(peer) !== primaryGroup) throw new Error("Ein Nachbar gehört nicht zur selben politischen Topologiegruppe. Die Änderung wurde abgebrochen.");
+      }
+    }
 
     await client.query(
       `UPDATE map_features
