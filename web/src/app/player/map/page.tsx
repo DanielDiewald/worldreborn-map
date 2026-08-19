@@ -1,44 +1,80 @@
 import Link from "next/link";
-import { MapViewer } from "@/components/map-viewer";
+import { WorldMapViewer } from "@/components/map/world-map-viewer";
 import { PlayerShell } from "@/components/player-shell";
 import { requirePlayerSession } from "@/lib/auth/player-session";
+import { listVisibleMapFeatures, listVisibleMapLayers } from "@/lib/map-features";
 import { getVisibleMapMarkers } from "@/lib/maps";
 import { getPlayerContext } from "@/lib/player-view";
 import { listVisibleMaps } from "@/lib/player-world";
 
-export default async function PlayerMapPage({searchParams}:{searchParams:Promise<{mapId?:string}>}){
-  const session=await requirePlayerSession();
-  const [context,maps,search]=await Promise.all([
-    getPlayerContext(session.projectId,session.playerId),
+function positive(value: string | undefined) {
+  const parsed = Number.parseInt(value ?? "", 10);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+export default async function PlayerMapPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ mapId?: string; featureId?: string; markerId?: string }>;
+}) {
+  const session = await requirePlayerSession();
+  const [context, maps, search] = await Promise.all([
+    getPlayerContext(session.projectId, session.playerId),
     listVisibleMaps(session.projectId),
     searchParams,
   ]);
-  if(!context)return null;
-  const requested=search.mapId?Number.parseInt(search.mapId,10):null;
-  const selected=maps.find((map)=>Number(map.map_id)===requested)??maps.find((map)=>map.is_primary)??maps[0];
-  if(!selected){
+  if (!context) return null;
+
+  const requested = positive(search.mapId);
+  const selected = maps.find((map) => Number(map.map_id) === requested) ?? maps.find((map) => map.is_primary) ?? maps[0];
+  if (!selected) {
     return <PlayerShell projectName={context.project_name} playerName={context.player_name}>
       <section className="panel-card empty-state large"><strong>Keine Karte verfügbar</strong></section>
     </PlayerShell>;
   }
-  const markers=await getVisibleMapMarkers(session.projectId,Number(selected.map_id),session.playerId);
-  const config={
-    mapId:Number(selected.map_id),
-    mapType:selected.map_type as "tile"|"image",
-    tileUrl:selected.tile_url,
-    imagePath:selected.image_path,
-    minZoom:selected.min_zoom,
-    maxZoom:selected.max_zoom,
-    centerLat:selected.center_lat,
-    centerLng:selected.center_lng,
-    bounds:selected.bounds,
-    config:selected.config,
+
+  const mapId = Number(selected.map_id);
+  const [markers, layers, features] = await Promise.all([
+    getVisibleMapMarkers(session.projectId, mapId, session.playerId),
+    listVisibleMapLayers(session.projectId, mapId, session.playerId),
+    listVisibleMapFeatures(session.projectId, mapId, session.playerId),
+  ]);
+  const config = {
+    mapId,
+    mapType: selected.map_type as "tile" | "image",
+    tileUrl: selected.tile_url,
+    imagePath: selected.image_path,
+    minZoom: selected.min_zoom,
+    maxZoom: selected.max_zoom,
+    centerLat: selected.center_lat,
+    centerLng: selected.center_lng,
+    bounds: selected.bounds,
+    config: selected.config,
   };
+
   return <PlayerShell projectName={context.project_name} playerName={context.player_name}>
     <div className="page-heading compact-heading">
-      <div><span className="eyebrow">World / Map</span><h1>{selected.name}</h1><p>Die Karte enthält nur Marker, die für deinen Wissensstand freigegeben sind.</p></div>
+      <div>
+        <span className="eyebrow">Welt / Karte</span>
+        <h1>{selected.name}</h1>
+        <p>Orte, Grenzen, Kartenebenen und Marker werden nur angezeigt, wenn sie für deinen Wissensstand freigegeben sind.</p>
+      </div>
+      {maps.length > 1 ? <div className="row wrap-row">{maps.map((map) => (
+        <Link className={Number(map.map_id) === mapId ? "button primary" : "button ghost"} key={map.map_id} href={`/player/map?mapId=${map.map_id}`}>
+          {map.name}
+        </Link>
+      ))}</div> : null}
     </div>
-    <section className="panel-card"><MapViewer key={config.mapId} mapConfig={config} initialMarkers={markers}/></section>
-    {maps.length>1?<section className="panel-card"><div className="row wrap-row">{maps.map((map)=><Link className="button ghost" key={map.map_id} href={`/player/map?mapId=${map.map_id}`}>{map.name}</Link>)}</div></section>:null}
+
+    <section className="panel-card">
+      <WorldMapViewer
+        mapConfig={config}
+        layers={layers}
+        features={features}
+        markers={markers}
+        focusFeatureId={positive(search.featureId)}
+        focusMarkerId={positive(search.markerId)}
+      />
+    </section>
   </PlayerShell>;
 }
