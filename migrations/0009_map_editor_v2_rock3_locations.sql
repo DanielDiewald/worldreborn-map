@@ -36,6 +36,30 @@ CREATE UNIQUE INDEX locations_project_slug_unique ON public.locations(camp_id, s
 CREATE INDEX locations_hierarchy_idx ON public.locations(camp_id, parent_loc_id, location_kind, loc_id) WHERE archived_at IS NULL;
 CREATE INDEX locations_map_feature_idx ON public.locations(camp_id, map_id, map_feature_id) WHERE map_id IS NOT NULL OR map_feature_id IS NOT NULL;
 
+-- Enforce same-project parents and prevent cycles even if data is written outside the web app.
+CREATE OR REPLACE FUNCTION public.worldreborn_validate_location_parent() RETURNS trigger
+LANGUAGE plpgsql AS $$
+DECLARE invalid_parent boolean;
+BEGIN
+  IF NEW.parent_loc_id IS NULL THEN RETURN NEW; END IF;
+  IF NEW.parent_loc_id=NEW.loc_id THEN RAISE EXCEPTION 'A location cannot be its own parent'; END IF;
+  SELECT NOT EXISTS(SELECT 1 FROM public.locations p WHERE p.loc_id=NEW.parent_loc_id AND p.camp_id=NEW.camp_id)
+    INTO invalid_parent;
+  IF invalid_parent THEN RAISE EXCEPTION 'Parent location must belong to the same project'; END IF;
+  IF TG_OP='UPDATE' THEN
+    IF EXISTS(
+      WITH RECURSIVE descendants(loc_id) AS (
+        SELECT loc_id FROM public.locations WHERE camp_id=NEW.camp_id AND parent_loc_id=NEW.loc_id
+        UNION
+        SELECT l.loc_id FROM public.locations l JOIN descendants d ON l.parent_loc_id=d.loc_id WHERE l.camp_id=NEW.camp_id
+      ) SELECT 1 FROM descendants WHERE loc_id=NEW.parent_loc_id
+    ) THEN RAISE EXCEPTION 'Location hierarchy cycle detected'; END IF;
+  END IF;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER locations_validate_parent BEFORE INSERT OR UPDATE OF parent_loc_id,camp_id ON public.locations
+FOR EACH ROW EXECUTE FUNCTION public.worldreborn_validate_location_parent();
+
 -- A person can have multiple meaningful places while charakters.loc_id remains the legacy/current location.
 CREATE TABLE public.person_location_assignments (
   assignment_id bigserial PRIMARY KEY,
@@ -62,8 +86,12 @@ JOIN public.charakters c ON c.n_id=n.n_id
 JOIN public.locations l ON l.loc_id=c.loc_id AND l.camp_id=n.camp_id
 ON CONFLICT DO NOTHING;
 
--- Give existing political/features layers a semantic role for the v2 editor.
+-- Give existing editor layers semantic roles and ensure a dedicated settlement layer exists.
 UPDATE public.project_map_layers SET layer_role='political' WHERE layer_role IS NULL AND name='Political';
 UPDATE public.project_map_layers SET layer_role='routes' WHERE layer_role IS NULL AND name='Routes & Rivers';
+INSERT INTO public.project_map_layers(project_id,map_id,name,layer_type,source_type,layer_role,opacity,z_index,visible_by_default,visibility_mode,style,config)
+SELECT m.project_id,m.map_id,'Settlements','vector','drawn','settlements',1,220,true,'admin_only','{"fill":"#f0b35a","stroke":"#ffffff","strokeWidth":2}'::jsonb,'{}'::jsonb
+FROM public.project_maps m
+ON CONFLICT(project_id,map_id,name) DO NOTHING;
 
 COMMIT;
