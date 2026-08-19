@@ -6,6 +6,7 @@ import { pool } from "@/lib/db";
 type Coordinate = [number, number];
 type Ring = Coordinate[];
 type Polygon = Ring[];
+type Extent = [number, number, number, number];
 type Geometry = { type: string; coordinates: unknown };
 type PoliticalKind = "country" | "region" | "province";
 
@@ -61,12 +62,21 @@ function polygons(geometry: Geometry): Polygon[] {
   return [];
 }
 
-function extentFor(a: Geometry, b: Geometry): [number, number, number, number] | null {
+function polygonExtent(items: Polygon[]): Extent | null {
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const geometry of [a, b]) for (const polygon of polygons(geometry)) for (const ring of polygon) for (const [x, y] of ring) {
+  for (const polygon of items) for (const ring of polygon) for (const [x, y] of ring) {
     minX = Math.min(minX, x); minY = Math.min(minY, y); maxX = Math.max(maxX, x); maxY = Math.max(maxY, y);
   }
-  if (!Number.isFinite(minX)) return null;
+  return Number.isFinite(minX) ? [minX, minY, maxX, maxY] : null;
+}
+
+function intersectionExtent(a: Extent | null, b: Extent | null): Extent | null {
+  if (!a || !b) return null;
+  const minX = Math.max(a[0], b[0]);
+  const minY = Math.max(a[1], b[1]);
+  const maxX = Math.min(a[2], b[2]);
+  const maxY = Math.min(a[3], b[3]);
+  if (maxX - minX <= 1e-9 || maxY - minY <= 1e-9) return null;
   return [minX, minY, maxX, maxY];
 }
 
@@ -80,8 +90,8 @@ function pointInRing(point: Coordinate, ring: Ring) {
   return inside;
 }
 
-function pointInGeometry(point: Coordinate, geometry: Geometry) {
-  for (const polygon of polygons(geometry)) {
+function pointInPolygons(point: Coordinate, items: Polygon[]) {
+  for (const polygon of items) {
     if (!polygon[0] || !pointInRing(point, polygon[0])) continue;
     let inHole = false;
     for (let index = 1; index < polygon.length; index += 1) if (pointInRing(point, polygon[index])) { inHole = true; break; }
@@ -90,18 +100,27 @@ function pointInGeometry(point: Coordinate, geometry: Geometry) {
   return false;
 }
 
-function overlapCellCount(a: Geometry, b: Geometry, maxSide = 900) {
-  const extent = extentFor(a, b); if (!extent) return 0;
-  const widthWorld = Math.max(1e-9, extent[2] - extent[0]), heightWorld = Math.max(1e-9, extent[3] - extent[1]);
+function overlapCellCount(a: Geometry, b: Geometry, maxSide = 640) {
+  // Parse each geometry once. The old implementation rebuilt polygon arrays for every sampled
+  // point and sampled the union of both bounding boxes, which became very expensive on large maps.
+  const aPolygons = polygons(a);
+  const bPolygons = polygons(b);
+  const extent = intersectionExtent(polygonExtent(aPolygons), polygonExtent(bPolygons));
+  if (!extent) return 0;
+
+  const widthWorld = Math.max(1e-9, extent[2] - extent[0]);
+  const heightWorld = Math.max(1e-9, extent[3] - extent[1]);
   const aspect = widthWorld / heightWorld;
-  const width = aspect >= 1 ? maxSide : Math.max(180, Math.round(maxSide * aspect));
-  const height = aspect >= 1 ? Math.max(180, Math.round(maxSide / aspect)) : maxSide;
+  const minSide = 32;
+  const width = aspect >= 1 ? maxSide : Math.max(minSide, Math.round(maxSide * aspect));
+  const height = aspect >= 1 ? Math.max(minSide, Math.round(maxSide / aspect)) : maxSide;
   let overlap = 0;
+
   for (let y = 0; y < height; y += 1) {
     const py = extent[3] - ((y + 0.5) / height) * heightWorld;
     for (let x = 0; x < width; x += 1) {
       const px = extent[0] + ((x + 0.5) / width) * widthWorld;
-      if (pointInGeometry([px, py], a) && pointInGeometry([px, py], b)) {
+      if (pointInPolygons([px, py], aPolygons) && pointInPolygons([px, py], bPolygons)) {
         overlap += 1;
         if (overlap >= 3) return overlap;
       }
