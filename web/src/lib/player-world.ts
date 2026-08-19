@@ -10,10 +10,21 @@ export async function listVisibleGods(projectId:number,playerId:number){const r=
  WHERE n.camp_id=$1 AND n.archived_at IS NULL AND COALESCE(ev.visible,n.visibility_mode='all_players') ORDER BY COALESCE(v.name_override,n.name)`,[projectId,playerId]);return r.rows;}
 
 export async function listVisibleLocations(projectId:number,playerId:number){const r=await pool.query<{id:number;name:string;location_type:string|null;location_kind:string;description:string|null;parent_id:number|null;parent_name:string|null;population:string|null;map_id:string|null;map_feature_id:string|null}>(
-`SELECT l.loc_id AS id,l.name,l.location_type,l.location_kind,l.description,l.parent_loc_id AS parent_id,p.name AS parent_name,l.population,l.map_id,l.map_feature_id
- FROM locations l LEFT JOIN entity_visibility ev ON ev.project_id=l.camp_id AND ev.player_id=$2 AND ev.entity_type='location' AND ev.entity_id=l.loc_id
+`SELECT l.loc_id AS id,l.name,l.location_type,l.location_kind,l.description,l.parent_loc_id AS parent_id,p.name AS parent_name,l.population,
+ CASE WHEN mf.feature_id IS NOT NULL
+        AND (ml.visibility_mode='all_players' OR (ml.visibility_mode='selected_players' AND EXISTS(SELECT 1 FROM map_layer_visibility mlv WHERE mlv.layer_id=ml.layer_id AND mlv.player_id=$2 AND mlv.visible)))
+        AND (mf.visibility_mode='all_players' OR (mf.visibility_mode='selected_players' AND EXISTS(SELECT 1 FROM map_feature_visibility mfv WHERE mfv.feature_id=mf.feature_id AND mfv.player_id=$2 AND mfv.visible)))
+      THEN l.map_id ELSE NULL END AS map_id,
+ CASE WHEN mf.feature_id IS NOT NULL
+        AND (ml.visibility_mode='all_players' OR (ml.visibility_mode='selected_players' AND EXISTS(SELECT 1 FROM map_layer_visibility mlv WHERE mlv.layer_id=ml.layer_id AND mlv.player_id=$2 AND mlv.visible)))
+        AND (mf.visibility_mode='all_players' OR (mf.visibility_mode='selected_players' AND EXISTS(SELECT 1 FROM map_feature_visibility mfv WHERE mfv.feature_id=mf.feature_id AND mfv.player_id=$2 AND mfv.visible)))
+      THEN l.map_feature_id ELSE NULL END AS map_feature_id
+ FROM locations l
+ LEFT JOIN entity_visibility ev ON ev.project_id=l.camp_id AND ev.player_id=$2 AND ev.entity_type='location' AND ev.entity_id=l.loc_id
  LEFT JOIN locations p ON p.loc_id=l.parent_loc_id AND p.camp_id=l.camp_id
  LEFT JOIN entity_visibility pv ON pv.project_id=l.camp_id AND pv.player_id=$2 AND pv.entity_type='location' AND pv.entity_id=p.loc_id
+ LEFT JOIN map_features mf ON mf.project_id=l.camp_id AND mf.map_id=l.map_id AND mf.feature_id=l.map_feature_id
+ LEFT JOIN project_map_layers ml ON ml.project_id=mf.project_id AND ml.map_id=mf.map_id AND ml.layer_id=mf.layer_id
  WHERE l.camp_id=$1 AND l.archived_at IS NULL AND COALESCE(ev.visible,l.visibility_mode='all_players') AND (p.loc_id IS NULL OR COALESCE(pv.visible,p.visibility_mode='all_players')) ORDER BY l.name`,[projectId,playerId]);return r.rows;}
 
 export async function listVisibleGroups(projectId:number,playerId:number){const r=await pool.query<{id:number;name:string;group_type:string|null;notes:string;motto:string;image:string;location_name:string|null;members:number;known_members:number}>(
