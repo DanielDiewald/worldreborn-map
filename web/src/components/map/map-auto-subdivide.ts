@@ -168,29 +168,27 @@ function chooseSeeds(grid: Grid, cells: number[], count: number, random: () => n
   }
   return seeds;
 }
-function organicDistance(point: MapCoordinate, seed: Seed, irregularity: number, grid: Grid, noiseSeed: number, seedIndex: number) {
-  const warped = organicWarp(point[0], point[1], irregularity, grid, noiseSeed);
+function organicDistance(warped: MapCoordinate, seed: Seed, irregularity: number, seedIndex: number) {
   const dx = warped[0] - seed.x, dy = warped[1] - seed.y;
   const cosine = Math.cos(seed.angle), sine = Math.sin(seed.angle);
   const rx = dx * cosine + dy * sine, ry = -dx * sine + dy * cosine;
   const stretch = 1 + (seed.stretch - 1) * irregularity;
   const elongated = (rx * rx) / Math.max(0.3, stretch * stretch) + (ry * ry) * Math.max(0.3, stretch * stretch);
   if (irregularity <= 0.001) return elongated;
-  const maxDimension = Math.max(grid.width, grid.height);
-  const localNoise = fractalNoise((point[0] / maxDimension) * 4.7 + seedIndex * 0.31, (point[1] / maxDimension) * 4.7 - seedIndex * 0.19, noiseSeed + seedIndex * 7919);
   const angle = Math.atan2(ry, rx);
-  const lobe = Math.sin(angle * 2.15 + seed.phase + localNoise * 1.35);
+  const localWave = Math.sin(warped[0] * 0.032 + seedIndex * 1.71) * 0.55 + Math.cos(warped[1] * 0.027 - seedIndex * 1.13) * 0.45;
+  const lobe = Math.sin(angle * 2.15 + seed.phase + localWave * 0.9);
   return elongated * (1 + irregularity * 0.085 * lobe);
 }
 function assignCells(grid: Grid, cells: number[], seeds: Seed[], irregularity: number, noiseSeed: number) {
   const owners = new Int16Array(grid.mask.length); owners.fill(-1);
   const counts = new Int32Array(seeds.length), sumsX = new Float64Array(seeds.length), sumsY = new Float64Array(seeds.length);
   for (const index of cells) {
-    const x = index % grid.width, y = Math.floor(index / grid.width);
+    const x = index % grid.width, y = Math.floor(index / grid.width), warped = organicWarp(x, y, irregularity, grid, noiseSeed);
     let best = 0, bestScore = Number.POSITIVE_INFINITY;
     for (let seedIndex = 0; seedIndex < seeds.length; seedIndex += 1) {
       const seed = seeds[seedIndex];
-      const score = organicDistance([x, y], seed, irregularity, grid, noiseSeed, seedIndex) / Math.max(0.18, seed.weight);
+      const score = organicDistance(warped, seed, irregularity, seedIndex) / Math.max(0.18, seed.weight);
       if (score < bestScore) { bestScore = score; best = seedIndex; }
     }
     owners[index] = best; counts[best] += 1; sumsX[best] += x; sumsY[best] += y;
