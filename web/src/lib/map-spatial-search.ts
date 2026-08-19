@@ -24,8 +24,8 @@ export async function searchAdminMapSpatialEntities(projectId: number, mapId: nu
              l.loc_id::int AS id,
              l.name,
              NULLIF(CONCAT_WS(' · ', NULLIF(l.location_type,''), p.name), '') AS subtitle,
-             l.map_feature_id::bigint AS "featureId",
-             NULL::bigint AS "markerId",
+             l.map_feature_id::int AS "featureId",
+             NULL::int AS "markerId",
              ('/admin/projects/' || $1::text || '/locations/' || l.loc_id::text) AS href,
              0 AS priority
         FROM locations l
@@ -42,8 +42,8 @@ export async function searchAdminMapSpatialEntities(projectId: number, mapId: nu
              n.n_id::int,
              n.name,
              NULLIF(CONCAT_WS(' · ', l.name, NULLIF(c.race,'unknown'), NULLIF(n.title,'')), ''),
-             l.map_feature_id::bigint,
-             NULL::bigint,
+             l.map_feature_id::int,
+             NULL::int,
              ('/admin/projects/' || $1::text || '/npcs/' || n.n_id::text),
              1
         FROM npcs n
@@ -62,8 +62,8 @@ export async function searchAdminMapSpatialEntities(projectId: number, mapId: nu
              f.feature_id::int,
              f.label,
              NULLIF(f.short_description, ''),
-             f.feature_id::bigint,
-             NULL::bigint,
+             f.feature_id::int,
+             NULL::int,
              CASE
                WHEN f.entity_type='location' AND f.entity_id IS NOT NULL
                  THEN '/admin/projects/' || $1::text || '/locations/' || f.entity_id::text
@@ -83,8 +83,8 @@ export async function searchAdminMapSpatialEntities(projectId: number, mapId: nu
              m.marker_id::int,
              COALESCE(n.name,l.name,g.name,e.name,m.label),
              NULLIF(CONCAT_WS(' · ', m.label, NULLIF(m.short_description,'')), ''),
-             NULL::bigint,
-             m.marker_id::bigint,
+             NULL::int,
+             m.marker_id::int,
              CASE
                WHEN m.entity_type='person' AND m.entity_id IS NOT NULL
                  THEN '/admin/projects/' || $1::text || '/npcs/' || m.entity_id::text
@@ -104,20 +104,31 @@ export async function searchAdminMapSpatialEntities(projectId: number, mapId: nu
          AND m.map_id=$2
          AND (m.label ILIKE $4 OR COALESCE(m.short_description,'') ILIKE $4 OR COALESCE(n.name,l.name,g.name,e.name,'') ILIKE $4)
     )
-    SELECT kind,id,name,subtitle,"featureId","markerId",href
+    SELECT kind,id,name,subtitle,"featureId","markerId",href,priority
       FROM candidates
      ORDER BY CASE WHEN lower(name)=lower($3) THEN 0 WHEN name ILIKE ($3 || '%') THEN 1 ELSE 2 END,
               priority,
               name,
               id
      LIMIT $5
-  `, [projectId, mapId, term, like, boundedLimit]);
+  `, [projectId, mapId, term, like, boundedLimit * 2]);
 
-  const seen = new Set<string>();
-  return result.rows.filter((item) => {
-    const key = `${item.kind}:${item.id}:${item.featureId ?? ""}:${item.markerId ?? ""}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+  const seenTargets = new Set<string>();
+  const output: SpatialMapSearchItem[] = [];
+  for (const item of result.rows) {
+    const target = item.featureId != null ? `feature:${item.featureId}` : item.markerId != null ? `marker:${item.markerId}` : `${item.kind}:${item.id}`;
+    if (seenTargets.has(target)) continue;
+    seenTargets.add(target);
+    output.push({
+      kind: item.kind,
+      id: Number(item.id),
+      name: item.name,
+      subtitle: item.subtitle,
+      featureId: item.featureId == null ? null : Number(item.featureId),
+      markerId: item.markerId == null ? null : Number(item.markerId),
+      href: item.href,
+    });
+    if (output.length >= boundedLimit) break;
+  }
+  return output;
 }
