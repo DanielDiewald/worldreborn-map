@@ -54,7 +54,7 @@ export function ProvinceDividerTool({ projectId, mapId, map, row, hasProvinceChi
   const [targetKind, setTargetKind] = useState<TargetKind>(initialTarget);
   const [count, setCount] = useState(6);
   const [seed, setSeed] = useState(() => Math.max(1, Number(row.feature_id) % 100000 + 17));
-  const [irregularity, setIrregularity] = useState(0.42);
+  const [irregularity, setIrregularity] = useState(0.7);
   const [balance, setBalance] = useState(0.84);
   const [namePrefix, setNamePrefix] = useState(TARGET_LABEL[initialTarget]);
   const [preview, setPreview] = useState<AutoSubdivisionResult | null>(null);
@@ -88,6 +88,7 @@ export function ProvinceDividerTool({ projectId, mapId, map, row, hasProvinceChi
     setPreview(null);
   }
   function invalidatePreview() { clearPreview(); setError(""); }
+  function applyOrganicPreset(value: number) { setIrregularity(value); invalidatePreview(); }
 
   useEffect(() => {
     return () => {
@@ -243,7 +244,13 @@ export function ProvinceDividerTool({ projectId, mapId, map, row, hasProvinceChi
         <label className={styles.field}>Anzahl<div className="row" style={{ gap: 8 }}><input type="range" min="2" max="24" step="1" value={count} disabled={saving} onChange={(event) => { setCount(Number(event.target.value)); invalidatePreview(); }}/><input type="number" min="2" max="24" value={count} disabled={saving} style={{ width: 72 }} onChange={(event) => { setCount(Math.max(2, Math.min(24, Number(event.target.value) || 2))); invalidatePreview(); }}/></div></label>
         <label className={styles.field}>Namenspräfix<input value={namePrefix} disabled={saving} maxLength={160} onChange={(event) => setNamePrefix(event.target.value)} placeholder={TARGET_LABEL[targetKind]}/></label>
         <label className={styles.field}>Gleichmäßigkeit <span className={styles.colorValue}>{Math.round(balance * 100)}%</span><input type="range" min="0" max="1" step="0.05" value={balance} disabled={saving} onChange={(event) => { setBalance(Number(event.target.value)); invalidatePreview(); }}/></label>
-        <label className={styles.field}>Unregelmäßigkeit <span className={styles.colorValue}>{Math.round(irregularity * 100)}%</span><input type="range" min="0" max="1" step="0.05" value={irregularity} disabled={saving} onChange={(event) => { setIrregularity(Number(event.target.value)); invalidatePreview(); }}/></label>
+        <label className={styles.field}>Grenzorganik <span className={styles.colorValue}>{Math.round(irregularity * 100)}%</span><input type="range" min="0" max="1" step="0.05" value={irregularity} disabled={saving} onChange={(event) => { setIrregularity(Number(event.target.value)); invalidatePreview(); }}/></label>
+        <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>
+          <button type="button" className="button ghost" disabled={saving} onClick={() => applyOrganicPreset(0.25)}>Geordnet</button>
+          <button type="button" className="button ghost" disabled={saving} onClick={() => applyOrganicPreset(0.7)}>Natürlich</button>
+          <button type="button" className="button ghost" disabled={saving} onClick={() => applyOrganicPreset(0.95)}>Wild</button>
+        </div>
+        <small className={styles.panelText}>Grenzorganik verzerrt die inneren Grenzen mit einem zusammenhängenden mehrstufigen Feld. Dadurch entstehen geschwungene, unterschiedlich lange Grenzverläufe statt gerader Voronoi-Speichen.</small>
         <label className={styles.field}>Seed<input type="number" min="1" max="2147483647" value={seed} disabled={saving} onChange={(event) => { setSeed(Math.max(1, Number(event.target.value) || 1)); invalidatePreview(); }}/></label>
         <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>
           <button type="button" className="button primary" disabled={previewing || saving || locked} onClick={() => void generateAutoPreview()}>{previewing ? "Berechnet …" : preview ? "Vorschau neu berechnen" : "Vorschau erzeugen"}</button>
