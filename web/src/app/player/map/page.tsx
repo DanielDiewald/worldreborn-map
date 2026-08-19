@@ -27,8 +27,8 @@ export default async function PlayerMapPage({searchParams}:{searchParams:Promise
   return <PlayerShell immersive projectName={context.project_name} playerName={context.player_name}>
     <div className={mapStyles.routeShell}>
       <header className={mapStyles.routeToolbar}>
-        <div className={mapStyles.routeIdentity}><Link href="/player/home" className={mapStyles.backButton} aria-label="Zur Übersicht">←</Link><div className={mapStyles.routeTitle}><strong>{selected.name}</strong><span>{selected.is_primary?"Hauptkarte":"Karte"} · nur dein freigegebener Wissensstand</span></div></div>
-        <div className={mapStyles.routeActions}>{maps.length>1?<div className="row" style={{gap:4}}>{maps.map(map=><Link key={map.map_id} className={`${mapStyles.toolbarButton} ${Number(map.map_id)===mapId?mapStyles.toolbarPrimary:"button ghost"}`} href={`/player/map?mapId=${map.map_id}`}>{map.name}</Link>)}</div>:null}</div>
+        <div className={mapStyles.routeIdentity}><Link href="/player/home" className={`button ${mapStyles.backButton}`} aria-label="Zur Übersicht">←</Link><div className={mapStyles.routeTitle}><strong>{selected.name}</strong><span>{selected.is_primary?"Hauptkarte":"Karte"} · nur dein freigegebener Wissensstand</span></div></div>
+        <div className={mapStyles.routeActions}>{maps.length>1?<div className="row" style={{gap:4}}>{maps.map(map=><Link key={map.map_id} className={`button ${mapStyles.toolbarButton} ${Number(map.map_id)===mapId?mapStyles.toolbarPrimary:"ghost"}`} href={`/player/map?mapId=${map.map_id}`}>{map.name}</Link>)}</div>:null}</div>
       </header>
       <WorldMapViewer mapConfig={config} layers={layers} features={features} markers={markers} searchEndpoint={`/api/player/maps/${mapId}/search`} focusFeatureId={positive(search.featureId)} focusMarkerId={positive(search.markerId)} height="100%"/>
     </div>
