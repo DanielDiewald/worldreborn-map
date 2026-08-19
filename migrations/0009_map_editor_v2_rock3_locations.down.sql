@@ -1,6 +1,8 @@
 BEGIN;
 
 DROP TABLE IF EXISTS public.person_location_assignments;
+DROP TRIGGER IF EXISTS locations_validate_parent ON public.locations;
+DROP FUNCTION IF EXISTS public.worldreborn_validate_location_parent();
 DROP INDEX IF EXISTS public.locations_map_feature_idx;
 DROP INDEX IF EXISTS public.locations_hierarchy_idx;
 DROP INDEX IF EXISTS public.locations_project_slug_unique;
