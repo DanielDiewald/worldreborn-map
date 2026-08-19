@@ -2,6 +2,13 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { colorWithAlpha, ensureOpenLayers, mapColor, mediaMapUrl, parseMapBounds } from "./openlayers-runtime";
+import {
+  DEFAULT_MAP_CONTENT_VISIBILITY,
+  MAP_CONTENT_FILTERS,
+  allContentVisibility,
+  featureContentCategory,
+  type MapContentVisibility,
+} from "./map-content-visibility";
 import type { MapSearchItem, WorldMapConfig, WorldMapFeature, WorldMapLayer, WorldMapMarker } from "./map-types";
 import styles from "./map-workspace.module.css";
 
@@ -20,19 +27,25 @@ const PRESETS = [
 
 type Selection = { label: string; subtitle: string | null; href: string | null; featureId: number | null; markerId: number | null };
 
-function localSearch(features: WorldMapFeature[], markers: WorldMapMarker[], query: string): MapSearchItem[] {
+function localSearch(features: WorldMapFeature[], markers: WorldMapMarker[], query: string, visibility: MapContentVisibility): MapSearchItem[] {
   const term = query.trim().toLocaleLowerCase();
   if (!term) return [];
-  const featureResults = features.filter((item) => item.label.toLocaleLowerCase().includes(term)).slice(0, 8).map((item) => ({
-    kind: item.entity_type === "location" ? "location" as const : "feature" as const,
-    id: Number(item.entity_id ?? item.feature_id), name: item.label, subtitle: item.short_description,
-    featureId: Number(item.feature_id), markerId: null, href: null,
-  }));
-  const markerResults = markers.filter((item) => item.label.toLocaleLowerCase().includes(term) || item.entity_label?.toLocaleLowerCase().includes(term)).slice(0, 8).map((item) => ({
-    kind: item.entity_type === "person" ? "person" as const : "marker" as const,
-    id: Number(item.entity_id ?? item.marker_id), name: item.entity_label || item.label,
-    subtitle: item.short_description ?? item.label, featureId: null, markerId: Number(item.marker_id), href: null,
-  }));
+  const featureResults = features
+    .filter((item) => visibility[featureContentCategory(item)] && item.label.toLocaleLowerCase().includes(term))
+    .slice(0, 8)
+    .map((item) => ({
+      kind: item.entity_type === "location" ? "location" as const : "feature" as const,
+      id: Number(item.entity_id ?? item.feature_id), name: item.label, subtitle: item.short_description,
+      featureId: Number(item.feature_id), markerId: null, href: null,
+    }));
+  const markerResults = visibility.markers ? markers
+    .filter((item) => item.label.toLocaleLowerCase().includes(term) || item.entity_label?.toLocaleLowerCase().includes(term))
+    .slice(0, 8)
+    .map((item) => ({
+      kind: item.entity_type === "person" ? "person" as const : "marker" as const,
+      id: Number(item.entity_id ?? item.marker_id), name: item.entity_label || item.label,
+      subtitle: item.short_description ?? item.label, featureId: null, markerId: Number(item.marker_id), href: null,
+    })) : [];
   return [...featureResults, ...markerResults].slice(0, 12);
 }
 
@@ -64,7 +77,9 @@ export function WorldMapViewer({
   const layerRefs = useRef(new Map<number, any>());
   const featureRefs = useRef(new Map<number, any>());
   const markerRefs = useRef(new Map<number, any>());
+  const markerLayerRef = useRef<any>(null);
   const defaultVisibility = useRef(new Map<number, boolean>());
+  const contentVisibilityRef = useRef<MapContentVisibility>({ ...DEFAULT_MAP_CONTENT_VISIBILITY });
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<MapSearchItem[]>([]);
   const [searching, setSearching] = useState(false);
@@ -72,10 +87,30 @@ export function WorldMapViewer({
   const [error, setError] = useState("");
   const [activePreset, setActivePreset] = useState("default");
   const [layersOpen, setLayersOpen] = useState(false);
+  const [contentVisibility, setContentVisibility] = useState<MapContentVisibility>({ ...DEFAULT_MAP_CONTENT_VISIBILITY });
   const rasterLayers = useMemo(() => layers.filter((layer) => layer.layer_type === "raster"), [layers]);
   const vectorLayers = useMemo(() => layers.filter((layer) => layer.layer_type === "vector"), [layers]);
 
+  function refreshContentVisibility(next: MapContentVisibility) {
+    contentVisibilityRef.current = next;
+    setContentVisibility(next);
+    for (const layer of vectorLayers) layerRefs.current.get(Number(layer.layer_id))?.changed();
+    markerLayerRef.current?.setVisible(next.markers);
+    if (selection?.featureId) {
+      const row = features.find((item) => Number(item.feature_id) === selection.featureId);
+      if (row && !next[featureContentCategory(row)]) setSelection(null);
+    }
+    if (selection?.markerId && !next.markers) setSelection(null);
+    setActivePreset("custom");
+  }
+
+  function toggleContent(key: keyof MapContentVisibility, visible: boolean) {
+    refreshContentVisibility({ ...contentVisibilityRef.current, [key]: visible });
+  }
+
   function focusFeature(id: number) {
+    const row = features.find((item) => Number(item.feature_id) === id);
+    if (row && !contentVisibilityRef.current[featureContentCategory(row)]) return false;
     const feature = featureRefs.current.get(id), map = mapRef.current;
     if (!feature || !map) return false;
     const extent = feature.getGeometry()?.getExtent();
@@ -86,6 +121,7 @@ export function WorldMapViewer({
   }
 
   function focusMarker(id: number) {
+    if (!contentVisibilityRef.current.markers) return false;
     const feature = markerRefs.current.get(id), map = mapRef.current;
     if (!feature || !map) return false;
     const coordinates = feature.getGeometry()?.getCoordinates();
@@ -112,10 +148,25 @@ export function WorldMapViewer({
   }
 
   useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem(`worldreborn:map-content:${mapConfig.mapId}`);
+      if (!saved) return;
+      const parsed = JSON.parse(saved) as Partial<MapContentVisibility>;
+      const next = { ...DEFAULT_MAP_CONTENT_VISIBILITY, ...parsed };
+      contentVisibilityRef.current = next;
+      setContentVisibility(next);
+    } catch { /* local preference is optional */ }
+  }, [mapConfig.mapId]);
+
+  useEffect(() => {
+    try { window.localStorage.setItem(`worldreborn:map-content:${mapConfig.mapId}`, JSON.stringify(contentVisibility)); } catch { /* local preference is optional */ }
+  }, [contentVisibility, mapConfig.mapId]);
+
+  useEffect(() => {
     let active = true;
     ensureOpenLayers().then((ol) => {
       if (!active || !targetRef.current) return;
-      layerRefs.current.clear(); featureRefs.current.clear(); markerRefs.current.clear(); defaultVisibility.current.clear();
+      layerRefs.current.clear(); featureRefs.current.clear(); markerRefs.current.clear(); defaultVisibility.current.clear(); markerLayerRef.current = null;
       const simple = mapConfig.mapType === "image";
       const bounds = parseMapBounds(mapConfig.bounds) ?? [[0, 0], [4096, 8192]];
       const extent = [bounds[0][1], bounds[0][0], bounds[1][1], bounds[1][0]];
@@ -150,12 +201,14 @@ export function WorldMapViewer({
         const rendered = new ol.layer.Vector({
           source, zIndex: layer.z_index || 500, visible: layer.visible_by_default, opacity: layer.opacity,
           style: (feature: any) => {
+            const category = feature.get("contentCategory") as keyof MapContentVisibility;
+            if (category && !contentVisibilityRef.current[category]) return null;
             const featureFill = mapColor(feature.get("fill"), baseFill), featureStroke = mapColor(feature.get("stroke"), baseStroke), geometryType = feature.getGeometry()?.getType();
             return new ol.style.Style({
               fill: geometryType?.includes("Polygon") ? new ol.style.Fill({ color: colorWithAlpha(featureFill, 0.28) }) : undefined,
               stroke: new ol.style.Stroke({ color: featureStroke, width: Number(feature.get("strokeWidth") ?? baseWidth) }),
               image: new ol.style.Circle({ radius: 6, fill: new ol.style.Fill({ color: featureFill }), stroke: new ol.style.Stroke({ color: featureStroke, width: 2 }) }),
-              text: feature.get("label") ? new ol.style.Text({ text: String(feature.get("label")), offsetY: -12, fill: new ol.style.Fill({ color: "#fff" }), stroke: new ol.style.Stroke({ color: "#111", width: 3 }) }) : undefined,
+              text: contentVisibilityRef.current.labels && feature.get("label") ? new ol.style.Text({ text: String(feature.get("label")), offsetY: -12, fill: new ol.style.Fill({ color: "#fff" }), stroke: new ol.style.Stroke({ color: "#111", width: 3 }) }) : undefined,
             });
           },
         });
@@ -163,7 +216,7 @@ export function WorldMapViewer({
         for (const row of features.filter((item) => Number(item.layer_id) === id)) {
           try {
             const featureId = Number(row.feature_id);
-            const feature = geojson.readFeature({ type: "Feature", geometry: row.geometry, properties: { featureId, label: row.label, subtitle: row.short_description, entityType: row.entity_type, entityId: row.entity_id, fill: row.style?.fill, stroke: row.style?.stroke, strokeWidth: row.style?.strokeWidth } });
+            const feature = geojson.readFeature({ type: "Feature", geometry: row.geometry, properties: { featureId, label: row.label, subtitle: row.short_description, entityType: row.entity_type, entityId: row.entity_id, contentCategory: featureContentCategory(row), fill: row.style?.fill, stroke: row.style?.stroke, strokeWidth: row.style?.strokeWidth } });
             source.addFeature(feature); featureRefs.current.set(featureId, feature);
           } catch { /* malformed legacy geometry stays isolated */ }
         }
@@ -180,30 +233,37 @@ export function WorldMapViewer({
           feature.setProperties({ markerId, label: marker.entity_label || marker.label, subtitle: marker.short_description || marker.label, markerType: marker.marker_type, entityType: marker.entity_type, entityId: marker.entity_id });
           markerSource.addFeature(feature); markerRefs.current.set(markerId, feature);
         }
-        renderedLayers.push(new ol.layer.Vector({
-          source: markerSource, zIndex: 10000,
+        const markerLayer = new ol.layer.Vector({
+          source: markerSource, zIndex: 10000, visible: contentVisibilityRef.current.markers,
           style: (feature: any) => new ol.style.Style({ image: new ol.style.Circle({ radius: 10, fill: new ol.style.Fill({ color: "rgba(20,24,31,.9)" }), stroke: new ol.style.Stroke({ color: "#fff", width: 2 }) }), text: new ol.style.Text({ text: MARKER_GLYPHS[String(feature.get("markerType"))] ?? "•", fill: new ol.style.Fill({ color: "#fff" }), offsetY: 1 }) }),
-        }));
+        });
+        markerLayerRef.current = markerLayer;
+        renderedLayers.push(markerLayer);
       }
 
       const view = simple ? new ol.View({ projection, center: ol.extent.getCenter(extent), zoom: 0, minZoom: mapConfig.minZoom, maxZoom: mapConfig.maxZoom, extent }) : new ol.View({ center: ol.proj.fromLonLat([mapConfig.centerLng ?? 0, mapConfig.centerLat ?? 0]), zoom: Math.max(mapConfig.minZoom, 2), minZoom: mapConfig.minZoom, maxZoom: mapConfig.maxZoom });
       const map = new ol.Map({ target: targetRef.current, layers: renderedLayers, view }); mapRef.current = map;
       if (simple) view.fit(extent, { padding: [24, 24, 24, 24] });
       map.on("singleclick", (event: any) => {
-        const hit = map.forEachFeatureAtPixel(event.pixel, (feature: any) => feature);
+        const hit = map.forEachFeatureAtPixel(event.pixel, (feature: any) => {
+          const category = feature.get("contentCategory") as keyof MapContentVisibility | undefined;
+          if (category && !contentVisibilityRef.current[category]) return undefined;
+          if (feature.get("markerId") && !contentVisibilityRef.current.markers) return undefined;
+          return feature;
+        }, { hitTolerance: 8 });
         if (!hit) { setSelection(null); return; }
         const featureId = Number(hit.get("featureId")) || null, markerId = Number(hit.get("markerId")) || null;
         setSelection({ label: String(hit.get("label") ?? "Kartenobjekt"), subtitle: hit.get("subtitle") ? String(hit.get("subtitle")) : null, href: null, featureId, markerId });
       });
       if (focusFeatureId) focusFeature(focusFeatureId); else if (focusMarkerId) focusMarker(focusMarkerId);
     }).catch((cause) => setError(cause instanceof Error ? cause.message : "Karte konnte nicht geladen werden."));
-    return () => { active = false; mapRef.current?.setTarget(undefined); mapRef.current = null; layerRefs.current.clear(); featureRefs.current.clear(); markerRefs.current.clear(); };
+    return () => { active = false; mapRef.current?.setTarget(undefined); mapRef.current = null; markerLayerRef.current = null; layerRefs.current.clear(); featureRefs.current.clear(); markerRefs.current.clear(); };
   }, [mapConfig, rasterLayers, vectorLayers, features, markers, focusFeatureId, focusMarkerId]);
 
   useEffect(() => {
     const term = query.trim();
     if (!term) { setResults([]); return; }
-    const fallback = localSearch(features, markers, term);
+    const fallback = localSearch(features, markers, term, contentVisibilityRef.current);
     if (!searchEndpoint || term.length < 2) { setResults(fallback); return; }
     const controller = new AbortController();
     const timer = window.setTimeout(async () => {
@@ -218,7 +278,7 @@ export function WorldMapViewer({
       finally { setSearching(false); }
     }, 180);
     return () => { controller.abort(); window.clearTimeout(timer); };
-  }, [query, searchEndpoint, features, markers]);
+  }, [query, searchEndpoint, features, markers, contentVisibility]);
 
   function chooseResult(item: MapSearchItem) {
     let focused = false;
@@ -254,15 +314,31 @@ export function WorldMapViewer({
       </div>
 
       <div className={styles.actionDock}>
-        <button type="button" className={`${styles.iconAction} ${styles.glass}${layersOpen ? ` ${styles.actionActive}` : ""}`} onClick={() => setLayersOpen((value) => !value)} aria-expanded={layersOpen}>☷ Ebenen</button>
+        <button type="button" className={`${styles.iconAction} ${styles.glass}${layersOpen ? ` ${styles.actionActive}` : ""}`} onClick={() => setLayersOpen((value) => !value)} aria-expanded={layersOpen}>☷ Sichtbarkeit</button>
       </div>
 
       {layersOpen ? <aside className={`${styles.layerDrawer} ${styles.glass}`}>
-        <div className={styles.drawerHeader}><div><strong>Kartenebenen</strong><span>{layers.length} Ebenen auf dieser Karte</span></div><button type="button" className={styles.closeButton} onClick={() => setLayersOpen(false)} aria-label="Ebenen schließen">×</button></div>
-        <div className={styles.layerList}>{groupedLayers.map(([group, rows]) => <div key={group}><div className={styles.layerSection}>{group}</div>{rows.map((layer) => {
-          const id = Number(layer.layer_id); const satelliteIsBase = layer.layer_role === "satellite" && layer.media_id != null && String(layer.media_id) === String(mapConfig.imagePath);
-          return <div className={styles.layerRow} key={layer.layer_id}><div className={styles.layerInfo}><strong>{layer.name}</strong><small>{satelliteIsBase ? "Basiskarte" : layer.layer_type === "vector" ? "Eigene Inhalte" : "Rock-3-Daten"}</small></div><div className={styles.layerControl}><input data-world-map-layer={id} type="checkbox" defaultChecked={satelliteIsBase || layer.visible_by_default} disabled={satelliteIsBase} onChange={(event) => toggleLayer(id, event.target.checked)} aria-label={`${layer.name} ein- oder ausblenden`}/></div></div>;
-        })}</div>)}</div>
+        <div className={styles.drawerHeader}><div><strong>Sichtbarkeit</strong><span>Inhalte und Kartenebenen getrennt steuern</span></div><button type="button" className={styles.closeButton} onClick={() => setLayersOpen(false)} aria-label="Sichtbarkeit schließen">×</button></div>
+        <div className={styles.layerList}>
+          <div>
+            <div className={styles.layerSection}>Karteninhalte</div>
+            <div className="row" style={{ gap: 6, padding: "4px 8px 7px" }}>
+              <button type="button" className="button ghost" style={{ minHeight: 28, height: 28, padding: "0 8px", fontSize: 9 }} onClick={() => refreshContentVisibility(allContentVisibility(true))}>Alle an</button>
+              <button type="button" className="button ghost" style={{ minHeight: 28, height: 28, padding: "0 8px", fontSize: 9 }} onClick={() => refreshContentVisibility(allContentVisibility(false))}>Alle aus</button>
+            </div>
+            {MAP_CONTENT_FILTERS.map((filter) => {
+              const disabled = filter.id === "markers" && markers.length === 0;
+              return <div className={styles.layerRow} key={filter.id}>
+                <div className={styles.layerInfo}><strong>{filter.icon} {filter.label}</strong><small>{filter.hint}</small></div>
+                <div className={styles.layerControl}><input type="checkbox" checked={contentVisibility[filter.id]} disabled={disabled} onChange={(event) => toggleContent(filter.id, event.target.checked)} aria-label={`${filter.label} ein- oder ausblenden`}/></div>
+              </div>;
+            })}
+          </div>
+          {groupedLayers.map(([group, rows]) => <div key={group}><div className={styles.layerSection}>{group}</div>{rows.map((layer) => {
+            const id = Number(layer.layer_id); const satelliteIsBase = layer.layer_role === "satellite" && layer.media_id != null && String(layer.media_id) === String(mapConfig.imagePath);
+            return <div className={styles.layerRow} key={layer.layer_id}><div className={styles.layerInfo}><strong>{layer.name}</strong><small>{satelliteIsBase ? "Basiskarte" : layer.layer_type === "vector" ? "Eigene Inhalte" : "Rock-3-Daten"}</small></div><div className={styles.layerControl}><input data-world-map-layer={id} type="checkbox" defaultChecked={satelliteIsBase || layer.visible_by_default} disabled={satelliteIsBase} onChange={(event) => toggleLayer(id, event.target.checked)} aria-label={`${layer.name} ein- oder ausblenden`}/></div></div>;
+          })}</div>)}
+        </div>
       </aside> : null}
 
       <div className={`${styles.viewSwitcher} ${styles.glass}`}>{PRESETS.map((preset) => <button key={preset.id} type="button" className={`${styles.viewButton}${activePreset === preset.id ? ` ${styles.viewActive}` : ""}`} onClick={() => applyPreset(preset.id)}>{preset.label}</button>)}</div>
