@@ -39,6 +39,8 @@ export type WorldMapFeature = {
   visibility_mode: string;
   style: Record<string, unknown>;
   metadata: Record<string, unknown>;
+  location_parent_id?: number | null;
+  location_kind?: string | null;
 };
 
 export type WorldMapMarker = {
