@@ -50,7 +50,7 @@ export async function listProjectMapsPaginated(projectId:number,filters:MapAdmin
             pm.is_primary,
             (SELECT COUNT(*)::int FROM map_markers mm WHERE mm.project_id=pm.project_id AND mm.map_id=pm.map_id) AS marker_count,
             (SELECT COUNT(*)::int FROM project_map_layers ml WHERE ml.project_id=pm.project_id AND ml.map_id=pm.map_id) AS layer_count,
-            (SELECT COUNT(*)::int FROM project_map_layers ml WHERE ml.project_id=pm.project_id AND ml.map_id=pm.map_id AND COALESCE((ml.config->>'rock3')::boolean,false)) AS rock3_layer_count,
+            (SELECT COUNT(*)::int FROM project_map_layers ml WHERE ml.project_id=pm.project_id AND ml.map_id=pm.map_id AND COALESCE(ml.config->>'rock3','false')='true') AS rock3_layer_count,
             (SELECT COUNT(*)::int FROM map_features mf WHERE mf.project_id=pm.project_id AND mf.map_id=pm.map_id) AS feature_count,
             (SELECT COUNT(*)::int FROM locations l WHERE l.camp_id=pm.project_id AND l.map_id=pm.map_id AND l.location_kind='country' AND l.archived_at IS NULL) AS country_count,
             (SELECT COUNT(*)::int FROM locations l WHERE l.camp_id=pm.project_id AND l.map_id=pm.map_id AND l.archived_at IS NULL) AS location_count
