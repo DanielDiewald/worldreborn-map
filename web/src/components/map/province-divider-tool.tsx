@@ -12,6 +12,7 @@ import styles from "./map-workspace.module.css";
 type Mode = "parent_to_two" | "province_to_sibling";
 type Workflow = "auto" | "divider";
 type TargetKind = "region" | "province" | "district";
+type GeneratedSelectionScope = "regions" | "provinces" | "places";
 
 const TARGET_LABEL: Record<TargetKind, string> = { region: "Region", province: "Provinz", district: "Bezirk" };
 
@@ -20,6 +21,33 @@ function targetsForParent(kind: string | null): Array<{ id: TargetKind; label: s
   if (kind === "region") return [{ id: "province", label: "Provinzen" }, { id: "district", label: "Bezirke" }];
   if (kind === "province") return [{ id: "district", label: "Bezirke" }];
   return [];
+}
+function selectionScopeForTarget(kind: TargetKind): GeneratedSelectionScope {
+  if (kind === "region") return "regions";
+  if (kind === "province") return "provinces";
+  return "places";
+}
+function firstCreatedFeatureId(body: unknown) {
+  if (!body || typeof body !== "object") return null;
+  const created = (body as { created?: unknown }).created;
+  if (!Array.isArray(created)) return null;
+  for (const item of created) {
+    if (!item || typeof item !== "object") continue;
+    const featureId = Number((item as { featureId?: unknown }).featureId);
+    if (Number.isSafeInteger(featureId) && featureId > 0) return featureId;
+  }
+  return null;
+}
+function rememberGeneratedSelection(mapId: number, kind: TargetKind) {
+  if (typeof window === "undefined") return;
+  const scope = selectionScopeForTarget(kind);
+  try {
+    window.localStorage.setItem(`worldreborn:map-selection-scope:${mapId}`, scope);
+    const key = `worldreborn:map-content:${mapId}`;
+    const saved = window.localStorage.getItem(key);
+    const parsed = saved ? JSON.parse(saved) as Record<string, unknown> : {};
+    window.localStorage.setItem(key, JSON.stringify({ ...parsed, [scope]: true }));
+  } catch { /* local preferences are optional */ }
 }
 function hslToHex(hue: number, saturation: number, lightness: number) {
   const s = saturation / 100, l = lightness / 100, c = (1 - Math.abs(2 * l - 1)) * s, h = ((hue % 360) + 360) % 360 / 60;
@@ -89,6 +117,16 @@ export function ProvinceDividerTool({ projectId, mapId, map, row, hasProvinceChi
   }
   function invalidatePreview() { clearPreview(); setError(""); }
   function applyOrganicPreset(value: number) { setIrregularity(value); invalidatePreview(); }
+  function finishWithCreatedFeature(body: unknown, kind: TargetKind) {
+    const featureId = firstCreatedFeatureId(body);
+    rememberGeneratedSelection(mapId, kind);
+    onClose();
+    if (featureId) {
+      router.replace(`/admin/projects/${projectId}/map/studio?mapId=${mapId}&featureId=${featureId}`);
+      return;
+    }
+    router.refresh();
+  }
 
   useEffect(() => {
     return () => {
@@ -162,7 +200,7 @@ export function ProvinceDividerTool({ projectId, mapId, map, row, hasProvinceChi
       });
       const body = await response.json().catch(() => ({}));
       if (!response.ok || body.ok !== true) throw new Error(body.error || "Automatische Unterteilung konnte nicht gespeichert werden.");
-      onClose(); router.refresh();
+      finishWithCreatedFeature(body, targetKind);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Automatische Unterteilung konnte nicht gespeichert werden."); setSaving(false);
     }
@@ -203,7 +241,7 @@ export function ProvinceDividerTool({ projectId, mapId, map, row, hasProvinceChi
         });
         const body = await response.json().catch(() => ({}));
         if (!response.ok || body.ok !== true) throw new Error(body.error || "Provinzen konnten nicht gespeichert werden.");
-        onClose(); router.refresh();
+        finishWithCreatedFeature(body, "province");
       } catch (cause) {
         source.removeFeature(event.feature); setError(cause instanceof Error ? cause.message : "Provinzen konnten nicht geteilt werden."); setSaving(false);
       }
@@ -260,7 +298,7 @@ export function ProvinceDividerTool({ projectId, mapId, map, row, hasProvinceChi
         </div>
         {preview ? <div className={styles.drawHint}><strong>{preview.parts.length} Teilgebiete bereit.</strong><br/>Flächenanteile ca. {smallest.toFixed(1)}–{largest.toFixed(1)} %. Seed {preview.seed}. Grenzorganik: {organicityLabel}. Die farbige Vorschau wird noch nicht gespeichert.</div> : <div className={styles.drawHint}>Die Parent-Fläche wird vollständig und ohne absichtliche Lücken aufgeteilt. Inseln können als MultiPolygon einem Teilgebiet zugeordnet werden.</div>}
         <button type="button" className={`button primary ${styles.primaryAction}`} disabled={!preview || saving || locked || !namePrefix.trim()} onClick={() => void saveAutoSubdivision()}>{saving ? `${count} Teilgebiete werden gespeichert …` : `${count} ${targetOptions.find((option) => option.id === targetKind)?.label ?? "Teilgebiete"} speichern`}</button>
-        <small className={styles.panelText}>Bereits gezeichnete polygonale Untergebiete blockieren die Automatik. Vorhandene direkt zugeordnete Städte/Punkte werden beim Speichern automatisch dem räumlich passenden neuen Teilgebiet zugeordnet.</small>
+        <small className={styles.panelText}>Nach dem Speichern wechselt die Auswahl automatisch auf die erzeugten Untergebiete und fokussiert das erste neue Gebiet. Bereits gezeichnete polygonale Untergebiete blockieren die Automatik; vorhandene direkt zugeordnete Städte/Punkte werden räumlich neu zugeordnet.</small>
       </>}
     </div> : <div className={styles.fieldStack}>
       {mode === "parent_to_two" && hasProvinceChildren ? <div className={styles.drawHint}>Dieses Gebiet besitzt bereits Provinzen. Wähle eine vorhandene Provinz und teile diese weiter, damit keine Flächen überlappen.</div> : null}
