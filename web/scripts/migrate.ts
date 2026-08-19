@@ -1,5 +1,6 @@
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { Client } from "pg";
 import {
   loadProjectEnvironment,
@@ -153,7 +154,9 @@ async function main() {
   }
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(new URL(import.meta.url).pathname)) {
+// fileURLToPath keeps the ESM entrypoint check portable on Windows, macOS and Linux.
+const currentFile = fileURLToPath(import.meta.url);
+if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(currentFile)) {
   main().catch((error) => {
     console.error(error instanceof Error ? error.message : error);
     process.exitCode = 1;
