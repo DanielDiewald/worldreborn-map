@@ -4,6 +4,7 @@ import { AdminShell } from "@/components/admin/admin-shell";
 import { Pagination } from "@/components/pagination";
 import { requireAdminSession } from "@/lib/auth/session";
 import { listProjectMapsPaginated } from "@/lib/map-admin-queries";
+import { mapKindLabel } from "@/lib/map-presentation";
 import { parsePagination } from "@/lib/pagination";
 import { getProject } from "@/lib/projects";
 
@@ -23,30 +24,57 @@ export default async function MapsCollectionPage({params,searchParams}:{params:P
   const path=`/admin/projects/${projectId}/map/maps`;
   const hasFilters=Boolean(search.q);
 
-  return <AdminShell projectId={projectId} projectName={project.name} section="map" eyebrow={`${project.name} / Map`} title="Maps">
+  return <AdminShell projectId={projectId} projectName={project.name} section="map" eyebrow={`${project.name} / Karten`} title="Karten">
     <div className="page-heading compact-heading">
       <div>
-        <div className="breadcrumb"><Link href={`/admin/projects/${projectId}`}>{project.name}</Link><span>/</span><Link href={`/admin/projects/${projectId}/map`}>Map</Link><span>/</span><strong>Maps</strong></div>
-        <h1>Karten</h1>
-        <p>Serverseitig paginierte Übersicht aller Tile- und Image-Maps des Projekts.</p>
+        <div className="breadcrumb"><Link href={`/admin/projects/${projectId}`}>{project.name}</Link><span>/</span><Link href={`/admin/projects/${projectId}/map`}>Karte</Link><span>/</span><strong>Alle Karten</strong></div>
+        <h1>Deine Karten</h1>
+        <p>Weltkarten, Städte, Regionen und Dungeons als eigene Arbeitsbereiche. Technische Bild- oder Tile-Quellen bleiben im Hintergrund.</p>
       </div>
-      <div className="row wrap-row"><Link className="button ghost" href={`/admin/projects/${projectId}/map`}>Map-Workspace</Link><Link className="button primary" href={`/admin/projects/${projectId}/settings`}>Maps verwalten</Link></div>
+      <div className="row wrap-row">
+        <Link className="button primary" href={`/admin/projects/${projectId}/settings#new-world-map`}>＋ Neue Weltkarte</Link>
+        <Link className="button ghost" href={`/admin/projects/${projectId}/map`}>Hauptkarte öffnen</Link>
+      </div>
     </div>
 
     <section className="panel-card">
       <form className="filter-bar" method="get">
-        <label className="search-box"><span aria-hidden="true">⌕</span><input name="q" defaultValue={search.q??""} placeholder="Map-Name oder Typ suchen …"/></label>
+        <label className="search-box"><span aria-hidden="true">⌕</span><input name="q" defaultValue={search.q??""} placeholder="Karte suchen …"/></label>
         <button>Filtern</button>
         {hasFilters?<Link className="button ghost" href={path}>Zurücksetzen</Link>:null}
       </form>
-      <div className="table-meta"><span><strong>{maps.total}</strong> Maps</span><span>Tile + Image · stabil nach Primary, Name und ID sortiert</span></div>
-      {maps.items.length===0?<div className="empty-state large"><strong>Keine Maps gefunden</strong><span>{hasFilters?"Filter ändern oder zurücksetzen.":"Lege in den Projekteinstellungen die erste Map an."}</span></div>:<div className="entity-card-grid">{maps.items.map((map)=><article className="panel-card nested-card" key={map.map_id}>
-        <div className="row wrap-row"><strong>{map.name}</strong>{map.is_primary?<span className="visibility-pill all_players">Primary</span>:null}<span className="soft-label">{map.map_type}</span></div>
-        <small>Map #{map.map_id} · Zoom {map.min_zoom}–{map.max_zoom}</small>
-        <small><strong>{map.marker_count}</strong> Marker</small>
-        {map.map_type==="tile"?<small>{map.tile_url??"Keine Tile URL"}{map.center_lat!=null&&map.center_lng!=null?` · Center ${map.center_lat}, ${map.center_lng}`:""}</small>:<small>{map.image_path??"Kein Image Path"}</small>}
-        <div className="row wrap-row"><Link className="button primary" href={`/admin/projects/${projectId}/map?mapId=${map.map_id}`}>Öffnen</Link><Link className="button ghost" href={`/admin/projects/${projectId}/map/markers?mapId=${map.map_id}`}>Marker verwalten</Link></div>
-      </article>)}</div>}
+      <div className="table-meta"><span><strong>{maps.total}</strong> Karten</span><span>Jede Karte kann eigene Ebenen, Orte und Marker besitzen.</span></div>
+
+      {maps.items.length===0?<div className="empty-state large">
+        <strong>{hasFilters?"Keine Karten gefunden":"Noch keine Karte"}</strong>
+        <span>{hasFilters?"Suche ändern oder zurücksetzen.":"Erstelle deine erste Weltkarte direkt aus einer Rock-3-ZIP."}</span>
+        {!hasFilters?<Link className="button primary" href={`/admin/projects/${projectId}/settings#new-world-map`}>Weltkarte erstellen</Link>:null}
+      </div>:<div className="entity-card-grid">{maps.items.map((map)=>{
+        const isRock3=Boolean(map.config?.rock3);
+        return <article className="panel-card nested-card" key={map.map_id} style={{display:"grid",gap:12}}>
+          <div className="row wrap-row" style={{justifyContent:"space-between"}}>
+            <div><span className="panel-kicker">{mapKindLabel(map.config)}</span><h2 style={{margin:"3px 0"}}>{map.name}</h2></div>
+            <div className="row wrap-row">{map.is_primary?<span className="visibility-pill all_players">Hauptkarte</span>:null}{isRock3?<span className="soft-label">Rock 3</span>:null}</div>
+          </div>
+
+          <div style={{display:"grid",gridTemplateColumns:"repeat(3,minmax(0,1fr))",gap:8}}>
+            <div className="soft-label"><strong>{map.location_count}</strong><br/>Orte</div>
+            <div className="soft-label"><strong>{map.country_count}</strong><br/>Länder</div>
+            <div className="soft-label"><strong>{map.marker_count}</strong><br/>Marker</div>
+          </div>
+
+          <div className="muted">
+            {map.rock3_layer_count?`${map.rock3_layer_count} Rock-3-Ebenen · `:""}{map.layer_count} Ebenen · {map.feature_count} gezeichnete Elemente
+          </div>
+
+          <div className="row wrap-row">
+            <Link className="button primary" href={`/admin/projects/${projectId}/map?mapId=${map.map_id}`}>Karte öffnen</Link>
+            <Link className="button ghost" href={`/admin/projects/${projectId}/map/studio?mapId=${map.map_id}`}>Bearbeiten</Link>
+            <Link className="button ghost" href={`/admin/projects/${projectId}/map/marker-editor?mapId=${map.map_id}`}>Marker</Link>
+            <Link className="button ghost" href={`/admin/projects/${projectId}/settings#map-${map.map_id}`}>Einstellungen</Link>
+          </div>
+        </article>;
+      })}</div>}
       <Pagination pathname={path} searchParams={{q:search.q}} page={maps.page} pageSize={maps.pageSize} total={maps.total} totalPages={maps.totalPages}/>
     </section>
   </AdminShell>;
