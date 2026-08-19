@@ -6,15 +6,19 @@ import { colorWithAlpha, ensureOpenLayers, mapColor, mediaMapUrl, parseMapBounds
 import {
   DEFAULT_MAP_CONTENT_VISIBILITY,
   MAP_CONTENT_FILTERS,
+  MAP_SELECTION_SCOPES,
   allContentVisibility,
   featureContentCategory,
+  selectionScopeMatchesFeature,
   type MapContentCategory,
   type MapContentVisibility,
+  type MapSelectionScope,
 } from "./map-content-visibility";
 import type { MapSearchItem, WorldMapConfig, WorldMapFeature, WorldMapLayer } from "./map-types";
 import { conformPolygonToParent, type JsonMapGeometry, type LandMaskGuide, type MapExtent } from "./map-geometry-guides";
 import { clipPolygonToLandMask } from "./map-raster-clip";
 import { rankSelectionCandidates, selectionCandidateFromRow, type MapSelectionCandidate } from "./map-selection";
+import { isMapFeatureEditorLocked, synchronizeSharedPoliticalVertices, type SharedBoundaryUpdate } from "./map-topology";
 import { loadLandMaskGuide } from "./land-mask-runtime";
 import { locationKindLabel } from "@/lib/location-presentation";
 import type { LocationKind } from "@/lib/entities/locations";
@@ -74,6 +78,15 @@ function categoryForTool(tool: ToolId): MapContentCategory {
   if (tool === "river") return "rivers";
   return "roads";
 }
+function scopeForRow(row: WorldMapFeature): MapSelectionScope {
+  const category = featureContentCategory(row);
+  if (category === "countries") return "countries";
+  if (category === "provinces") return "provinces";
+  if (category === "regions") return "regions";
+  if (category === "settlements" || category === "places") return "places";
+  if (category === "rivers" || category === "roads" || row.geometry.type.includes("Line")) return "lines";
+  return "all";
+}
 
 export function MapEditor({ projectId, mapConfig, layers, features, initialTool, focusFeatureId, existingLocation = null, height = "calc(100vh - 110px)" }: {
   projectId: number; mapConfig: WorldMapConfig; layers: WorldMapLayer[]; features: WorldMapFeature[]; initialTool?: string | null;
@@ -83,6 +96,7 @@ export function MapEditor({ projectId, mapConfig, layers, features, initialTool,
   const sourceRefs = useRef(new Map<number, any>()), layerRefs = useRef(new Map<number, any>()), featureRefs = useRef(new Map<number, any>()), rowRefs = useRef(new Map<number, WorldMapFeature>());
   const beforeGeometry = useRef(new Map<number, JsonMapGeometry>()), saveTimers = useRef(new Map<number, ReturnType<typeof setTimeout>>()), landMaskRef = useRef<LandMaskGuide | null>(null), highlightRef = useRef<HighlightController | null>(null);
   const contentVisibilityRef = useRef<MapContentVisibility>({ ...DEFAULT_MAP_CONTENT_VISIBILITY });
+  const selectionScopeRef = useRef<MapSelectionScope>("all");
   const vectorLayers = useMemo(() => layers.filter((layer) => layer.layer_type === "vector"), [layers]);
   const rasterLayers = useMemo(() => layers.filter((layer) => layer.layer_type === "raster"), [layers]);
   const landMaskLayer = useMemo(() => rasterLayers.find((layer) => layer.layer_role === "land_mask"), [rasterLayers]);
@@ -91,6 +105,7 @@ export function MapEditor({ projectId, mapConfig, layers, features, initialTool,
     return [bounds[0][1], bounds[0][0], bounds[1][1], bounds[1][0]];
   }, [mapConfig.bounds]);
   const parentConformStep = useMemo(() => Math.max(2, Math.max(mapExtent[2] - mapExtent[0], mapExtent[3] - mapExtent[1]) / 900), [mapExtent]);
+  const topologyTolerance = useMemo(() => Math.max(0.75, Math.max(mapExtent[2] - mapExtent[0], mapExtent[3] - mapExtent[1]) / 3000), [mapExtent]);
   const firstTool = existingLocation ? toolForLocationKind(existingLocation.kind) : toolFromString(initialTool);
   const [tool, setTool] = useState<ToolId | null>(firstTool), [name, setName] = useState(existingLocation?.name ?? ""), [color, setColor] = useState(firstTool ? TOOLS[firstTool].color : "#7c6ee6");
   const [parentId, setParentId] = useState<number | null>(existingLocation?.parentId ?? null), [drawing, setDrawing] = useState(false), [selectedId, setSelectedId] = useState<number | null>(null), [deletingId, setDeletingId] = useState<number | null>(null);
@@ -98,8 +113,11 @@ export function MapEditor({ projectId, mapConfig, layers, features, initialTool,
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle"), [query, setQuery] = useState(""), [searchResults, setSearchResults] = useState<MapSearchItem[]>([]), [searching, setSearching] = useState(false);
   const [undoStack, setUndoStack] = useState<HistoryEntry[]>([]), [redoStack, setRedoStack] = useState<HistoryEntry[]>([]), [activeView, setActiveView] = useState("default"), [layersOpen, setLayersOpen] = useState(false), [landMaskState, setLandMaskState] = useState<LandMaskState>(landMaskLayer ? "loading" : "missing"), [pickMenu, setPickMenu] = useState<PickMenu | null>(null);
   const [contentVisibility, setContentVisibility] = useState<MapContentVisibility>({ ...DEFAULT_MAP_CONTENT_VISIBILITY });
+  const [selectionScope, setSelectionScope] = useState<MapSelectionScope>("all");
+  const [, setFeatureRevision] = useState(0);
   const activeTool = tool ? TOOLS[tool] : null, selectedRow = selectedId ? rowRefs.current.get(selectedId) ?? null : null;
   const selectedKind = selectedRow ? kindFromFeature(selectedRow) : null;
+  const selectedLocked = Boolean(selectedRow && isMapFeatureEditorLocked(selectedRow));
   const groupedLayers = useMemo(() => { const groups = new Map<string, WorldMapLayer[]>(); for (const layer of layers) { const group = layerGroup(layer); groups.set(group, [...(groups.get(group) ?? []), layer]); } return [...groups.entries()]; }, [layers]);
 
   function selectFeature(featureId: number | null) {
@@ -110,8 +128,9 @@ export function MapEditor({ projectId, mapConfig, layers, features, initialTool,
       if (row && !contentVisibilityRef.current[featureContentCategory(row)]) featureId = null;
     }
     if (featureId) {
+      const row = rowRefs.current.get(featureId);
       const feature = featureRefs.current.get(featureId);
-      if (feature) collection?.push(feature);
+      if (feature && row && !isMapFeatureEditorLocked(row)) collection?.push(feature);
     }
     setSelectedId(featureId);
     setPickMenu(null);
@@ -135,13 +154,25 @@ export function MapEditor({ projectId, mapConfig, layers, features, initialTool,
     refreshContentVisibility({ ...contentVisibilityRef.current, [key]: visible });
   }
 
+  function changeSelectionScope(next: MapSelectionScope) {
+    selectionScopeRef.current = next;
+    setSelectionScope(next);
+    setPickMenu(null);
+    try { window.localStorage.setItem(`worldreborn:map-selection-scope:${mapConfig.mapId}`, next); } catch { /* optional preference */ }
+    if (selectedId) {
+      const row = rowRefs.current.get(selectedId);
+      if (row && !selectionScopeMatchesFeature(next, row)) selectFeature(null);
+    }
+    setStatus(next === "all" ? "Alle sichtbaren Kartenobjekte sind auswählbar." : `Auswahlfilter „${MAP_SELECTION_SCOPES.find((scope) => scope.id === next)?.label ?? next}“ aktiv.`);
+  }
+
   function chooseTool(next: ToolId) {
     if (existingLocation) return;
     const category = categoryForTool(next);
     if (!contentVisibilityRef.current[category]) refreshContentVisibility({ ...contentVisibilityRef.current, [category]: true });
     setTool(next); setColor(TOOLS[next].color); setParentId(null); setDrawing(false); selectFeature(null); setError(""); setStatus(`${TOOLS[next].label} gewählt. Daten eingeben und Zeichnen starten.`);
   }
-  function chooseSelect() { if (existingLocation) return; setTool(null); setDrawing(false); setError(""); setPickMenu(null); setStatus("Auswahlwerkzeug aktiv. Fahre über ein sichtbares Objekt oder klicke es an. Bei Überlagerungen kannst du gezielt wählen."); }
+  function chooseSelect() { if (existingLocation) return; setTool(null); setDrawing(false); setError(""); setPickMenu(null); setStatus("Auswahlwerkzeug aktiv. Sichtbarkeit und Auswahlfilter lassen sich getrennt einstellen."); }
   function layerForRole(role: string) { return vectorLayers.find((layer) => layer.layer_role === role) ?? vectorLayers[0] ?? null; }
   function scheduleLayerPatch(id: number, patch: Record<string, unknown>) { const previous = saveTimers.current.get(id); if (previous) clearTimeout(previous); saveTimers.current.set(id, setTimeout(async () => { const response = await fetch(`/api/admin/projects/${projectId}/maps/${mapConfig.mapId}/layers/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch) }); if (!response.ok) { const body = await response.json().catch(() => ({})); setError(body.error || "Kartenebene konnte nicht gespeichert werden."); } }, 280)); }
 
@@ -173,6 +204,7 @@ export function MapEditor({ projectId, mapConfig, layers, features, initialTool,
     let changed = 0;
     for (const [featureId, child] of rowRefs.current.entries()) {
       if (child.location_parent_id !== parentLocationId || !["province", "region"].includes(kindFromFeature(child) ?? "") || !["Polygon", "MultiPolygon"].includes(child.geometry.type)) continue;
+      if (isMapFeatureEditorLocked(child)) continue;
       const next = conformPolygonToParent(child.geometry as JsonMapGeometry, parentGeometry, parentConformStep);
       if (geometryEqual(child.geometry as JsonMapGeometry, next)) continue;
       const feature = featureRefs.current.get(featureId);
@@ -200,8 +232,63 @@ export function MapEditor({ projectId, mapConfig, layers, features, initialTool,
     setError(""); setPickMenu(null); setDrawing(true);
   }
 
-  async function patchGeometry(featureId: number, geometry: JsonMapGeometry) { setSaveState("saving"); const response = await fetch(`/api/admin/projects/${projectId}/maps/${mapConfig.mapId}/features/${featureId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ patchType: "geometry", geometry }) }); const body = await response.json().catch(() => ({})); if (!response.ok) throw new Error(body.error || "Grenze konnte nicht gespeichert werden."); const row = rowRefs.current.get(featureId); if (row) row.geometry = geometry; setSaveState("saved"); window.setTimeout(() => setSaveState("idle"), 1200); }
-  async function patchStyle(featureId: number, style: Record<string, unknown>) { setSaveState("saving"); const response = await fetch(`/api/admin/projects/${projectId}/maps/${mapConfig.mapId}/features/${featureId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ patchType: "style", style }) }); const body = await response.json().catch(() => ({})); if (!response.ok) throw new Error(body.error || "Darstellung konnte nicht gespeichert werden."); const row = rowRefs.current.get(featureId); if (row) row.style = { ...row.style, ...style }; setSaveState("saved"); window.setTimeout(() => setSaveState("idle"), 1200); }
+  async function patchGeometry(featureId: number, geometry: JsonMapGeometry) {
+    setSaveState("saving");
+    const response = await fetch(`/api/admin/projects/${projectId}/maps/${mapConfig.mapId}/features/${featureId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ patchType: "geometry", geometry }) });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(body.error || "Grenze konnte nicht gespeichert werden.");
+    const row = rowRefs.current.get(featureId); if (row) row.geometry = geometry;
+    setSaveState("saved"); window.setTimeout(() => setSaveState("idle"), 1200);
+  }
+
+  async function patchGeometryBatch(featureId: number, geometry: JsonMapGeometry, peers: SharedBoundaryUpdate[]) {
+    setSaveState("saving");
+    const response = await fetch(`/api/admin/projects/${projectId}/maps/${mapConfig.mapId}/features/${featureId}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ patchType: "geometry_batch", geometry, peers: peers.map((peer) => ({ featureId: peer.featureId, geometry: peer.geometry })) }),
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(body.error || "Gemeinsame Grenze konnte nicht gespeichert werden.");
+    const row = rowRefs.current.get(featureId); if (row) row.geometry = geometry;
+    for (const peer of peers) { const peerRow = rowRefs.current.get(peer.featureId); if (peerRow) peerRow.geometry = peer.geometry; }
+    setSaveState("saved"); window.setTimeout(() => setSaveState("idle"), 1200);
+  }
+
+  async function patchStyle(featureId: number, style: Record<string, unknown>) {
+    setSaveState("saving");
+    const response = await fetch(`/api/admin/projects/${projectId}/maps/${mapConfig.mapId}/features/${featureId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ patchType: "style", style }) });
+    const body = await response.json().catch(() => ({})); if (!response.ok) throw new Error(body.error || "Darstellung konnte nicht gespeichert werden.");
+    const row = rowRefs.current.get(featureId); if (row) row.style = { ...row.style, ...style };
+    setSaveState("saved"); window.setTimeout(() => setSaveState("idle"), 1200);
+  }
+
+  async function patchMetadata(featureId: number, metadata: Record<string, unknown>) {
+    setSaveState("saving");
+    const response = await fetch(`/api/admin/projects/${projectId}/maps/${mapConfig.mapId}/features/${featureId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ patchType: "metadata", metadata }) });
+    const body = await response.json().catch(() => ({})); if (!response.ok) throw new Error(body.error || "Bearbeitungsstatus konnte nicht gespeichert werden.");
+    const row = rowRefs.current.get(featureId); if (row) row.metadata = { ...row.metadata, ...metadata };
+    setFeatureRevision((value) => value + 1); setSaveState("saved"); window.setTimeout(() => setSaveState("idle"), 1200);
+  }
+
+  async function applyTopologyChange(featureId: number, before: JsonMapGeometry, edited: JsonMapGeometry, finalGeometry: JsonMapGeometry) {
+    const row = rowRefs.current.get(featureId);
+    if (!row) { await patchGeometry(featureId, finalGeometry); return { peerCount: 0, movedSharedVertices: 0, children: 0 }; }
+    if (isMapFeatureEditorLocked(row)) throw new Error(`„${row.label}“ ist gesperrt. Entsperre die Grenze zuerst.`);
+    const sync = synchronizeSharedPoliticalVertices({ changedFeatureId: featureId, changedRow: row, before, edited, peers: rowRefs.current.entries(), tolerance: topologyTolerance });
+    if (sync.blockedBy.length) throw new Error(`Die gemeinsame Grenze berührt gesperrte Nachbarn: ${sync.blockedBy.join(", ")}. Entsperre sie zuerst oder bearbeite eine andere Grenze.`);
+
+    await patchGeometryBatch(featureId, finalGeometry, sync.updates);
+    const ol = await ensureOpenLayers();
+    const format = new ol.format.GeoJSON();
+    const primaryFeature = featureRefs.current.get(featureId); if (primaryFeature) primaryFeature.setGeometry(format.readGeometry(finalGeometry));
+    let children = await conformChildrenToParent(row, finalGeometry);
+    for (const peer of sync.updates) {
+      const feature = featureRefs.current.get(peer.featureId); if (feature) feature.setGeometry(format.readGeometry(peer.geometry));
+      const peerRow = rowRefs.current.get(peer.featureId); if (peerRow) children += await conformChildrenToParent(peerRow, peer.geometry);
+    }
+    return { peerCount: sync.updates.length, movedSharedVertices: sync.movedSharedVertices, children };
+  }
+
   function focusFeature(id: number) {
     const row = rowRefs.current.get(id) ?? features.find((item) => Number(item.feature_id) === id);
     if (row && !contentVisibilityRef.current[featureContentCategory(row)]) { setStatus(`„${row.label}“ ist aktuell ausgeblendet. Aktiviere den Inhalt unter Sichtbarkeit.`); return false; }
@@ -220,21 +307,21 @@ export function MapEditor({ projectId, mapConfig, layers, features, initialTool,
       if (cancelled) return;
       landMaskRef.current = guide;
       setLandMaskState(guide ? "ready" : "missing");
-    }).catch(() => {
-      if (!cancelled) setLandMaskState("error");
-    });
+    }).catch(() => { if (!cancelled) setLandMaskState("error"); });
     return () => { cancelled = true; };
   }, [landMaskLayer, mapConfig.mapType, mapExtent]);
 
   useEffect(() => {
     try {
       const saved = window.localStorage.getItem(`worldreborn:map-content:${mapConfig.mapId}`);
-      if (!saved) return;
-      const parsed = JSON.parse(saved) as Partial<MapContentVisibility>;
-      const next = { ...DEFAULT_MAP_CONTENT_VISIBILITY, ...parsed };
-      contentVisibilityRef.current = next;
-      setContentVisibility(next);
-    } catch { /* optional preference */ }
+      if (saved) {
+        const parsed = JSON.parse(saved) as Partial<MapContentVisibility>;
+        const next = { ...DEFAULT_MAP_CONTENT_VISIBILITY, ...parsed };
+        contentVisibilityRef.current = next; setContentVisibility(next);
+      }
+      const savedScope = window.localStorage.getItem(`worldreborn:map-selection-scope:${mapConfig.mapId}`) as MapSelectionScope | null;
+      if (savedScope && MAP_SELECTION_SCOPES.some((scope) => scope.id === savedScope)) { selectionScopeRef.current = savedScope; setSelectionScope(savedScope); }
+    } catch { /* optional local preference */ }
   }, [mapConfig.mapId]);
 
   useEffect(() => {
@@ -245,7 +332,14 @@ export function MapEditor({ projectId, mapConfig, layers, features, initialTool,
       const simple = mapConfig.mapType === "image", extent = mapExtent, projection = simple ? new ol.proj.Projection({ code: `WORLDREBORN:EDIT:${mapConfig.mapId}`, units: "pixels", extent }) : undefined, mapLayers: any[] = [];
       if (simple && mapConfig.imagePath) { const url = mediaMapUrl(mapConfig.imagePath); if (url) mapLayers.push(new ol.layer.Image({ zIndex: -1000, source: new ol.source.ImageStatic({ url, projection, imageExtent: extent }) })); }
       else if (mapConfig.tileUrl) mapLayers.push(new ol.layer.Tile({ zIndex: -1000, source: new ol.source.XYZ({ url: mapConfig.tileUrl, wrapX: false, minZoom: mapConfig.minZoom, maxZoom: mapConfig.maxZoom }) }));
-      for (const layer of rasterLayers) { const id = Number(layer.layer_id), isBase = layer.layer_role === "satellite" && layer.media_id != null && String(layer.media_id) === String(mapConfig.imagePath); if (isBase) continue; const url = layer.source_type === "media" && layer.media_id ? `/api/media/${layer.media_id}` : layer.source_url; if (!url) continue; let rendered: any = null; if (simple && (layer.source_type === "media" || layer.source_type === "image")) rendered = new ol.layer.Image({ opacity: layer.opacity, zIndex: layer.z_index, visible: layer.visible_by_default, source: new ol.source.ImageStatic({ url, projection, imageExtent: extent }) }); else if (layer.source_type === "tile") rendered = new ol.layer.Tile({ opacity: layer.opacity, zIndex: layer.z_index, visible: layer.visible_by_default, source: new ol.source.XYZ({ url, wrapX: false }) }); if (rendered) { rendered.set("worldrebornLayerId", id); layerRefs.current.set(id, rendered); mapLayers.push(rendered); } }
+      for (const layer of rasterLayers) {
+        const id = Number(layer.layer_id), isBase = layer.layer_role === "satellite" && layer.media_id != null && String(layer.media_id) === String(mapConfig.imagePath); if (isBase) continue;
+        const url = layer.source_type === "media" && layer.media_id ? `/api/media/${layer.media_id}` : layer.source_url; if (!url) continue;
+        let rendered: any = null;
+        if (simple && (layer.source_type === "media" || layer.source_type === "image")) rendered = new ol.layer.Image({ opacity: layer.opacity, zIndex: layer.z_index, visible: layer.visible_by_default, source: new ol.source.ImageStatic({ url, projection, imageExtent: extent }) });
+        else if (layer.source_type === "tile") rendered = new ol.layer.Tile({ opacity: layer.opacity, zIndex: layer.z_index, visible: layer.visible_by_default, source: new ol.source.XYZ({ url, wrapX: false }) });
+        if (rendered) { rendered.set("worldrebornLayerId", id); layerRefs.current.set(id, rendered); mapLayers.push(rendered); }
+      }
       const geojson = new ol.format.GeoJSON();
       for (const layer of vectorLayers) {
         const id = Number(layer.layer_id), source = new ol.source.Vector(); sourceRefs.current.set(id, source);
@@ -269,12 +363,13 @@ export function MapEditor({ projectId, mapConfig, layers, features, initialTool,
 
       const highlightSource = new ol.source.Vector();
       const highlightLayer = new ol.layer.Vector({ source: highlightSource, zIndex: 100000, style: (feature: any) => {
-        const selected = feature.get("visualState") === "selected";
+        const selected = feature.get("visualState") === "selected", locked = feature.get("locked") === true;
         const type = feature.getGeometry()?.getType() ?? "";
+        const accent = locked ? "#e49a69" : "#f0ce7d";
         return new ol.style.Style({
-          fill: type.includes("Polygon") ? new ol.style.Fill({ color: selected ? "rgba(224,194,118,.10)" : "rgba(255,255,255,.035)" }) : undefined,
-          stroke: new ol.style.Stroke({ color: selected ? "#f0ce7d" : "rgba(255,255,255,.92)", width: selected ? 4 : 2.5, lineDash: selected ? undefined : [7, 5] }),
-          image: new ol.style.Circle({ radius: selected ? 10 : 9, fill: new ol.style.Fill({ color: selected ? "#d6ae59" : "#f5f5f5" }), stroke: new ol.style.Stroke({ color: "#10141a", width: 3 }) }),
+          fill: type.includes("Polygon") ? new ol.style.Fill({ color: selected ? (locked ? "rgba(228,154,105,.11)" : "rgba(224,194,118,.10)") : "rgba(255,255,255,.035)" }) : undefined,
+          stroke: new ol.style.Stroke({ color: selected ? accent : "rgba(255,255,255,.92)", width: selected ? 4 : 2.5, lineDash: selected && !locked ? undefined : [7, 5] }),
+          image: new ol.style.Circle({ radius: selected ? 10 : 9, fill: new ol.style.Fill({ color: selected ? accent : "#f5f5f5" }), stroke: new ol.style.Stroke({ color: "#10141a", width: 3 }) }),
         });
       } });
       mapLayers.push(highlightLayer);
@@ -287,15 +382,11 @@ export function MapEditor({ projectId, mapConfig, layers, features, initialTool,
         highlightSource.clear();
         const add = (id: number | null, visualState: "selected" | "hover") => {
           if (!id) return;
-          const row = rowRefs.current.get(id);
-          if (row && !contentVisibilityRef.current[featureContentCategory(row)]) return;
-          const original = featureRefs.current.get(id);
-          if (!original?.getGeometry()) return;
-          const visual = new ol.Feature({ geometry: original.getGeometry(), visualState });
-          highlightSource.addFeature(visual);
+          const row = rowRefs.current.get(id); if (row && !contentVisibilityRef.current[featureContentCategory(row)]) return;
+          const original = featureRefs.current.get(id); if (!original?.getGeometry()) return;
+          highlightSource.addFeature(new ol.Feature({ geometry: original.getGeometry(), visualState, locked: Boolean(row && isMapFeatureEditorLocked(row)) }));
         };
-        add(highlightedSelected, "selected");
-        if (highlightedHover !== highlightedSelected) add(highlightedHover, "hover");
+        add(highlightedSelected, "selected"); if (highlightedHover !== highlightedSelected) add(highlightedHover, "hover");
       };
       highlightRef.current = {
         select(id) { highlightedSelected = id; if (id === highlightedHover) highlightedHover = null; renderHighlights(); },
@@ -304,77 +395,67 @@ export function MapEditor({ projectId, mapConfig, layers, features, initialTool,
       };
 
       const select = new ol.interaction.Select({ style: null, hitTolerance: 12, layers: (candidate: any) => Boolean(candidate.get("worldrebornLayerId")) && sourceRefs.current.has(Number(candidate.get("worldrebornLayerId"))) });
-      select.setActive(false);
-      selectRef.current = select; map.addInteraction(select);
+      select.setActive(false); selectRef.current = select; map.addInteraction(select);
       const modify = new ol.interaction.Modify({ features: select.getFeatures(), pixelTolerance: 16 }); modifyRef.current = modify; map.addInteraction(modify);
 
       const collectCandidates = (pixel: number[]) => {
-        const seen = new Set<number>();
-        const candidates: MapSelectionCandidate[] = [];
+        const seen = new Set<number>(), candidates: MapSelectionCandidate[] = [];
         map.forEachFeatureAtPixel(pixel, (feature: any) => {
-          const featureId = Number(feature.get("featureId"));
-          if (!featureId || seen.has(featureId)) return undefined;
+          const featureId = Number(feature.get("featureId")); if (!featureId || seen.has(featureId)) return undefined;
           const row = rowRefs.current.get(featureId);
-          if (!row || !contentVisibilityRef.current[featureContentCategory(row)]) return undefined;
+          if (!row || !contentVisibilityRef.current[featureContentCategory(row)] || !selectionScopeMatchesFeature(selectionScopeRef.current, row)) return undefined;
           seen.add(featureId);
           const featureExtent = feature.getGeometry()?.getExtent();
           const extentArea = featureExtent ? Math.max(0, (featureExtent[2] - featureExtent[0]) * (featureExtent[3] - featureExtent[1])) : 0;
-          candidates.push(selectionCandidateFromRow(featureId, row, extentArea));
-          return undefined;
+          candidates.push(selectionCandidateFromRow(featureId, row, extentArea)); return undefined;
         }, { hitTolerance: 12, layerFilter: (candidate: any) => Boolean(candidate.get("worldrebornLayerId")) && sourceRefs.current.has(Number(candidate.get("worldrebornLayerId"))) });
         return rankSelectionCandidates(candidates);
       };
 
-      const chooseCandidate = (featureId: number | null) => {
-        select.getFeatures().clear();
-        if (featureId) { const feature = featureRefs.current.get(featureId); if (feature) select.getFeatures().push(feature); }
-        setSelectedId(featureId); setPickMenu(null); highlightRef.current?.select(featureId);
-      };
       const singleClick = (event: any) => {
         if (drawRef.current) return;
         const candidates = collectCandidates(event.pixel);
-        if (!candidates.length) { chooseCandidate(null); return; }
-        if (candidates.length === 1) { chooseCandidate(candidates[0].featureId); return; }
+        if (!candidates.length) { selectFeature(null); return; }
+        if (candidates.length === 1) { selectFeature(candidates[0].featureId); return; }
         const width = targetRef.current?.clientWidth ?? 800, height = targetRef.current?.clientHeight ?? 600;
         setPickMenu({ x: Math.max(58, Math.min(event.pixel[0] + 14, width - 286)), y: Math.max(58, Math.min(event.pixel[1] + 14, height - 250)), items: candidates.slice(0, 10) });
-        setStatus(`${candidates.length} sichtbare Objekte liegen hier. Wähle gezielt das gewünschte Element.`);
+        setStatus(`${candidates.length} passende Objekte liegen hier. Wähle gezielt das gewünschte Element.`);
       };
       const pointerMove = (event: any) => {
         if (event.dragging || drawRef.current) return;
-        const candidate = collectCandidates(event.pixel)[0] ?? null;
-        highlightRef.current?.hover(candidate?.featureId ?? null);
-        const element = map.getTargetElement();
-        if (element) element.style.cursor = candidate ? "pointer" : "";
+        const candidate = collectCandidates(event.pixel)[0] ?? null; highlightRef.current?.hover(candidate?.featureId ?? null);
+        const element = map.getTargetElement(); if (element) element.style.cursor = candidate ? "pointer" : "";
       };
       map.on("singleclick", singleClick); map.on("pointermove", pointerMove);
 
       modify.on("modifystart", (event: any) => { for (const feature of event.features.getArray()) { const id = Number(feature.get("featureId")); if (id) beforeGeometry.current.set(id, geojson.writeGeometryObject(feature.getGeometry()) as JsonMapGeometry); } });
       modify.on("modifyend", async (event: any) => {
         setError("");
-        try {
-          let adaptedChildren = 0;
-          for (const feature of event.features.getArray()) {
-            const id = Number(feature.get("featureId")); if (!id) continue;
-            const row = rowRefs.current.get(id);
+        for (const feature of event.features.getArray()) {
+          const id = Number(feature.get("featureId")); if (!id) continue;
+          const row = rowRefs.current.get(id), before = beforeGeometry.current.get(id);
+          if (!row || !before) continue;
+          try {
             const rawAfter = geojson.writeGeometryObject(feature.getGeometry()) as JsonMapGeometry;
-            const parentLocationId = row?.location_parent_id ?? (typeof row?.metadata?.parentLocationId === "number" ? row.metadata.parentLocationId : null);
-            const after = row ? conformSemanticGeometry(rawAfter, kindFromFeature(row), parentLocationId) : rawAfter;
-            if (!geometryEqual(after, rawAfter)) feature.setGeometry(geojson.readGeometry(after));
-            const before = beforeGeometry.current.get(id);
-            await patchGeometry(id, after);
-            if (row) adaptedChildren += await conformChildrenToParent(row, after);
-            if (before) { const label = row?.label ?? "Element"; setUndoStack((current) => [...current.slice(-29), { featureId: id, before, after, label }]); setRedoStack([]); }
-            beforeGeometry.current.delete(id);
-            highlightRef.current?.select(id);
+            const parentLocationId = row.location_parent_id ?? (typeof row.metadata?.parentLocationId === "number" ? row.metadata.parentLocationId : null);
+            const after = conformSemanticGeometry(rawAfter, kindFromFeature(row), parentLocationId);
+            const result = await applyTopologyChange(id, before, rawAfter, after);
+            setUndoStack((current) => [...current.slice(-29), { featureId: id, before, after, label: row.label ?? "Element" }]); setRedoStack([]);
+            beforeGeometry.current.delete(id); highlightRef.current?.select(id);
+            const topologyMessage = result.peerCount ? ` ${result.peerCount} Nachbarfläche${result.peerCount === 1 ? " wurde" : "n wurden"} an der gemeinsamen Grenze synchronisiert.` : "";
+            const childMessage = result.children ? ` ${result.children} untergeordnete Fläche${result.children === 1 ? " wurde" : "n wurden"} angepasst.` : "";
+            setStatus(`Grenze aktualisiert.${topologyMessage}${childMessage}`);
+          } catch (cause) {
+            feature.setGeometry(geojson.readGeometry(before)); beforeGeometry.current.delete(id); highlightRef.current?.select(id);
+            setError(cause instanceof Error ? cause.message : "Änderung konnte nicht gespeichert werden.");
           }
-          setStatus(adaptedChildren ? `Grenze aktualisiert. ${adaptedChildren} untergeordnete Fläche${adaptedChildren===1?" wurde":"n wurden"} an die neue Außengrenze angepasst.` : "Grenze / Position aktualisiert und an die gültige Geometrie angepasst.");
-        } catch (cause) { setError(cause instanceof Error ? cause.message : "Änderung konnte nicht gespeichert werden."); }
+        }
       });
       for (const source of sourceRefs.current.values()) map.addInteraction(new ol.interaction.Snap({ source, pixelTolerance: 16 }));
       if (focusFeatureId) window.setTimeout(() => focusFeature(focusFeatureId), 0);
     }).catch((cause) => setError(cause instanceof Error ? cause.message : "Karte konnte nicht geladen werden."));
     return () => { active = false; for (const timer of saveTimers.current.values()) clearTimeout(timer); saveTimers.current.clear(); highlightRef.current?.clear(); highlightRef.current = null; mapRef.current?.setTarget(undefined); mapRef.current = null; sourceRefs.current.clear(); layerRefs.current.clear(); featureRefs.current.clear(); rowRefs.current.clear(); };
-  }, [mapConfig, mapExtent, rasterLayers, vectorLayers, features, focusFeatureId]);
+  }, [mapConfig, mapExtent, rasterLayers, vectorLayers, features, focusFeatureId, topologyTolerance]);
 
   useEffect(() => {
     const map = mapRef.current; if (!map) return;
@@ -388,20 +469,17 @@ export function MapEditor({ projectId, mapConfig, layers, features, initialTool,
       draw.on("drawend", async (event: any) => {
         setError(""); setSaveState("saving");
         try {
-          const geojson = new ol.format.GeoJSON();
-          const rawGeometry = geojson.writeGeometryObject(event.feature.getGeometry()) as JsonMapGeometry;
-          const constraintParentId = parentId;
-          const geometry = conformSemanticGeometry(rawGeometry, activeTool.kind, constraintParentId);
-          if (!geometryEqual(geometry, rawGeometry)) event.feature.setGeometry(geojson.readGeometry(geometry));
+          const geojson = new ol.format.GeoJSON(), rawGeometry = geojson.writeGeometryObject(event.feature.getGeometry()) as JsonMapGeometry, constraintParentId = parentId;
+          const geometry = conformSemanticGeometry(rawGeometry, activeTool.kind, constraintParentId); if (!geometryEqual(geometry, rawGeometry)) event.feature.setGeometry(geojson.readGeometry(geometry));
           const style = activeTool.mode === "LineString" ? { stroke: color, strokeWidth: 3 } : { fill: color, stroke: "#ffffff", strokeWidth: 2 };
           const linkedLocationId = existingLocation?.id ?? null;
-          const metadata = { createdIn: "map-editor-v8", tool, existingLocationId: linkedLocationId, parentLocationId: constraintParentId, geometryConformance: activeTool.kind === "country" ? "land-mask-raster-clip" : constraintParentId ? "parent-polygon" : "none" };
+          const metadata = { createdIn: "map-editor-v9", tool, existingLocationId: linkedLocationId, parentLocationId: constraintParentId, geometryConformance: activeTool.kind === "country" ? "land-mask-raster-clip" : constraintParentId ? "parent-polygon" : "none", editorLocked: false };
           const response = await fetch(`/api/admin/projects/${projectId}/maps/${mapConfig.mapId}/features`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ layerId: Number(layer.layer_id), geometry, entityType: linkedLocationId ? "location" : null, entityId: linkedLocationId, label: name.trim(), visibilityMode: "admin_only", selectedPlayerIds: [], style, metadata, createLocation: !linkedLocationId && activeTool.kind ? { kind: activeTool.kind, parentLocationId: parentId, locationType: locationKindLabel(activeTool.kind) } : null }) });
           const body = await response.json().catch(() => ({})); if (!response.ok) throw new Error(body.error || "Element konnte nicht gespeichert werden.");
           const featureId = Number(body.featureId), locationId = linkedLocationId ?? (body.locationId ? Number(body.locationId) : null);
           const row: WorldMapFeature = { feature_id: String(featureId), layer_id: String(layer.layer_id), geometry, entity_type: locationId ? "location" : null, entity_id: locationId ? String(locationId) : null, label: name.trim(), short_description: null, visibility_mode: "admin_only", style, metadata, location_parent_id: constraintParentId, location_kind: activeTool.kind };
-          rowRefs.current.set(featureId, row); featureRefs.current.set(featureId, event.feature); event.feature.set("featureId", featureId); event.feature.set("label", row.label); source.changed(); selectRef.current?.getFeatures().clear(); selectRef.current?.getFeatures().push(event.feature); setSelectedId(featureId); highlightRef.current?.select(featureId); setDrawing(false); if (!existingLocation) { setName(""); setParentId(null); } setSaveState("saved");
-          if (activeTool.kind === "country" && landMaskRef.current) setStatus(`Land „${row.label}“ wurde mit der Rock-3-Landmaske verschnitten. Wasser wurde entfernt und Inseln bleiben erhalten.`);
+          rowRefs.current.set(featureId, row); featureRefs.current.set(featureId, event.feature); event.feature.set("featureId", featureId); event.feature.set("label", row.label); source.changed(); selectFeature(featureId); setDrawing(false); if (!existingLocation) { setName(""); setParentId(null); } setSaveState("saved");
+          if (activeTool.kind === "country" && landMaskRef.current) setStatus(`Land „${row.label}“ wurde hochauflösend mit der Rock-3-Landmaske verschnitten.`);
           else if ((activeTool.kind === "province" || activeTool.kind === "region") && constraintParentId) setStatus(`${activeTool.label} „${row.label}“ wurde an die übergeordnete politische Grenze angepasst.`);
           else setStatus(existingLocation ? `„${existingLocation.name}“ wurde auf der Karte platziert.` : `${activeTool.label} „${row.label}“ wurde erstellt.`);
           window.setTimeout(() => setSaveState("idle"), 1200);
@@ -418,26 +496,22 @@ export function MapEditor({ projectId, mapConfig, layers, features, initialTool,
       if (pickMenu) { setPickMenu(null); return; }
       selectFeature(null); setStatus("Auswahl aufgehoben.");
     };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    window.addEventListener("keydown", onKeyDown); return () => window.removeEventListener("keydown", onKeyDown);
   }, [drawing, pickMenu]);
 
   useEffect(() => { const term = query.trim(); if (term.length < 2) { setSearchResults([]); return; } const controller = new AbortController(); const timer = window.setTimeout(async () => { setSearching(true); try { const response = await fetch(`/api/admin/projects/${projectId}/maps/${mapConfig.mapId}/search?q=${encodeURIComponent(term)}`, { signal: controller.signal }); const body = await response.json().catch(() => ({})); if (response.ok) setSearchResults(Array.isArray(body.items) ? body.items : []); } finally { setSearching(false); } }, 180); return () => { controller.abort(); window.clearTimeout(timer); }; }, [query, projectId, mapConfig.mapId]);
 
   async function deleteSelected() {
     if (!selectedId || deletingId) return;
-    const featureId = selectedId;
-    const row = rowRefs.current.get(featureId);
-    if (!row || !window.confirm(`„${row.label}“ wirklich von der Karte entfernen? Die verknüpfte Location bleibt bestehen.`)) return;
+    const featureId = selectedId, row = rowRefs.current.get(featureId); if (!row) return;
+    if (isMapFeatureEditorLocked(row)) { setError(`„${row.label}“ ist gesperrt. Entsperre das Element vor dem Löschen.`); return; }
+    if (!window.confirm(`„${row.label}“ wirklich von der Karte entfernen? Die verknüpfte Location bleibt bestehen.`)) return;
     setDeletingId(featureId); setError(""); setStatus(`„${row.label}“ wird entfernt …`);
     try {
       const response = await fetch(`/api/admin/projects/${projectId}/maps/${mapConfig.mapId}/features/${featureId}`, { method: "DELETE", headers: { Accept: "application/json" } });
-      const body = await response.json().catch(() => ({}));
-      if (!response.ok || body.ok !== true) throw new Error(body.error || "Element konnte nicht entfernt werden.");
+      const body = await response.json().catch(() => ({})); if (!response.ok || body.ok !== true) throw new Error(body.error || "Element konnte nicht entfernt werden.");
       selectRef.current?.getFeatures().clear(); highlightRef.current?.select(null);
-      const source = sourceRefs.current.get(Number(row.layer_id));
-      const feature = featureRefs.current.get(featureId);
-      if (source && feature) { source.removeFeature(feature); source.changed(); }
+      const source = sourceRefs.current.get(Number(row.layer_id)), feature = featureRefs.current.get(featureId); if (source && feature) { source.removeFeature(feature); source.changed(); }
       featureRefs.current.delete(featureId); rowRefs.current.delete(featureId); beforeGeometry.current.delete(featureId);
       setUndoStack((current) => current.filter((entry) => entry.featureId !== featureId)); setRedoStack((current) => current.filter((entry) => entry.featureId !== featureId));
       setSelectedId(null); setPickMenu(null); setStatus(`„${row.label}“ wurde von der Karte entfernt. Die Lore-Location bleibt erhalten.`); setSaveState("saved"); window.setTimeout(() => setSaveState("idle"), 1200);
@@ -447,36 +521,44 @@ export function MapEditor({ projectId, mapConfig, layers, features, initialTool,
 
   async function reconformSelected() {
     if (!selectedId) return;
-    const row = rowRefs.current.get(selectedId);
-    const feature = featureRefs.current.get(selectedId);
-    if (!row || !feature) return;
-    const kind = kindFromFeature(row);
-    const parentLocationId = row.location_parent_id ?? (typeof row.metadata?.parentLocationId === "number" ? row.metadata.parentLocationId : null);
+    const row = rowRefs.current.get(selectedId), feature = featureRefs.current.get(selectedId); if (!row || !feature) return;
+    if (isMapFeatureEditorLocked(row)) { setError(`„${row.label}“ ist gesperrt. Entsperre die Grenze zuerst.`); return; }
+    const kind = kindFromFeature(row), parentLocationId = row.location_parent_id ?? (typeof row.metadata?.parentLocationId === "number" ? row.metadata.parentLocationId : null);
     if (kind === "country" && landMaskLayer && landMaskState !== "ready") { setError("Die Rock-3-Land-Mask ist noch nicht bereit."); return; }
     if ((kind === "province" || kind === "region") && (!parentLocationId || !geometryForLocation(parentLocationId))) { setError("Für diese Fläche ist keine gezeichnete übergeordnete politische Grenze verfügbar."); return; }
     try {
-      setError(""); setSaveState("saving");
-      const next = conformSemanticGeometry(row.geometry as JsonMapGeometry, kind, parentLocationId);
-      if (geometryEqual(row.geometry as JsonMapGeometry, next)) { setStatus(`„${row.label}“ liegt bereits innerhalb der gültigen Grenze.`); setSaveState("idle"); return; }
-      const ol = await ensureOpenLayers();
-      feature.setGeometry(new ol.format.GeoJSON().readGeometry(next));
-      await patchGeometry(selectedId, next); highlightRef.current?.select(selectedId);
+      setError(""); setSaveState("saving"); const before = row.geometry as JsonMapGeometry, next = conformSemanticGeometry(before, kind, parentLocationId);
+      if (geometryEqual(before, next)) { setStatus(`„${row.label}“ liegt bereits innerhalb der gültigen Grenze.`); setSaveState("idle"); return; }
+      const ol = await ensureOpenLayers(); feature.setGeometry(new ol.format.GeoJSON().readGeometry(next)); await patchGeometry(selectedId, next); highlightRef.current?.select(selectedId);
       const children = await conformChildrenToParent(row, next);
-      setStatus(children ? `„${row.label}“ wurde angepasst; ${children} untergeordnete Fläche${children===1?" wurde":"n wurden"} ebenfalls aktualisiert.` : kind === "country" ? `„${row.label}“ wurde vollständig mit der Rock-3-Landmaske verschnitten.` : `„${row.label}“ wurde an die gültige Grenze angepasst.`);
+      setStatus(children ? `„${row.label}“ wurde angepasst; ${children} untergeordnete Fläche${children===1?" wurde":"n wurden"} ebenfalls aktualisiert.` : kind === "country" ? `„${row.label}“ wurde vollständig mit der hochauflösenden Rock-3-Landmaske verschnitten.` : `„${row.label}“ wurde an die gültige Grenze angepasst.`);
     } catch (cause) { setSaveState("idle"); setError(cause instanceof Error ? cause.message : "Geometrie konnte nicht angepasst werden."); }
   }
 
+  async function toggleSelectedLock() {
+    if (!selectedId) return; const row = rowRefs.current.get(selectedId); if (!row) return;
+    const next = !isMapFeatureEditorLocked(row);
+    try { await patchMetadata(selectedId, { editorLocked: next }); selectFeature(selectedId); highlightRef.current?.select(selectedId); setStatus(next ? `„${row.label}“ ist jetzt gegen Verschieben und Löschen gesperrt.` : `„${row.label}“ kann wieder bearbeitet werden.`); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : "Sperre konnte nicht geändert werden."); }
+  }
+
   async function changeSelectedColor(next: string) { if (!selectedId) return; const row = rowRefs.current.get(selectedId); if (!row) return; const key = row.geometry.type.includes("Line") ? "stroke" : "fill"; try { await patchStyle(selectedId, { [key]: next }); sourceRefs.current.get(Number(row.layer_id))?.changed(); setStatus("Farbe gespeichert."); } catch (cause) { setError(cause instanceof Error ? cause.message : "Farbe konnte nicht gespeichert werden."); } }
-  async function applyHistory(entry: HistoryEntry, direction: "undo" | "redo") { const geometry = direction === "undo" ? entry.before : entry.after, feature = featureRefs.current.get(entry.featureId); if (!feature) return; const ol = await ensureOpenLayers(); feature.setGeometry(new ol.format.GeoJSON().readGeometry(geometry)); await patchGeometry(entry.featureId, geometry); sourceRefs.current.get(Number(rowRefs.current.get(entry.featureId)?.layer_id))?.changed(); focusFeature(entry.featureId); }
-  async function undo() { const entry = undoStack.at(-1); if (!entry) return; try { await applyHistory(entry, "undo"); setUndoStack((current) => current.slice(0, -1)); setRedoStack((current) => [...current, entry]); setStatus(`Änderung an „${entry.label}“ rückgängig gemacht.`); } catch (cause) { setError(cause instanceof Error ? cause.message : "Rückgängig fehlgeschlagen."); } }
-  async function redo() { const entry = redoStack.at(-1); if (!entry) return; try { await applyHistory(entry, "redo"); setRedoStack((current) => current.slice(0, -1)); setUndoStack((current) => [...current, entry]); setStatus(`Änderung an „${entry.label}“ wiederhergestellt.`); } catch (cause) { setError(cause instanceof Error ? cause.message : "Wiederholen fehlgeschlagen."); } }
+
+  async function applyHistory(entry: HistoryEntry, direction: "undo" | "redo") {
+    const target = direction === "undo" ? entry.before : entry.after, row = rowRefs.current.get(entry.featureId), feature = featureRefs.current.get(entry.featureId); if (!row || !feature) return;
+    const current = row.geometry as JsonMapGeometry;
+    await applyTopologyChange(entry.featureId, current, target, target);
+    const ol = await ensureOpenLayers(); feature.setGeometry(new ol.format.GeoJSON().readGeometry(target)); sourceRefs.current.get(Number(row.layer_id))?.changed(); focusFeature(entry.featureId);
+  }
+  async function undo() { const entry = undoStack.at(-1); if (!entry) return; try { await applyHistory(entry, "undo"); setUndoStack((current) => current.slice(0, -1)); setRedoStack((current) => [...current, entry]); setStatus(`Änderung an „${entry.label}“ einschließlich gemeinsamer Grenzen rückgängig gemacht.`); } catch (cause) { setError(cause instanceof Error ? cause.message : "Rückgängig fehlgeschlagen."); } }
+  async function redo() { const entry = redoStack.at(-1); if (!entry) return; try { await applyHistory(entry, "redo"); setRedoStack((current) => current.slice(0, -1)); setUndoStack((current) => [...current, entry]); setStatus(`Änderung an „${entry.label}“ einschließlich gemeinsamer Grenzen wiederhergestellt.`); } catch (cause) { setError(cause instanceof Error ? cause.message : "Wiederholen fehlgeschlagen."); } }
   function toggleLayer(layer: WorldMapLayer, visible: boolean) { layerRefs.current.get(Number(layer.layer_id))?.setVisible(visible); scheduleLayerPatch(Number(layer.layer_id), { visibleByDefault: visible }); setActiveView("custom"); }
   function setOpacity(layer: WorldMapLayer, value: number) { layerRefs.current.get(Number(layer.layer_id))?.setOpacity(value); scheduleLayerPatch(Number(layer.layer_id), { opacity: value }); }
   function applyView(view: string) { setActiveView(view); for (const layer of layers) { const id = Number(layer.layer_id), ref = layerRefs.current.get(id); if (!ref) continue; let visible = layer.visible_by_default; if (view === "political") visible = layer.layer_type === "vector" && ["political", "settlements"].includes(layer.layer_role ?? ""); if (view === "climate") visible = layer.layer_role === "biomes" || (layer.layer_type === "vector" && layer.layer_role === "political"); if (view === "rainfall") visible = layer.layer_role === "rainfall_annual" || (layer.layer_type === "vector" && layer.layer_role === "political"); if (view === "topography") visible = ["elevation_full", "elevation_land", "land_mask"].includes(layer.layer_role ?? "") || (layer.layer_type === "vector" && layer.layer_role === "political"); ref.setVisible(visible); const checkbox = document.querySelector<HTMLInputElement>(`[data-editor-layer="${id}"]`); if (checkbox) checkbox.checked = visible; } }
   function chooseSearch(item: MapSearchItem) { if (item.featureId && focusFeature(item.featureId)) { setQuery(""); setSearchResults([]); return; } if (item.markerId) { window.location.assign(`/admin/projects/${projectId}/map?mapId=${mapConfig.mapId}&markerId=${item.markerId}`); return; } if (item.href) window.location.assign(item.href); }
 
   const provinceNeedsParent = activeTool?.kind === "province";
-  const countryMaskMessage = activeTool?.kind === "country" && landMaskLayer ? (landMaskState === "ready" ? "Land-Mask-Clipping aktiv: Wasser wird aus der Fläche entfernt; getrennte Inseln bleiben erhalten." : landMaskState === "loading" ? "Land-Mask wird hochauflösend vorbereitet …" : "Land-Mask konnte nicht als Geometrie-Führung geladen werden.") : null;
+  const countryMaskMessage = activeTool?.kind === "country" && landMaskLayer ? (landMaskState === "ready" ? "Land-Mask-Clipping aktiv: Wasser wird hochauflösend entfernt; die erzeugte Küste wird anschließend subpixel-tolerant geglättet." : landMaskState === "loading" ? "Land-Mask wird hochauflösend vorbereitet …" : "Land-Mask konnte nicht als Geometrie-Führung geladen werden.") : null;
   const canReconformSelected = selectedRow && ["country", "province", "region"].includes(selectedKind ?? "") && ["Polygon", "MultiPolygon"].includes(selectedRow.geometry.type);
   const editorContentFilters = MAP_CONTENT_FILTERS.filter((filter) => filter.id !== "markers");
 
@@ -508,7 +590,7 @@ export function MapEditor({ projectId, mapConfig, layers, features, initialTool,
         {provinceNeedsParent && !parentId ? <div className={styles.drawHint}>{existingLocation?"Diese Provinz hat keine Parent-Location. Setze zuerst auf der Location-Seite ein Land oder eine Region als Parent.":"Eine Provinz braucht ein übergeordnetes Land oder eine Region. Deren Polygon wird als harte Außengrenze verwendet."}</div> : null}
         {countryMaskMessage ? <div className={styles.drawHint}>{countryMaskMessage}</div> : null}
         <button type="button" className={`button primary ${styles.primaryAction}`} disabled={!name.trim() || drawing || (provinceNeedsParent && !parentId)} onClick={beginDrawing}>{drawing ? "Zeichnen läuft …" : "Zeichnen beginnen"}</button>
-        {drawing ? <div className={styles.drawHint}>{activeTool.mode === "Polygon" ? activeTool.kind === "country" ? "Zeichne das gewünschte Gebiet ruhig grob über Küsten und Inseln. Nach Abschluss wird das Polygon mit der Rock-3-Landmaske verschnitten: Wasser verschwindet automatisch." : "Klicke entlang der Grenze. Am Startpunkt schließen. Die Fläche wird anschließend automatisch innerhalb ihrer übergeordneten politischen Grenze gehalten." : activeTool.mode === "Point" ? "Klicke auf die gewünschte Position." : "Klicke entlang des Verlaufs. Doppelklick beendet die Linie."}</div> : null}
+        {drawing ? <div className={styles.drawHint}>{activeTool.mode === "Polygon" ? activeTool.kind === "country" ? "Zeichne das gewünschte Gebiet grob über Küsten und Inseln. Nach Abschluss wird es mit der Landmaske verschnitten und geglättet." : "Klicke entlang der Grenze. Am Startpunkt schließen. Die Fläche bleibt innerhalb ihrer übergeordneten politischen Grenze." : activeTool.mode === "Point" ? "Klicke auf die gewünschte Position." : "Klicke entlang des Verlaufs. Doppelklick beendet die Linie."}</div> : null}
       </div>
     </aside> : null}
 
@@ -519,8 +601,14 @@ export function MapEditor({ projectId, mapConfig, layers, features, initialTool,
     </div>
 
     {layersOpen ? <aside className={`${styles.layerDrawer} ${styles.glass}`}>
-      <div className={styles.drawerHeader}><div><strong>Sichtbarkeit</strong><span>Karteninhalte und Ebenen getrennt steuern</span></div><button type="button" className={styles.closeButton} onClick={() => setLayersOpen(false)} aria-label="Sichtbarkeit schließen">×</button></div>
+      <div className={styles.drawerHeader}><div><strong>Sichtbarkeit & Auswahl</strong><span>Sehen, auswählen und bearbeiten getrennt steuern</span></div><button type="button" className={styles.closeButton} onClick={() => setLayersOpen(false)} aria-label="Sichtbarkeit schließen">×</button></div>
       <div className={styles.layerList}>
+        <div>
+          <div className={styles.layerSection}>Auswählen</div>
+          <div className="row" style={{ gap: 5, padding: "5px 8px 9px", flexWrap: "wrap" }}>
+            {MAP_SELECTION_SCOPES.map((scope) => <button key={scope.id} type="button" title={scope.hint} className={`button ghost${selectionScope === scope.id ? " active" : ""}`} style={{ minHeight: 28, height: 28, padding: "0 8px", fontSize: 9, borderColor: selectionScope === scope.id ? "rgba(199,164,93,.55)" : undefined, color: selectionScope === scope.id ? "#efd185" : undefined }} onClick={() => changeSelectionScope(scope.id)}>{scope.label}</button>)}
+          </div>
+        </div>
         <div>
           <div className={styles.layerSection}>Karteninhalte</div>
           <div className="row" style={{ gap: 6, padding: "4px 8px 7px" }}>
@@ -540,14 +628,16 @@ export function MapEditor({ projectId, mapConfig, layers, features, initialTool,
 
     {selectedRow ? <aside className={`${styles.inspector} ${styles.glass}`}>
       <div className={styles.panelHeader}><div><span className={styles.kicker}>AUSGEWÄHLT</span><h3 className={styles.panelTitle}>{selectedRow.label}</h3></div><button type="button" className={styles.closeButton} onClick={() => selectFeature(null)} aria-label="Auswahl schließen">×</button></div>
-      <span className={styles.inspectorBadge}>{geometryLabel(selectedRow.geometry.type)}</span>
-      <p className={styles.inspectorText}>{selectedKind === "country" && landMaskLayer ? "Die Landesfläche wird nach jeder Formänderung erneut mit der Rock-3-Landmaske verschnitten. Wasser gehört dadurch nicht zum Land; Inseln können als MultiPolygon erhalten bleiben." : selectedRow.location_parent_id ? "Ziehe die Formpunkte. Nach dem Loslassen bleibt die Fläche innerhalb der übergeordneten politischen Grenze." : "Ziehe die Formpunkte direkt auf der Karte. Änderungen werden automatisch gespeichert. Esc hebt die Auswahl auf."}</p>
+      <div className="row" style={{ gap: 6, flexWrap: "wrap" }}><span className={styles.inspectorBadge}>{geometryLabel(selectedRow.geometry.type)}</span>{selectedLocked ? <span className={styles.inspectorBadge}>🔒 Gesperrt</span> : null}</div>
+      <p className={styles.inspectorText}>{selectedLocked ? "Dieses Element ist gegen Verschieben und Löschen gesperrt. Es bleibt sichtbar und auswählbar." : selectedKind === "country" && landMaskLayer ? "Die Landesfläche wird mit der hochauflösenden Rock-3-Landmaske verschnitten. Gemeinsame politische Grenzpunkte mit Nachbarländern werden beim Verschieben synchronisiert." : selectedRow.location_parent_id ? "Die Fläche bleibt innerhalb ihrer Parent-Grenze. Gemeinsame Grenzpunkte mit Geschwister-Provinzen bzw. -Regionen werden synchronisiert." : "Ziehe die Formpunkte direkt auf der Karte. Änderungen werden automatisch gespeichert. Esc hebt die Auswahl auf."}</p>
       <div className={styles.fieldStack}><label className={styles.field}>Farbe<div className={styles.colorRow}><input key={selectedId ?? 0} type="color" defaultValue={mapColor(selectedRow.style?.fill ?? selectedRow.style?.stroke, "#7c6ee6")} onChange={(event) => void changeSelectedColor(event.target.value)}/><span className={styles.colorValue}>Darstellung</span></div></label></div>
       <div className={styles.inspectorActions}>
         {selectedRow.entity_type === "location" && selectedRow.entity_id ? <a className="button primary" href={`/admin/projects/${projectId}/locations/${selectedRow.entity_id}`}>Location öffnen</a> : null}
-        {canReconformSelected ? <button type="button" className="button ghost" onClick={() => void reconformSelected()}>{selectedKind === "country" ? "Neu mit Landmaske verschneiden" : "An Parent-Grenze anpassen"}</button> : null}
-        <button type="button" className={`button danger ${styles.dangerAction}`} disabled={deletingId === selectedId} onClick={() => void deleteSelected()}>{deletingId === selectedId ? "Wird entfernt …" : "Von Karte entfernen"}</button>
-        <small className={styles.panelText}>Die Karten-Geometrie wird gelöscht. Der Lore-Datensatz bleibt bestehen.</small>
+        <button type="button" className="button ghost" onClick={() => changeSelectionScope(scopeForRow(selectedRow))}>Nur diesen Typ auswählen</button>
+        <button type="button" className="button ghost" onClick={() => void toggleSelectedLock()}>{selectedLocked ? "🔓 Bearbeitung entsperren" : "🔒 Bearbeitung sperren"}</button>
+        {canReconformSelected ? <button type="button" className="button ghost" disabled={selectedLocked} onClick={() => void reconformSelected()}>{selectedKind === "country" ? "Neu mit Landmaske verschneiden" : "An Parent-Grenze anpassen"}</button> : null}
+        <button type="button" className={`button danger ${styles.dangerAction}`} disabled={deletingId === selectedId || selectedLocked} onClick={() => void deleteSelected()}>{deletingId === selectedId ? "Wird entfernt …" : selectedLocked ? "Gesperrt" : "Von Karte entfernen"}</button>
+        <small className={styles.panelText}>{selectedLocked ? "Entsperren schützt vor unbeabsichtigtem Verschieben und Löschen. Geteilte Grenzen mit gesperrten Nachbarn können nicht auseinandergezogen werden." : "Die Karten-Geometrie wird gelöscht. Der Lore-Datensatz bleibt bestehen."}</small>
       </div>
     </aside> : null}
 
