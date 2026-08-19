@@ -14,6 +14,18 @@ function wantsExistingCountryFit(body:unknown){
   return metadata.adaptToExistingCountries===true&&createLocation.kind==="country"&&Boolean(raw.geometry);
 }
 
+function countryCandidate(raw:Record<string,unknown>,geometry:JsonMapGeometry,passes:number){
+  return{
+    ...raw,
+    geometry,
+    metadata:{
+      ...record(raw.metadata),
+      serverAdaptedToExistingCountries:passes>0,
+      serverAutoFitPasses:passes,
+    },
+  };
+}
+
 async function prepareCountryCreate(projectId:number,mapId:number,body:unknown){
   if(!wantsExistingCountryFit(body)){
     await assertNoPoliticalOverlapForCreate(projectId,mapId,body);
@@ -21,32 +33,36 @@ async function prepareCountryCreate(projectId:number,mapId:number,body:unknown){
   }
 
   const raw=record(body);
+  let geometry=raw.geometry as JsonMapGeometry;
+
+  // Fast path: the browser preview is already fitted around existing countries. The server
+  // only needs to verify it. This avoids re-rasterizing a large country on every save.
+  const initialCandidate=countryCandidate(raw,geometry,0);
+  try{
+    await assertNoPoliticalOverlapForCreate(projectId,mapId,initialCandidate);
+    return{input:initialCandidate,geometry,adjusted:false,passes:0,removedPixels:0};
+  }catch{
+    // A very thin raster sliver can remain at a shared edge. Only then do the more expensive
+    // authoritative recovery passes below.
+  }
+
   const existing=await listMapFeatures(projectId,mapId);
   const blockers=existing
     .filter((row)=>row.location_kind==="country"&&["Polygon","MultiPolygon"].includes(row.geometry.type))
     .map((row)=>row.geometry as JsonMapGeometry);
 
-  let geometry=raw.geometry as JsonMapGeometry;
   let removedPixels=0;
   let lastOverlapError:unknown=null;
-
-  // The browser already creates a fitted preview. Re-fitting on the server is intentional:
-  // it removes thin raster slivers that can remain between the preview contour and the
-  // authoritative stored neighbour polygons. The strict overlap guard remains the final gate.
-  for(let pass=1;pass<=4;pass+=1){
-    const fit=fitCountryAroundExistingCountries(geometry,blockers,3600);
+  // Two local recovery passes replace the former four 3600px passes. The second, coarser pass
+  // intentionally moves a stubborn sub-pixel contour farther away from the occupied neighbour.
+  const recoverySizes=[1600,800] as const;
+  for(let index=0;index<recoverySizes.length;index+=1){
+    const pass=index+1;
+    const fit=fitCountryAroundExistingCountries(geometry,blockers,recoverySizes[index]);
     if(!fit||fit.keptPixels<12)throw new Error("Nach dem Anpassen an vorhandene Länder bleibt keine ausreichende freie Fläche übrig. Zeichne weiter in die noch freie Landfläche.");
     geometry=fit.geometry;
     removedPixels+=fit.removedPixels;
-    const candidate={
-      ...raw,
-      geometry,
-      metadata:{
-        ...record(raw.metadata),
-        serverAdaptedToExistingCountries:true,
-        serverAutoFitPasses:pass,
-      },
-    };
+    const candidate=countryCandidate(raw,geometry,pass);
     try{
       await assertNoPoliticalOverlapForCreate(projectId,mapId,candidate);
       return{input:candidate,geometry,adjusted:true,passes:pass,removedPixels};
