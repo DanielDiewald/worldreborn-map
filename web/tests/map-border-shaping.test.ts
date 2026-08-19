@@ -23,6 +23,11 @@ const right = {
 function endpoints(points: Array<[number, number]>) {
   return [points[0], points[points.length - 1]];
 }
+function segmentLengths(points: Array<[number, number]>) {
+  const lengths: number[] = [];
+  for (let index = 1; index < points.length; index += 1) lengths.push(Math.hypot(points[index][0] - points[index - 1][0], points[index][1] - points[index - 1][1]));
+  return lengths;
+}
 
 test("detects the longest genuinely shared political border", () => {
   const border = findSharedPoliticalBorder(left, right, 0.01);
@@ -58,4 +63,13 @@ test("different seeds create different shared border variants", () => {
   const sharedFirst = findSharedPoliticalBorder(first.aGeometry, first.bGeometry, 0.01);
   assert.ok(sharedFirst);
   assert.ok(sharedFirst.points.length >= first.border.length - 1);
+});
+
+test("random border post-processing avoids isolated micro segments", () => {
+  const result = randomizeSharedPoliticalBorder(left, right, { tolerance: 0.01, roughness: 1, detail: 1, seed: 99173 });
+  assert.ok(result);
+  const lengths = segmentLengths(result.border);
+  const average = lengths.reduce((sum, value) => sum + value, 0) / Math.max(1, lengths.length);
+  const tiny = lengths.filter((value) => value < average * 0.08);
+  assert.ok(tiny.length <= 1, `found ${tiny.length} tiny segments`);
 });
