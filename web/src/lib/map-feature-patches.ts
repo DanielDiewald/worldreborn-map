@@ -2,6 +2,7 @@ import "server-only";
 
 import { z } from "zod";
 import { pool } from "@/lib/db";
+import { assertNoOverlapWithinBatch, assertNoPoliticalOverlapForFeature } from "@/lib/map-political-overlap-guard";
 
 const geometrySchema = z.object({
   type: z.enum(["Point", "LineString", "Polygon", "MultiPoint", "MultiLineString", "MultiPolygon"]),
@@ -37,6 +38,7 @@ export async function assertMapFeatureUnlocked(projectId: number, mapId: number,
 
 export async function patchMapFeatureGeometry(projectId: number, mapId: number, featureId: number, geometry: unknown) {
   const parsed = geometrySchema.parse(geometry);
+  if (parsed.type === "Polygon" || parsed.type === "MultiPolygon") await assertNoPoliticalOverlapForFeature(projectId, mapId, featureId, parsed);
   const result = await pool.query(
     `UPDATE map_features
         SET geometry_type=$4,geometry=$5::jsonb,updated_at=now()
@@ -62,10 +64,20 @@ export async function patchMapFeatureGeometryBatch(
     uniquePeers.set(peer.featureId, peer.geometry);
   }
 
+  const changedIds = [featureId, ...uniquePeers.keys()];
+  const proposed = [{ featureId, geometry: primary }, ...[...uniquePeers].map(([peerId, peerGeometry]) => ({ featureId: peerId, geometry: peerGeometry }))];
+  if (primary.type === "Polygon" || primary.type === "MultiPolygon") {
+    await assertNoOverlapWithinBatch(proposed.filter((item) => item.geometry.type === "Polygon" || item.geometry.type === "MultiPolygon"));
+    for (const item of proposed) {
+      if (item.geometry.type === "Polygon" || item.geometry.type === "MultiPolygon") {
+        await assertNoPoliticalOverlapForFeature(projectId, mapId, item.featureId, item.geometry, changedIds);
+      }
+    }
+  }
+
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    const ids = [featureId, ...uniquePeers.keys()];
     const existing = await client.query<TopologyRow>(
       `SELECT f.feature_id,f.label,f.metadata,loc.location_kind,loc.parent_loc_id
          FROM map_features f
@@ -73,9 +85,9 @@ export async function patchMapFeatureGeometryBatch(
            ON f.entity_type='location' AND loc.loc_id=f.entity_id AND loc.camp_id=f.project_id AND loc.archived_at IS NULL
         WHERE f.project_id=$1 AND f.map_id=$2 AND f.feature_id=ANY($3::bigint[])
         FOR UPDATE OF f`,
-      [projectId, mapId, ids],
+      [projectId, mapId, changedIds],
     );
-    if (existing.rowCount !== ids.length) throw new Error("One or more topology features no longer exist on this map.");
+    if (existing.rowCount !== changedIds.length) throw new Error("One or more topology features no longer exist on this map.");
     const locked = existing.rows.filter(rowLocked);
     if (locked.length) throw new Error(`Gesperrte Kartenobjekte verhindern die Grenzänderung: ${locked.map((row) => row.label).join(", ")}.`);
 
