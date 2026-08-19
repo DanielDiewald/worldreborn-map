@@ -15,6 +15,6 @@ export async function POST(request:Request,{params}:{params:Promise<{projectId:s
   if(!(await hasValidAdminSession()))return NextResponse.json({error:"Unauthorized"},{status:401});
   const raw=await params;const projectId=positiveInt(raw.projectId);const mapId=positiveInt(raw.mapId);
   if(!projectId||!mapId)return NextResponse.json({error:"Invalid project or map ID"},{status:400});
-  try{const featureId=await createMapFeature(projectId,mapId,await request.json());return NextResponse.json({featureId},{status:201});}
+  try{const created=await createMapFeature(projectId,mapId,await request.json());return NextResponse.json(created,{status:201});}
   catch(error){return NextResponse.json({error:error instanceof Error?error.message:"Feature could not be created"},{status:400});}
 }
