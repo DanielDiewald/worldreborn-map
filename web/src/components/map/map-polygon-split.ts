@@ -110,6 +110,17 @@ function lineTouchesParent(grid: Grid, line: MapCoordinate[]) {
   }
   return false;
 }
+function endpointAtBoundary(grid: Grid, point: MapCoordinate, radius = 7) {
+  const centerX = Math.round(point[0]), centerY = Math.round(point[1]);
+  if (centerX < 0 || centerY < 0 || centerX >= grid.width || centerY >= grid.height) return true;
+  if (!grid.mask[centerY * grid.width + centerX]) return true;
+  for (let dy = -radius; dy <= radius; dy += 1) for (let dx = -radius; dx <= radius; dx += 1) {
+    if (dx * dx + dy * dy > radius * radius) continue;
+    const x = centerX + dx, y = centerY + dy;
+    if (x < 0 || y < 0 || x >= grid.width || y >= grid.height || !grid.mask[y * grid.width + x]) return true;
+  }
+  return false;
+}
 function hasCell(mask: Uint8Array, width: number, height: number, x: number, y: number) { return x >= 0 && y >= 0 && x < width && y < height && mask[y * width + x] === 1; }
 function boundaryEdges(mask: Uint8Array, width: number, height: number) {
   const edges: Edge[] = [];
@@ -153,14 +164,15 @@ function geometryFromMask(grid: Grid, mask: Uint8Array): JsonMapGeometry | null 
 /**
  * Splits a polygonal political area into exactly two raster-partitioned polygons.
  * Every parent pixel belongs to exactly one side, so the generated parts share a
- * boundary without a gap. The divider should be drawn from boundary to boundary.
+ * boundary without a gap. Both divider endpoints must touch or sit outside the
+ * parent boundary; a floating line inside the area is rejected.
  */
 export function splitPolygonByDivider(parent: JsonMapGeometry, divider: JsonMapGeometry, maxSide = 1024): PolygonDividerSplit | null {
   if (!["Polygon","MultiPolygon"].includes(parent.type)) return null;
   const line = lineFromGeometry(divider); if (!line) return null;
   const grid = createGrid(parent, Math.max(384, Math.min(1536, maxSide))); if (!grid) return null;
   const pixelLine = line.map((point)=>mapToPixel(grid,point));
-  if (!lineTouchesParent(grid,pixelLine)) return null;
+  if (!lineTouchesParent(grid,pixelLine) || !endpointAtBoundary(grid,pixelLine[0]) || !endpointAtBoundary(grid,pixelLine[pixelLine.length-1])) return null;
   const a=new Uint8Array(grid.mask.length),b=new Uint8Array(grid.mask.length);let areaA=0,areaB=0;
   for(let y=0;y<grid.height;y+=1)for(let x=0;x<grid.width;x+=1){const index=y*grid.width+x;if(!grid.mask[index])continue;const side=nearestSegmentSide([x,y],pixelLine);if(side>=0){a[index]=1;areaA+=1;}else{b[index]=1;areaB+=1;}}
   const total=areaA+areaB,minArea=Math.max(16,Math.floor(total*0.01)); if(areaA<minArea||areaB<minArea)return null;
