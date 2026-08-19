@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { MapLocationPicker } from "./map-location-picker";
+import { ProvinceDividerTool } from "./province-divider-tool";
 import { colorWithAlpha, ensureOpenLayers, mapColor, mediaMapUrl, parseMapBounds } from "./openlayers-runtime";
 import {
   DEFAULT_MAP_CONTENT_VISIBILITY,
@@ -97,6 +98,7 @@ export function MapEditor({ projectId, mapConfig, layers, features, initialTool,
   const beforeGeometry = useRef(new Map<number, JsonMapGeometry>()), saveTimers = useRef(new Map<number, ReturnType<typeof setTimeout>>()), landMaskRef = useRef<LandMaskGuide | null>(null), highlightRef = useRef<HighlightController | null>(null);
   const contentVisibilityRef = useRef<MapContentVisibility>({ ...DEFAULT_MAP_CONTENT_VISIBILITY });
   const selectionScopeRef = useRef<MapSelectionScope>("all");
+  const dividerFeatureIdRef = useRef<number | null>(null);
   const vectorLayers = useMemo(() => layers.filter((layer) => layer.layer_type === "vector"), [layers]);
   const rasterLayers = useMemo(() => layers.filter((layer) => layer.layer_type === "raster"), [layers]);
   const landMaskLayer = useMemo(() => rasterLayers.find((layer) => layer.layer_role === "land_mask"), [rasterLayers]);
@@ -114,11 +116,38 @@ export function MapEditor({ projectId, mapConfig, layers, features, initialTool,
   const [undoStack, setUndoStack] = useState<HistoryEntry[]>([]), [redoStack, setRedoStack] = useState<HistoryEntry[]>([]), [activeView, setActiveView] = useState("default"), [layersOpen, setLayersOpen] = useState(false), [landMaskState, setLandMaskState] = useState<LandMaskState>(landMaskLayer ? "loading" : "missing"), [pickMenu, setPickMenu] = useState<PickMenu | null>(null);
   const [contentVisibility, setContentVisibility] = useState<MapContentVisibility>({ ...DEFAULT_MAP_CONTENT_VISIBILITY });
   const [selectionScope, setSelectionScope] = useState<MapSelectionScope>("all");
+  const [dividerFeatureId, setDividerFeatureId] = useState<number | null>(null);
   const [, setFeatureRevision] = useState(0);
   const activeTool = tool ? TOOLS[tool] : null, selectedRow = selectedId ? rowRefs.current.get(selectedId) ?? null : null;
   const selectedKind = selectedRow ? kindFromFeature(selectedRow) : null;
   const selectedLocked = Boolean(selectedRow && isMapFeatureEditorLocked(selectedRow));
+  const dividerRow = dividerFeatureId ? rowRefs.current.get(dividerFeatureId) ?? null : null;
   const groupedLayers = useMemo(() => { const groups = new Map<string, WorldMapLayer[]>(); for (const layer of layers) { const group = layerGroup(layer); groups.set(group, [...(groups.get(group) ?? []), layer]); } return [...groups.entries()]; }, [layers]);
+
+  function featureHasProvinceChildren(row: WorldMapFeature) {
+    if (row.entity_type !== "location" || !row.entity_id) return false;
+    const locationId = Number(row.entity_id);
+    if (!Number.isSafeInteger(locationId)) return false;
+    for (const child of rowRefs.current.values()) {
+      if (Number(child.feature_id) === Number(row.feature_id)) continue;
+      if (child.location_kind === "province" && child.location_parent_id === locationId) return true;
+    }
+    return false;
+  }
+
+  function lockedChildrenNeedingAdjustment(parentRow: WorldMapFeature, parentGeometry: JsonMapGeometry) {
+    if (parentRow.entity_type !== "location" || !parentRow.entity_id || !["Polygon", "MultiPolygon"].includes(parentGeometry.type)) return [] as string[];
+    const parentLocationId = Number(parentRow.entity_id);
+    if (!Number.isSafeInteger(parentLocationId)) return [] as string[];
+    const conflicts: string[] = [];
+    for (const child of rowRefs.current.values()) {
+      if (child.location_parent_id !== parentLocationId || !["province", "region"].includes(kindFromFeature(child) ?? "") || !isMapFeatureEditorLocked(child)) continue;
+      if (!["Polygon", "MultiPolygon"].includes(child.geometry.type)) continue;
+      const next = conformPolygonToParent(child.geometry as JsonMapGeometry, parentGeometry, parentConformStep);
+      if (!geometryEqual(child.geometry as JsonMapGeometry, next)) conflicts.push(child.label);
+    }
+    return conflicts;
+  }
 
   function selectFeature(featureId: number | null) {
     const collection = selectRef.current?.getFeatures();
@@ -135,6 +164,26 @@ export function MapEditor({ projectId, mapConfig, layers, features, initialTool,
     setSelectedId(featureId);
     setPickMenu(null);
     highlightRef.current?.select(featureId);
+  }
+
+  function closeProvinceDivider(restoreSelection = true) {
+    const previous = dividerFeatureIdRef.current;
+    dividerFeatureIdRef.current = null;
+    setDividerFeatureId(null);
+    if (restoreSelection && previous) selectFeature(previous);
+  }
+
+  function openProvinceDivider() {
+    if (!selectedId || !selectedRow) return;
+    if (selectedLocked) { setError(`„${selectedRow.label}“ ist gesperrt. Entsperre die Fläche zuerst.`); return; }
+    if (!["country", "region", "province"].includes(selectedKind ?? "") || !["Polygon", "MultiPolygon"].includes(selectedRow.geometry.type) || selectedRow.entity_type !== "location" || !selectedRow.entity_id) {
+      setError("Nur ein Land, eine Region oder eine Provinz mit Location-Verknüpfung kann per Trennlinie geteilt werden.");
+      return;
+    }
+    setTool(null); setDrawing(false); setLayersOpen(false); setPickMenu(null); setError("");
+    selectRef.current?.getFeatures().clear();
+    dividerFeatureIdRef.current = selectedId; setDividerFeatureId(selectedId);
+    setStatus(selectedKind === "province" ? `Provinz „${selectedRow.label}“: Zeichne nur die neue innere Trennlinie.` : `„${selectedRow.label}“: Erzeuge zwei Provinzen mit einer einzigen Trennlinie.`);
   }
 
   function refreshContentVisibility(next: MapContentVisibility) {
@@ -168,11 +217,12 @@ export function MapEditor({ projectId, mapConfig, layers, features, initialTool,
 
   function chooseTool(next: ToolId) {
     if (existingLocation) return;
+    closeProvinceDivider(false);
     const category = categoryForTool(next);
     if (!contentVisibilityRef.current[category]) refreshContentVisibility({ ...contentVisibilityRef.current, [category]: true });
     setTool(next); setColor(TOOLS[next].color); setParentId(null); setDrawing(false); selectFeature(null); setError(""); setStatus(`${TOOLS[next].label} gewählt. Daten eingeben und Zeichnen starten.`);
   }
-  function chooseSelect() { if (existingLocation) return; setTool(null); setDrawing(false); setError(""); setPickMenu(null); setStatus("Auswahlwerkzeug aktiv. Sichtbarkeit und Auswahlfilter lassen sich getrennt einstellen."); }
+  function chooseSelect() { if (existingLocation) return; closeProvinceDivider(false); setTool(null); setDrawing(false); setError(""); setPickMenu(null); setStatus("Auswahlwerkzeug aktiv. Sichtbarkeit und Auswahlfilter lassen sich getrennt einstellen."); }
   function layerForRole(role: string) { return vectorLayers.find((layer) => layer.layer_role === role) ?? vectorLayers[0] ?? null; }
   function scheduleLayerPatch(id: number, patch: Record<string, unknown>) { const previous = saveTimers.current.get(id); if (previous) clearTimeout(previous); saveTimers.current.set(id, setTimeout(async () => { const response = await fetch(`/api/admin/projects/${projectId}/maps/${mapConfig.mapId}/layers/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch) }); if (!response.ok) { const body = await response.json().catch(() => ({})); setError(body.error || "Kartenebene konnte nicht gespeichert werden."); } }, 280)); }
 
@@ -276,6 +326,13 @@ export function MapEditor({ projectId, mapConfig, layers, features, initialTool,
     if (isMapFeatureEditorLocked(row)) throw new Error(`„${row.label}“ ist gesperrt. Entsperre die Grenze zuerst.`);
     const sync = synchronizeSharedPoliticalVertices({ changedFeatureId: featureId, changedRow: row, before, edited, peers: rowRefs.current.entries(), tolerance: topologyTolerance });
     if (sync.blockedBy.length) throw new Error(`Die gemeinsame Grenze berührt gesperrte Nachbarn: ${sync.blockedBy.join(", ")}. Entsperre sie zuerst oder bearbeite eine andere Grenze.`);
+
+    const lockedChildren = new Set(lockedChildrenNeedingAdjustment(row, finalGeometry));
+    for (const peer of sync.updates) {
+      const peerRow = rowRefs.current.get(peer.featureId);
+      if (peerRow) for (const label of lockedChildrenNeedingAdjustment(peerRow, peer.geometry)) lockedChildren.add(label);
+    }
+    if (lockedChildren.size) throw new Error(`Die Grenzänderung würde gesperrte Untergebiete verändern: ${[...lockedChildren].join(", ")}. Entsperre diese zuerst.`);
 
     await patchGeometryBatch(featureId, finalGeometry, sync.updates);
     const ol = await ensureOpenLayers();
@@ -413,7 +470,7 @@ export function MapEditor({ projectId, mapConfig, layers, features, initialTool,
       };
 
       const singleClick = (event: any) => {
-        if (drawRef.current) return;
+        if (drawRef.current || dividerFeatureIdRef.current) return;
         const candidates = collectCandidates(event.pixel);
         if (!candidates.length) { selectFeature(null); return; }
         if (candidates.length === 1) { selectFeature(candidates[0].featureId); return; }
@@ -422,7 +479,7 @@ export function MapEditor({ projectId, mapConfig, layers, features, initialTool,
         setStatus(`${candidates.length} passende Objekte liegen hier. Wähle gezielt das gewünschte Element.`);
       };
       const pointerMove = (event: any) => {
-        if (event.dragging || drawRef.current) return;
+        if (event.dragging || drawRef.current || dividerFeatureIdRef.current) return;
         const candidate = collectCandidates(event.pixel)[0] ?? null; highlightRef.current?.hover(candidate?.featureId ?? null);
         const element = map.getTargetElement(); if (element) element.style.cursor = candidate ? "pointer" : "";
       };
@@ -454,7 +511,7 @@ export function MapEditor({ projectId, mapConfig, layers, features, initialTool,
       for (const source of sourceRefs.current.values()) map.addInteraction(new ol.interaction.Snap({ source, pixelTolerance: 16 }));
       if (focusFeatureId) window.setTimeout(() => focusFeature(focusFeatureId), 0);
     }).catch((cause) => setError(cause instanceof Error ? cause.message : "Karte konnte nicht geladen werden."));
-    return () => { active = false; for (const timer of saveTimers.current.values()) clearTimeout(timer); saveTimers.current.clear(); highlightRef.current?.clear(); highlightRef.current = null; mapRef.current?.setTarget(undefined); mapRef.current = null; sourceRefs.current.clear(); layerRefs.current.clear(); featureRefs.current.clear(); rowRefs.current.clear(); };
+    return () => { active = false; dividerFeatureIdRef.current = null; for (const timer of saveTimers.current.values()) clearTimeout(timer); saveTimers.current.clear(); highlightRef.current?.clear(); highlightRef.current = null; mapRef.current?.setTarget(undefined); mapRef.current = null; sourceRefs.current.clear(); layerRefs.current.clear(); featureRefs.current.clear(); rowRefs.current.clear(); };
   }, [mapConfig, mapExtent, rasterLayers, vectorLayers, features, focusFeatureId, topologyTolerance]);
 
   useEffect(() => {
@@ -473,7 +530,7 @@ export function MapEditor({ projectId, mapConfig, layers, features, initialTool,
           const geometry = conformSemanticGeometry(rawGeometry, activeTool.kind, constraintParentId); if (!geometryEqual(geometry, rawGeometry)) event.feature.setGeometry(geojson.readGeometry(geometry));
           const style = activeTool.mode === "LineString" ? { stroke: color, strokeWidth: 3 } : { fill: color, stroke: "#ffffff", strokeWidth: 2 };
           const linkedLocationId = existingLocation?.id ?? null;
-          const metadata = { createdIn: "map-editor-v9", tool, existingLocationId: linkedLocationId, parentLocationId: constraintParentId, geometryConformance: activeTool.kind === "country" ? "land-mask-raster-clip" : constraintParentId ? "parent-polygon" : "none", editorLocked: false };
+          const metadata = { createdIn: "map-editor-v10", tool, existingLocationId: linkedLocationId, parentLocationId: constraintParentId, geometryConformance: activeTool.kind === "country" ? "land-mask-raster-clip" : constraintParentId ? "parent-polygon" : "none", editorLocked: false };
           const response = await fetch(`/api/admin/projects/${projectId}/maps/${mapConfig.mapId}/features`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ layerId: Number(layer.layer_id), geometry, entityType: linkedLocationId ? "location" : null, entityId: linkedLocationId, label: name.trim(), visibilityMode: "admin_only", selectedPlayerIds: [], style, metadata, createLocation: !linkedLocationId && activeTool.kind ? { kind: activeTool.kind, parentLocationId: parentId, locationType: locationKindLabel(activeTool.kind) } : null }) });
           const body = await response.json().catch(() => ({})); if (!response.ok) throw new Error(body.error || "Element konnte nicht gespeichert werden.");
           const featureId = Number(body.featureId), locationId = linkedLocationId ?? (body.locationId ? Number(body.locationId) : null);
@@ -493,6 +550,7 @@ export function MapEditor({ projectId, mapConfig, layers, features, initialTool,
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       if (drawing) { setDrawing(false); setStatus("Zeichnen abgebrochen."); return; }
+      if (dividerFeatureIdRef.current) { const previous = dividerFeatureIdRef.current; dividerFeatureIdRef.current = null; setDividerFeatureId(null); if (previous) selectFeature(previous); setStatus("Provinz-Teilung geschlossen."); return; }
       if (pickMenu) { setPickMenu(null); return; }
       selectFeature(null); setStatus("Auswahl aufgehoben.");
     };
@@ -529,6 +587,8 @@ export function MapEditor({ projectId, mapConfig, layers, features, initialTool,
     try {
       setError(""); setSaveState("saving"); const before = row.geometry as JsonMapGeometry, next = conformSemanticGeometry(before, kind, parentLocationId);
       if (geometryEqual(before, next)) { setStatus(`„${row.label}“ liegt bereits innerhalb der gültigen Grenze.`); setSaveState("idle"); return; }
+      const lockedChildren = lockedChildrenNeedingAdjustment(row, next);
+      if (lockedChildren.length) throw new Error(`Die Anpassung würde gesperrte Untergebiete verändern: ${lockedChildren.join(", ")}. Entsperre diese zuerst.`);
       const ol = await ensureOpenLayers(); feature.setGeometry(new ol.format.GeoJSON().readGeometry(next)); await patchGeometry(selectedId, next); highlightRef.current?.select(selectedId);
       const children = await conformChildrenToParent(row, next);
       setStatus(children ? `„${row.label}“ wurde angepasst; ${children} untergeordnete Fläche${children===1?" wurde":"n wurden"} ebenfalls aktualisiert.` : kind === "country" ? `„${row.label}“ wurde vollständig mit der hochauflösenden Rock-3-Landmaske verschnitten.` : `„${row.label}“ wurde an die gültige Grenze angepasst.`);
@@ -560,10 +620,13 @@ export function MapEditor({ projectId, mapConfig, layers, features, initialTool,
   const provinceNeedsParent = activeTool?.kind === "province";
   const countryMaskMessage = activeTool?.kind === "country" && landMaskLayer ? (landMaskState === "ready" ? "Land-Mask-Clipping aktiv: Wasser wird hochauflösend entfernt; die erzeugte Küste wird anschließend subpixel-tolerant geglättet." : landMaskState === "loading" ? "Land-Mask wird hochauflösend vorbereitet …" : "Land-Mask konnte nicht als Geometrie-Führung geladen werden.") : null;
   const canReconformSelected = selectedRow && ["country", "province", "region"].includes(selectedKind ?? "") && ["Polygon", "MultiPolygon"].includes(selectedRow.geometry.type);
+  const canSplitSelected = selectedRow && ["country", "province", "region"].includes(selectedKind ?? "") && ["Polygon", "MultiPolygon"].includes(selectedRow.geometry.type) && selectedRow.entity_type === "location" && Boolean(selectedRow.entity_id);
   const editorContentFilters = MAP_CONTENT_FILTERS.filter((filter) => filter.id !== "markers");
 
   return <div className={styles.workspace} style={{ height }}>
     <div ref={targetRef} className={styles.canvas}/>
+
+    {dividerRow && mapRef.current ? <ProvinceDividerTool projectId={projectId} mapId={mapConfig.mapId} map={mapRef.current} row={dividerRow} hasProvinceChildren={featureHasProvinceChildren(dividerRow)} onClose={() => closeProvinceDivider(true)}/> : null}
 
     {pickMenu ? <div className={`${styles.searchResults} ${styles.glass}`} style={{ top: pickMenu.y, left: pickMenu.x, right: "auto", width: 272, zIndex: 45 }}>
       <div className={styles.noResults}><strong>{pickMenu.items.length} Elemente hier</strong><br/>Wähle das Objekt, das du bearbeiten möchtest.</div>
@@ -581,7 +644,7 @@ export function MapEditor({ projectId, mapConfig, layers, features, initialTool,
       {(Object.keys(TOOLS) as ToolId[]).map((id) => <button key={id} type="button" className={`${styles.toolButton}${tool === id ? ` ${styles.toolButtonActive}` : ""}`} onClick={() => chooseTool(id)} disabled={Boolean(existingLocation && tool !== id)} aria-label={TOOLS[id].label}><span aria-hidden="true">{TOOLS[id].icon}</span><span className={styles.toolLabel}>{TOOLS[id].label}</span></button>)}
     </div>
 
-    {activeTool ? <aside className={`${styles.createPanel} ${styles.glass}`}>
+    {activeTool && !dividerRow ? <aside className={`${styles.createPanel} ${styles.glass}`}>
       <div className={styles.panelHeader}><div><span className={styles.kicker}>{existingLocation ? "ORT PLATZIEREN" : "ERSTELLEN"}</span><h3 className={styles.panelTitle}>{existingLocation ? existingLocation.name : activeTool.label}</h3><p className={styles.panelText}>{existingLocation ? `Bestehende ${locationKindLabel(existingLocation.kind)}-Location – es wird nur die Kartenform ergänzt.` : activeTool.description}</p></div>{!existingLocation ? <button type="button" className={styles.closeButton} onClick={chooseSelect} aria-label="Werkzeug schließen">×</button> : null}</div>
       <div className={styles.fieldStack}>
         <label className={styles.field}>Name<input value={name} onChange={(event) => setName(event.target.value)} readOnly={Boolean(existingLocation)} placeholder={`Name für ${activeTool.label}`}/></label>
@@ -595,12 +658,12 @@ export function MapEditor({ projectId, mapConfig, layers, features, initialTool,
     </aside> : null}
 
     <div className={styles.actionDock}>
-      <button type="button" className={`${styles.iconAction} ${styles.iconActionSquare} ${styles.glass}`} disabled={!undoStack.length} onClick={() => void undo()} aria-label="Rückgängig" title="Rückgängig">↶</button>
-      <button type="button" className={`${styles.iconAction} ${styles.iconActionSquare} ${styles.glass}`} disabled={!redoStack.length} onClick={() => void redo()} aria-label="Wiederholen" title="Wiederholen">↷</button>
-      <button type="button" className={`${styles.iconAction} ${styles.glass}${layersOpen ? ` ${styles.actionActive}` : ""}`} onClick={() => setLayersOpen((value) => !value)} aria-expanded={layersOpen}>☷ Sichtbarkeit</button>
+      <button type="button" className={`${styles.iconAction} ${styles.iconActionSquare} ${styles.glass}`} disabled={!undoStack.length || Boolean(dividerRow)} onClick={() => void undo()} aria-label="Rückgängig" title="Rückgängig">↶</button>
+      <button type="button" className={`${styles.iconAction} ${styles.iconActionSquare} ${styles.glass}`} disabled={!redoStack.length || Boolean(dividerRow)} onClick={() => void redo()} aria-label="Wiederholen" title="Wiederholen">↷</button>
+      <button type="button" className={`${styles.iconAction} ${styles.glass}${layersOpen ? ` ${styles.actionActive}` : ""}`} disabled={Boolean(dividerRow)} onClick={() => setLayersOpen((value) => !value)} aria-expanded={layersOpen}>☷ Sichtbarkeit</button>
     </div>
 
-    {layersOpen ? <aside className={`${styles.layerDrawer} ${styles.glass}`}>
+    {layersOpen && !dividerRow ? <aside className={`${styles.layerDrawer} ${styles.glass}`}>
       <div className={styles.drawerHeader}><div><strong>Sichtbarkeit & Auswahl</strong><span>Sehen, auswählen und bearbeiten getrennt steuern</span></div><button type="button" className={styles.closeButton} onClick={() => setLayersOpen(false)} aria-label="Sichtbarkeit schließen">×</button></div>
       <div className={styles.layerList}>
         <div>
@@ -624,9 +687,9 @@ export function MapEditor({ projectId, mapConfig, layers, features, initialTool,
       </div>
     </aside> : null}
 
-    <div className={`${styles.viewSwitcher} ${styles.glass}`}>{VIEWS.map(([id, label]) => <button key={id} type="button" className={`${styles.viewButton}${activeView === id ? ` ${styles.viewActive}` : ""}`} onClick={() => applyView(id)}>{label}</button>)}</div>
+    {!dividerRow ? <div className={`${styles.viewSwitcher} ${styles.glass}`}>{VIEWS.map(([id, label]) => <button key={id} type="button" className={`${styles.viewButton}${activeView === id ? ` ${styles.viewActive}` : ""}`} onClick={() => applyView(id)}>{label}</button>)}</div> : null}
 
-    {selectedRow ? <aside className={`${styles.inspector} ${styles.glass}`}>
+    {selectedRow && !dividerRow ? <aside className={`${styles.inspector} ${styles.glass}`}>
       <div className={styles.panelHeader}><div><span className={styles.kicker}>AUSGEWÄHLT</span><h3 className={styles.panelTitle}>{selectedRow.label}</h3></div><button type="button" className={styles.closeButton} onClick={() => selectFeature(null)} aria-label="Auswahl schließen">×</button></div>
       <div className="row" style={{ gap: 6, flexWrap: "wrap" }}><span className={styles.inspectorBadge}>{geometryLabel(selectedRow.geometry.type)}</span>{selectedLocked ? <span className={styles.inspectorBadge}>🔒 Gesperrt</span> : null}</div>
       <p className={styles.inspectorText}>{selectedLocked ? "Dieses Element ist gegen Verschieben und Löschen gesperrt. Es bleibt sichtbar und auswählbar." : selectedKind === "country" && landMaskLayer ? "Die Landesfläche wird mit der hochauflösenden Rock-3-Landmaske verschnitten. Gemeinsame politische Grenzpunkte mit Nachbarländern werden beim Verschieben synchronisiert." : selectedRow.location_parent_id ? "Die Fläche bleibt innerhalb ihrer Parent-Grenze. Gemeinsame Grenzpunkte mit Geschwister-Provinzen bzw. -Regionen werden synchronisiert." : "Ziehe die Formpunkte direkt auf der Karte. Änderungen werden automatisch gespeichert. Esc hebt die Auswahl auf."}</p>
@@ -635,6 +698,7 @@ export function MapEditor({ projectId, mapConfig, layers, features, initialTool,
         {selectedRow.entity_type === "location" && selectedRow.entity_id ? <a className="button primary" href={`/admin/projects/${projectId}/locations/${selectedRow.entity_id}`}>Location öffnen</a> : null}
         <button type="button" className="button ghost" onClick={() => changeSelectionScope(scopeForRow(selectedRow))}>Nur diesen Typ auswählen</button>
         <button type="button" className="button ghost" onClick={() => void toggleSelectedLock()}>{selectedLocked ? "🔓 Bearbeitung entsperren" : "🔒 Bearbeitung sperren"}</button>
+        {canSplitSelected ? <button type="button" className="button ghost" disabled={selectedLocked} onClick={openProvinceDivider}>{selectedKind === "province" ? "✂ Provinz mit Trennlinie teilen" : "✂ Provinzen mit Trennlinie erzeugen"}</button> : null}
         {canReconformSelected ? <button type="button" className="button ghost" disabled={selectedLocked} onClick={() => void reconformSelected()}>{selectedKind === "country" ? "Neu mit Landmaske verschneiden" : "An Parent-Grenze anpassen"}</button> : null}
         <button type="button" className={`button danger ${styles.dangerAction}`} disabled={deletingId === selectedId || selectedLocked} onClick={() => void deleteSelected()}>{deletingId === selectedId ? "Wird entfernt …" : selectedLocked ? "Gesperrt" : "Von Karte entfernen"}</button>
         <small className={styles.panelText}>{selectedLocked ? "Entsperren schützt vor unbeabsichtigtem Verschieben und Löschen. Geteilte Grenzen mit gesperrten Nachbarn können nicht auseinandergezogen werden." : "Die Karten-Geometrie wird gelöscht. Der Lore-Datensatz bleibt bestehen."}</small>
