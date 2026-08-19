@@ -267,6 +267,53 @@ function roughenAssignment(grid: Grid, cells: number[], assignment: Assignment, 
   }
   return current;
 }
+
+/**
+ * Removes one- and two-cell teeth created by the deliberately wild boundary pass.
+ * This runs on the shared owner grid, not on polygons after vectorization, so every
+ * changed cell is transferred to exactly one neighbour and no cracks/overlaps can form.
+ */
+function smoothAssignmentSpikes(grid: Grid, cells: number[], assignment: Assignment, count: number, irregularity: number): Assignment {
+  let current = assignment;
+  const offsets = [[-1,-1],[0,-1],[1,-1],[-1,0],[1,0],[-1,1],[0,1],[1,1]] as const;
+  const passes = 2 + Math.round(clamp(irregularity, 0, 1) * 2);
+  const minimumRegion = Math.max(20, Math.round(cells.length * 0.0025));
+
+  for (let pass = 0; pass < passes; pass += 1) {
+    const nextOwners = current.owners.slice();
+    let changed = 0;
+    for (const index of cells) {
+      const owner = current.owners[index];
+      if (owner < 0 || current.counts[owner] <= minimumRegion) continue;
+      const x = index % grid.width, y = Math.floor(index / grid.width);
+      const support = new Map<number, number>();
+      for (const [dx, dy] of offsets) {
+        const nx = x + dx, ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= grid.width || ny >= grid.height) continue;
+        const candidate = current.owners[ny * grid.width + nx];
+        if (candidate < 0) continue;
+        support.set(candidate, (support.get(candidate) ?? 0) + 1);
+      }
+      const ownSupport = support.get(owner) ?? 0;
+      let bestOwner = owner, bestSupport = ownSupport;
+      for (const [candidate, amount] of support) {
+        if (candidate !== owner && amount > bestSupport) { bestOwner = candidate; bestSupport = amount; }
+      }
+      if (bestOwner === owner) continue;
+      const isolated = ownSupport <= 1 && bestSupport >= 3;
+      const tinyTooth = ownSupport <= 2 && bestSupport >= 5;
+      const narrowSpike = ownSupport <= 3 && bestSupport >= 6;
+      if (!isolated && !tinyTooth && !narrowSpike) continue;
+      nextOwners[index] = bestOwner;
+      changed += 1;
+    }
+    if (!changed) break;
+    const next = recomputeAssignment(grid, cells, nextOwners, count);
+    if ([...next.counts].some((area) => area < minimumRegion)) break;
+    current = next;
+  }
+  return current;
+}
 function rebalanceSeeds(grid: Grid, cells: number[], seeds: Seed[], irregularity: number, balance: number, noiseSeed: number) {
   const total = cells.length, target = total / seeds.length;
   let assignment = assignCells(grid, cells, seeds, irregularity, noiseSeed);
@@ -284,7 +331,7 @@ function rebalanceSeeds(grid: Grid, cells: number[], seeds: Seed[], irregularity
     }
     assignment = assignCells(grid, cells, seeds, irregularity, noiseSeed);
   }
-  return roughenAssignment(grid, cells, assignment, seeds.length, irregularity, balance, noiseSeed);
+  return smoothAssignmentSpikes(grid, cells, roughenAssignment(grid, cells, assignment, seeds.length, irregularity, balance, noiseSeed), seeds.length, irregularity);
 }
 
 function hasCell(mask: Uint8Array, width: number, height: number, x: number, y: number) { return x >= 0 && y >= 0 && x < width && y < height && mask[y * width + x] === 1; }
