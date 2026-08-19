@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { allContentVisibility, featureContentCategory } from "../src/components/map/map-content-visibility";
+import { allContentVisibility, featureContentCategory, selectionScopeMatchesFeature } from "../src/components/map/map-content-visibility";
 
 const geometry = { type: "Polygon", coordinates: [] };
 
@@ -19,4 +19,17 @@ test("all visibility switch controls every semantic category", () => {
   assert.ok(Object.values(hidden).every((value) => value === false));
   const shown = allContentVisibility(true);
   assert.ok(Object.values(shown).every((value) => value === true));
+});
+
+test("selection scopes are independent from visibility categories", () => {
+  const country = { geometry, location_kind: "country", metadata: {} };
+  const province = { geometry, location_kind: "province", metadata: {} };
+  const city = { geometry: { type: "Point", coordinates: [1, 1] }, location_kind: "city", metadata: {} };
+  const river = { geometry: { type: "LineString", coordinates: [] }, location_kind: null, metadata: { tool: "river" } };
+  assert.equal(selectionScopeMatchesFeature("countries", country), true);
+  assert.equal(selectionScopeMatchesFeature("countries", province), false);
+  assert.equal(selectionScopeMatchesFeature("provinces", province), true);
+  assert.equal(selectionScopeMatchesFeature("places", city), true);
+  assert.equal(selectionScopeMatchesFeature("lines", river), true);
+  assert.equal(selectionScopeMatchesFeature("all", province), true);
 });
