@@ -27,7 +27,7 @@ export default async function MapStudioPage({params,searchParams}:{params:Promis
   const config={mapId,mapType:selected.map_type as "tile"|"image",tileUrl:selected.tile_url,imagePath:selected.image_path,minZoom:selected.min_zoom,maxZoom:selected.max_zoom,centerLat:selected.center_lat,centerLng:selected.center_lng,bounds:selected.bounds,config:selected.config};
   const isRock3=Boolean((selected.config as Record<string,unknown>|null)?.rock3);
   const focusFeatureId=positive(search.featureId)??(existingLocation?.map_feature_id?Number(existingLocation.map_feature_id):null);
-  const placementLocation=existingLocation&&!existingLocation.map_feature_id?{id:existingLocation.loc_id,name:existingLocation.name,kind:existingLocation.location_kind}:null;
+  const placementLocation=existingLocation&&!existingLocation.map_feature_id?{id:existingLocation.loc_id,name:existingLocation.name,kind:existingLocation.location_kind,parentId:existingLocation.parent_loc_id}:null;
   const initialTool=placementLocation?toolForKind(placementLocation.kind):(search.tool??null);
   const editorKey=[mapId,focusFeatureId??0,placementLocation?.id??0,initialTool??""].join(":");
 
