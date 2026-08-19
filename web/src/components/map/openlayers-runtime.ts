@@ -17,7 +17,7 @@ function installReliablePolygonHitDetection(ol: OlGlobal) {
 
   prototype.forEachFeatureAtPixel = function patchedForEachFeatureAtPixel(
     pixel: number[],
-    callback: (feature: any, layer?: any) => unknown,
+    callback: (feature: any, layer?: any, geometry?: any) => unknown,
     options: Record<string, any> = {},
   ) {
     const seen = new Set<any>();
@@ -36,7 +36,8 @@ function installReliablePolygonHitDetection(ol: OlGlobal) {
     const coordinate = this.getCoordinateFromPixel?.(pixel);
     if (!coordinate) return directResult;
 
-    const layerFilter = typeof options.layerFilter === "function" ? options.layerFilter : () => true;
+    const safeOptions = options && typeof options === "object" ? options : {};
+    const layerFilter = typeof safeOptions.layerFilter === "function" ? safeOptions.layerFilter : () => true;
     const layers = this.getLayers?.().getArray?.() ?? [];
     for (let index = layers.length - 1; index >= 0; index -= 1) {
       const layer = layers[index];
@@ -49,7 +50,7 @@ function installReliablePolygonHitDetection(ol: OlGlobal) {
         const type = feature.getGeometry?.()?.getType?.();
         if (type !== "Polygon" && type !== "MultiPolygon") continue;
         seen.add(feature);
-        const result = callback(feature, layer);
+        const result = callback(feature, layer, feature.getGeometry?.());
         if (result) return result;
       }
     }
