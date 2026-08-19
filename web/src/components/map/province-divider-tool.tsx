@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { ensureOpenLayers, mapColor } from "./openlayers-runtime";
 import { splitPolygonByDivider } from "./map-polygon-split";
 import { isMapFeatureEditorLocked } from "./map-topology";
@@ -17,6 +18,7 @@ export function ProvinceDividerTool({ projectId, mapId, map, row, hasProvinceChi
   hasProvinceChildren: boolean;
   onClose: () => void;
 }) {
+  const router = useRouter();
   const mode: Mode = row.location_kind === "province" ? "province_to_sibling" : "parent_to_two";
   const [leftName, setLeftName] = useState("");
   const [rightName, setRightName] = useState("");
@@ -119,7 +121,8 @@ export function ProvinceDividerTool({ projectId, mapId, map, row, hasProvinceChi
         });
         const body = await response.json().catch(() => ({}));
         if (!response.ok || body.ok !== true) throw new Error(body.error || "Provinzen konnten nicht gespeichert werden.");
-        window.setTimeout(() => window.location.reload(), 220);
+        onClose();
+        router.refresh();
       } catch (cause) {
         source.removeFeature(event.feature);
         setError(cause instanceof Error ? cause.message : "Provinzen konnten nicht geteilt werden.");
@@ -131,19 +134,19 @@ export function ProvinceDividerTool({ projectId, mapId, map, row, hasProvinceChi
   return <aside className={`${styles.createPanel} ${styles.glass}`} style={{ width: 350 }}>
     <div className={styles.panelHeader}>
       <div><span className={styles.kicker}>PROVINZEN TEILEN</span><h3 className={styles.panelTitle}>{row.label}</h3><p className={styles.panelText}>{mode === "province_to_sibling" ? "Zeichne nur die neue innere Grenze. Die größere Seite behält den bestehenden Provinznamen; die kleinere Seite wird die neue Provinz." : "Zeichne nur eine Trennlinie durch das Gebiet. Die Außenkante wird vollständig vom Land bzw. der Region übernommen."}</p></div>
-      <button type="button" className={styles.closeButton} onClick={onClose} aria-label="Teilungswerkzeug schließen">×</button>
+      <button type="button" className={styles.closeButton} disabled={saving} onClick={onClose} aria-label="Teilungswerkzeug schließen">×</button>
     </div>
     <div className={styles.fieldStack}>
       {locked ? <div className={styles.drawHint}>Diese Fläche ist gesperrt. Entsperre sie zuerst im Inspector.</div> : null}
       {mode === "parent_to_two" && hasProvinceChildren ? <div className={styles.drawHint}>Dieses Gebiet besitzt bereits Provinzen. Wähle eine vorhandene Provinz und teile diese weiter, damit keine Flächen überlappen.</div> : null}
       {mode === "province_to_sibling" ? <>
-        <label className={styles.field}>Neue Provinz<input value={newName} onChange={(event) => setNewName(event.target.value)} placeholder="Name der neuen Provinz"/></label>
-        <label className={styles.field}>Farbe<div className={styles.colorRow}><input type="color" value={newColor} onChange={(event) => setNewColor(event.target.value)}/><span className={styles.colorValue}>{newColor}</span></div></label>
+        <label className={styles.field}>Neue Provinz<input value={newName} disabled={saving} onChange={(event) => setNewName(event.target.value)} placeholder="Name der neuen Provinz"/></label>
+        <label className={styles.field}>Farbe<div className={styles.colorRow}><input type="color" value={newColor} disabled={saving} onChange={(event) => setNewColor(event.target.value)}/><span className={styles.colorValue}>{newColor}</span></div></label>
       </> : <>
-        <label className={styles.field}>Links der Zeichenrichtung<input value={leftName} onChange={(event) => setLeftName(event.target.value)} placeholder="Name der linken Provinz"/></label>
-        <label className={styles.field}>Farbe links<div className={styles.colorRow}><input type="color" value={leftColor} onChange={(event) => setLeftColor(event.target.value)}/><span className={styles.colorValue}>{leftColor}</span></div></label>
-        <label className={styles.field}>Rechts der Zeichenrichtung<input value={rightName} onChange={(event) => setRightName(event.target.value)} placeholder="Name der rechten Provinz"/></label>
-        <label className={styles.field}>Farbe rechts<div className={styles.colorRow}><input type="color" value={rightColor} onChange={(event) => setRightColor(event.target.value)}/><span className={styles.colorValue}>{rightColor}</span></div></label>
+        <label className={styles.field}>Links der Zeichenrichtung<input value={leftName} disabled={saving} onChange={(event) => setLeftName(event.target.value)} placeholder="Name der linken Provinz"/></label>
+        <label className={styles.field}>Farbe links<div className={styles.colorRow}><input type="color" value={leftColor} disabled={saving} onChange={(event) => setLeftColor(event.target.value)}/><span className={styles.colorValue}>{leftColor}</span></div></label>
+        <label className={styles.field}>Rechts der Zeichenrichtung<input value={rightName} disabled={saving} onChange={(event) => setRightName(event.target.value)} placeholder="Name der rechten Provinz"/></label>
+        <label className={styles.field}>Farbe rechts<div className={styles.colorRow}><input type="color" value={rightColor} disabled={saving} onChange={(event) => setRightColor(event.target.value)}/><span className={styles.colorValue}>{rightColor}</span></div></label>
       </>}
       <button type="button" className={`button primary ${styles.primaryAction}`} disabled={!canDraw || drawing || saving} onClick={() => void startDrawing()}>{saving ? "Provinzen werden gespeichert …" : drawing ? "Trennlinie zeichnen …" : "Trennlinie zeichnen"}</button>
       <div className={styles.drawHint}>{drawing ? "Klicke entlang der gewünschten inneren Grenze. Doppelklick beendet die Linie." : "Start und Ende müssen auf oder sehr nah an der Außengrenze liegen. Snapping hilft beim Treffen der vorhandenen Grenze."}</div>
