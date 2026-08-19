@@ -15,15 +15,30 @@ const topologyPeerSchema = z.object({
   geometry: geometrySchema,
 });
 
+type LockRow = { feature_id: string; label: string; metadata: Record<string, unknown> | null };
+function rowLocked(row: LockRow) { return row.metadata?.editorLocked === true; }
+
+export async function assertMapFeatureUnlocked(projectId: number, mapId: number, featureId: number) {
+  const result = await pool.query<LockRow>(
+    `SELECT feature_id,label,metadata
+       FROM map_features
+      WHERE project_id=$1 AND map_id=$2 AND feature_id=$3`,
+    [projectId, mapId, featureId],
+  );
+  if (result.rowCount !== 1) throw new Error("Feature not found in this map.");
+  if (rowLocked(result.rows[0])) throw new Error(`„${result.rows[0].label}“ ist gesperrt. Entsperre das Element zuerst.`);
+}
+
 export async function patchMapFeatureGeometry(projectId: number, mapId: number, featureId: number, geometry: unknown) {
   const parsed = geometrySchema.parse(geometry);
   const result = await pool.query(
     `UPDATE map_features
         SET geometry_type=$4,geometry=$5::jsonb,updated_at=now()
-      WHERE project_id=$1 AND map_id=$2 AND feature_id=$3`,
+      WHERE project_id=$1 AND map_id=$2 AND feature_id=$3
+        AND COALESCE(metadata->>'editorLocked','false') <> 'true'`,
     [projectId, mapId, featureId, parsed.type, JSON.stringify(parsed)],
   );
-  if (result.rowCount !== 1) throw new Error("Feature not found in this map.");
+  if (result.rowCount !== 1) await assertMapFeatureUnlocked(projectId, mapId, featureId);
 }
 
 export async function patchMapFeatureGeometryBatch(
@@ -45,14 +60,16 @@ export async function patchMapFeatureGeometryBatch(
   try {
     await client.query("BEGIN");
     const ids = [featureId, ...uniquePeers.keys()];
-    const existing = await client.query<{ feature_id: string }>(
-      `SELECT feature_id
+    const existing = await client.query<LockRow>(
+      `SELECT feature_id,label,metadata
          FROM map_features
         WHERE project_id=$1 AND map_id=$2 AND feature_id=ANY($3::bigint[])
         FOR UPDATE`,
       [projectId, mapId, ids],
     );
     if (existing.rowCount !== ids.length) throw new Error("One or more topology features no longer exist on this map.");
+    const locked = existing.rows.filter(rowLocked);
+    if (locked.length) throw new Error(`Gesperrte Kartenobjekte verhindern die Grenzänderung: ${locked.map((row) => row.label).join(", ")}.`);
 
     await client.query(
       `UPDATE map_features
