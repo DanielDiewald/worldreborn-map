@@ -1,1 +1,28 @@
-.mobileMenu{display:none;position:relative}.mobilePanel{position:absolute;z-index:120;top:calc(100% + 8px);left:0;width:min(330px,calc(100vw - 28px));max-height:calc(100vh - 88px);overflow:auto;padding:14px;border:1px solid var(--border);border-radius:12px;background:#11151b;box-shadow:0 24px 70px rgba(0,0,0,.55)}.mobileHeading{display:grid;gap:2px;margin-bottom:14px;padding:0 6px 12px;border-bottom:1px solid var(--border-soft)}.mobileHeading strong{font-size:13px}.mobileHeading span{color:var(--muted-2);font-size:10px}.mobilePanel form{margin-top:14px;padding-top:12px;border-top:1px solid var(--border-soft)}.mobilePanel form button{width:100%}@media(max-width:760px){.mobileMenu{display:block}.mobilePanel :global(.admin-nav){gap:14px}.mobilePanel :global(.nav-section-title){display:block;padding-left:8px}.mobilePanel :global(.admin-nav-item){justify-content:flex-start;padding:8px 9px}.mobilePanel :global(.admin-nav-item)>span:not(:global(.soon-dot)){display:inline}.mobilePanel :global(.soon-dot){display:block}.mobilePanel :global(.admin-nav-item.active){box-shadow:inset 2px 0 0 var(--gold)}}
+.mobileMenu{display:none;position:relative}.mobilePanel{position:absolute;z-index:120;top:calc(100% + 8px);left:0;width:min(330px,calc(100vw - 28px));max-height:calc(100vh - 88px);overflow:auto;padding:14px;border:1px solid var(--border);border-radius:12px;background:#11151b;box-shadow:0 24px 70px rgba(0,0,0,.55)}.mobileHeading{display:grid;gap:2px;margin-bottom:14px;padding:0 6px 12px;border-bottom:1px solid var(--border-soft)}.mobileHeading strong{font-size:13px}.mobileHeading span{color:var(--muted-2);font-size:10px}.mobilePanel form{margin-top:14px;padding-top:12px;border-top:1px solid var(--border-soft)}.mobilePanel form button{width:100%}
+
+.immersiveShell{grid-template-columns:72px minmax(0,1fr);height:100vh;overflow:hidden}
+.immersiveShell :global(.admin-sidebar){padding:10px 8px 8px;overflow-y:auto;overflow-x:hidden;background:#0b0e12}
+.immersiveShell :global(.admin-brand){justify-content:center;padding:0 0 10px}
+.immersiveShell :global(.admin-brand)>span:last-child{display:none}
+.immersiveShell :global(.brand-mark){width:40px;height:40px;border-radius:11px}
+.immersiveShell :global(.sidebar-project){display:none}
+.immersiveShell :global(.admin-nav){gap:6px}
+.immersiveShell :global(.nav-section){gap:2px}
+.immersiveShell :global(.nav-section-title){display:none}
+.immersiveShell :global(.admin-nav-item){justify-content:center;min-height:40px;padding:8px;border-radius:10px}
+.immersiveShell :global(.admin-nav-item)>span:not(:global(.soon-dot)){display:none}
+.immersiveShell :global(.admin-nav-item.active){box-shadow:none;background:linear-gradient(145deg,rgba(199,164,93,.22),rgba(199,164,93,.08));outline:1px solid rgba(199,164,93,.22)}
+.immersiveShell :global(.nav-icon){width:19px;height:19px}
+.immersiveShell :global(.soon-dot){display:none}
+.immersiveShell :global(.sidebar-footer){grid-template-columns:1fr;margin-top:10px;padding:10px 0 0}
+.immersiveShell :global(.sidebar-footer)>div,.immersiveShell :global(.sidebar-footer) form{display:none}
+.immersiveShell :global(.sidebar-admin-avatar){margin:auto;width:34px;height:34px}
+.immersiveShell :global(.admin-workspace){height:100vh;min-width:0;overflow:hidden}
+.immersiveShell :global(.admin-topbar){min-height:54px;height:54px;padding:7px 16px;background:rgba(9,12,16,.94);backdrop-filter:blur(18px)}
+.immersiveShell :global(.topbar-eyebrow){font-size:9px}
+.immersiveShell :global(.topbar-context strong){font-size:13px}
+.immersiveShell :global(.project-switcher){min-width:170px}
+.immersiveShell :global(.admin-mode-pill){height:34px}
+.immersiveShell :global(.admin-content){width:100%;max-width:none;height:calc(100vh - 54px);margin:0;padding:0;overflow:hidden}
+
+@media(max-width:760px){.mobileMenu{display:block}.mobilePanel :global(.admin-nav){gap:14px}.mobilePanel :global(.nav-section-title){display:block;padding-left:8px}.mobilePanel :global(.admin-nav-item){justify-content:flex-start;padding:8px 9px}.mobilePanel :global(.admin-nav-item)>span:not(:global(.soon-dot)){display:inline}.mobilePanel :global(.soon-dot){display:block}.mobilePanel :global(.admin-nav-item.active){box-shadow:inset 2px 0 0 var(--gold)}.immersiveShell{display:block;height:auto;overflow:visible}.immersiveShell :global(.admin-sidebar){display:none}.immersiveShell :global(.admin-workspace){height:auto;min-height:100vh;overflow:visible}.immersiveShell :global(.admin-content){height:calc(100dvh - 54px);overflow:hidden}.immersiveShell :global(.project-switcher){display:none}.immersiveShell :global(.admin-mode-pill){display:none}}
