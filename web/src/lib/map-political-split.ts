@@ -105,15 +105,18 @@ export async function splitPoliticalFeatureIntoProvinces(projectId: number, mapI
     const created: Array<{ featureId: number; locationId: number; name: string }> = [];
     if (data.mode === "parent_to_two") {
       if (!["country", "region"].includes(parent.location_kind)) throw new Error("Nur Länder oder Regionen können direkt in zwei Provinzen geteilt werden.");
-      const existingChildren = await client.query(
-        `SELECT 1
+      const existingChildren = await client.query<{ name: string }>(
+        `SELECT name
            FROM locations child
           WHERE child.camp_id=$1 AND child.parent_loc_id=$2 AND child.location_kind='province' AND child.archived_at IS NULL
-            AND child.map_id=$3 AND child.map_feature_id IS NOT NULL
-          LIMIT 1`,
-        [projectId, entityId, mapId],
+          ORDER BY child.name
+          LIMIT 4`,
+        [projectId, entityId],
       );
-      if (existingChildren.rowCount) throw new Error("Dieses Gebiet besitzt bereits gezeichnete Provinzen. Wähle eine bestehende Provinz und teile sie weiter, damit keine Flächen überlappen.");
+      if (existingChildren.rowCount) {
+        const names = existingChildren.rows.map((row) => row.name).join(", ");
+        throw new Error(`Dieses Gebiet besitzt bereits Provinz-Locations${names ? ` (${names})` : ""}. Platziere oder teile diese bestehenden Provinzen, statt neue überlappende Provinzen zu erzeugen.`);
+      }
       for (const part of data.parts) {
         created.push(await createProvince(client, {
           projectId, mapId, layerId, parentLocationId: entityId, parentFeatureId: featureId,
@@ -122,6 +125,18 @@ export async function splitPoliticalFeatureIntoProvinces(projectId: number, mapI
       }
     } else {
       if (parent.location_kind !== "province" || !parent.parent_loc_id) throw new Error("Nur eine bestehende Provinz kann in eine neue Geschwister-Provinz geteilt werden.");
+      const nestedLocations = await client.query<{ name: string }>(
+        `SELECT name
+           FROM locations child
+          WHERE child.camp_id=$1 AND child.parent_loc_id=$2 AND child.archived_at IS NULL
+          ORDER BY child.name
+          LIMIT 5`,
+        [projectId, entityId],
+      );
+      if (nestedLocations.rowCount) {
+        const names = nestedLocations.rows.map((row) => row.name).join(", ");
+        throw new Error(`Diese Provinz enthält bereits Unterorte${names ? ` (${names})` : ""}. Vor dem Teilen müssen diese räumlich einer der neuen Provinzen zugeordnet werden; WorldReborn verschiebt sie nicht automatisch.`);
+      }
       const keep = data.parts[0], sibling = data.parts[1];
       await client.query(
         `UPDATE map_features SET geometry_type=$4,geometry=$5::jsonb,updated_at=now()
