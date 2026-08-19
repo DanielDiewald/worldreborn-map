@@ -5,11 +5,10 @@ const nextConfig: NextConfig = {
   poweredByHeader: false,
   experimental: {
     serverActions: {
-      // Media uploads are validated separately with a 10 MB file limit.
-      // Keep a little multipart/FormData overhead above that limit so the
-      // request reaches the application-level image validation instead of
-      // failing at Next.js' default 1 MB Server Action request limit.
-      bodySizeLimit: "12mb",
+      // WorldReborn accepts media files up to 50 MB by default.
+      // Keep the Server Action request limit slightly higher to allow for
+      // multipart/FormData overhead before application-level validation runs.
+      bodySizeLimit: "55mb",
     },
   },
 };
