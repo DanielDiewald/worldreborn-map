@@ -1,9 +1,21 @@
 import type { WorldMapLayer } from "./map-types";
 import { buildLandMaskGuide, type LandMaskGuide, type MapExtent } from "./map-geometry-guides";
 
+const PRECISION_STORAGE_KEY = "worldreborn:land-mask-precision";
+const ALLOWED_PRECISIONS = new Set([1024, 2048, 4096, 8192]);
+
 function layerUrl(layer: WorldMapLayer) {
   if (layer.source_type === "media" && layer.media_id) return `/api/media/${layer.media_id}`;
   return layer.source_url;
+}
+
+function preferredPrecision(fallback = 4096) {
+  if (typeof window === "undefined") return fallback;
+  try {
+    const saved = Number(window.localStorage.getItem(PRECISION_STORAGE_KEY));
+    if (ALLOWED_PRECISIONS.has(saved)) return saved;
+  } catch { /* browser preference is optional */ }
+  return fallback;
 }
 
 async function blobToImage(blob: Blob): Promise<ImageBitmap | HTMLImageElement> {
@@ -23,7 +35,7 @@ async function blobToImage(blob: Blob): Promise<ImageBitmap | HTMLImageElement> 
   }
 }
 
-export async function loadLandMaskGuide(layer: WorldMapLayer | undefined, extent: MapExtent, maxWidth = 2048): Promise<LandMaskGuide | null> {
+export async function loadLandMaskGuide(layer: WorldMapLayer | undefined, extent: MapExtent, maxWidth?: number): Promise<LandMaskGuide | null> {
   if (!layer) return null;
   const url = layerUrl(layer);
   if (!url) return null;
@@ -36,7 +48,8 @@ export async function loadLandMaskGuide(layer: WorldMapLayer | undefined, extent
   const sourceHeight = image instanceof HTMLImageElement ? image.naturalHeight : image.height;
   if (!sourceWidth || !sourceHeight) throw new Error("Rock-3-Land-Mask hat keine gültigen Bildmaße.");
 
-  const scale = Math.min(1, maxWidth / sourceWidth);
+  const requestedWidth = Math.max(512, Math.min(8192, maxWidth ?? preferredPrecision()));
+  const scale = Math.min(1, requestedWidth / sourceWidth);
   const width = Math.max(2, Math.round(sourceWidth * scale));
   const height = Math.max(2, Math.round(sourceHeight * scale));
   const canvas = document.createElement("canvas");
