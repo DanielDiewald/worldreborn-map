@@ -105,6 +105,15 @@ export async function splitPoliticalFeatureIntoProvinces(projectId: number, mapI
     const created: Array<{ featureId: number; locationId: number; name: string }> = [];
     if (data.mode === "parent_to_two") {
       if (!["country", "region"].includes(parent.location_kind)) throw new Error("Nur Länder oder Regionen können direkt in zwei Provinzen geteilt werden.");
+      const existingChildren = await client.query(
+        `SELECT 1
+           FROM locations child
+          WHERE child.camp_id=$1 AND child.parent_loc_id=$2 AND child.location_kind='province' AND child.archived_at IS NULL
+            AND child.map_id=$3 AND child.map_feature_id IS NOT NULL
+          LIMIT 1`,
+        [projectId, entityId, mapId],
+      );
+      if (existingChildren.rowCount) throw new Error("Dieses Gebiet besitzt bereits gezeichnete Provinzen. Wähle eine bestehende Provinz und teile sie weiter, damit keine Flächen überlappen.");
       for (const part of data.parts) {
         created.push(await createProvince(client, {
           projectId, mapId, layerId, parentLocationId: entityId, parentFeatureId: featureId,
