@@ -99,6 +99,28 @@ function removeCollinear(ring: PixelRing) {
   }
   return closeRing(result.length >= 3 ? result : open);
 }
+function pointSegmentDistance(point: MapCoordinate, start: MapCoordinate, end: MapCoordinate) {
+  const dx = end[0] - start[0], dy = end[1] - start[1], lengthSquared = dx * dx + dy * dy;
+  if (!lengthSquared) return Math.hypot(point[0] - start[0], point[1] - start[1]);
+  const ratio = clamp(((point[0] - start[0]) * dx + (point[1] - start[1]) * dy) / lengthSquared, 0, 1);
+  return Math.hypot(point[0] - (start[0] + dx * ratio), point[1] - (start[1] + dy * ratio));
+}
+function simplifyRasterRing(ring: PixelRing, tolerance = 0.72) {
+  let points = ring.slice(0, -1);
+  if (points.length < 7) return closeRing(points);
+  for (let pass = 0; pass < 5 && points.length > 4; pass += 1) {
+    const next: PixelRing = [];
+    let changed = false;
+    for (let index = 0; index < points.length; index += 1) {
+      const prev = points[(index - 1 + points.length) % points.length], current = points[index], after = points[(index + 1) % points.length];
+      if (points.length - next.length > 3 && pointSegmentDistance(current, prev, after) <= tolerance) { changed = true; continue; }
+      next.push(current);
+    }
+    points = next.length >= 3 ? next : points;
+    if (!changed) break;
+  }
+  return closeRing(points);
+}
 function traceRings(edges: Edge[]) {
   const outgoing = new Map<string, number[]>(); edges.forEach((edge, index) => outgoing.set(key(edge.start), [...(outgoing.get(key(edge.start)) ?? []), index]));
   const used = new Uint8Array(edges.length), rings: PixelRing[] = [];
@@ -112,7 +134,8 @@ function traceRings(edges: Edge[]) {
       const candidates = (outgoing.get(key(edge.end)) ?? []).filter((index) => !used[index]); if (!candidates.length) break;
       candidates.sort((a, b) => turnRank(edge.dir, edges[a].dir) - turnRank(edge.dir, edges[b].dir)); currentIndex = candidates[0];
     }
-    const cleaned = removeCollinear(closeRing(ring)); if (cleaned.length >= 4 && samePoint(cleaned[0], cleaned[cleaned.length - 1])) rings.push(cleaned);
+    const cleaned = simplifyRasterRing(removeCollinear(closeRing(ring)));
+    if (cleaned.length >= 4 && samePoint(cleaned[0], cleaned[cleaned.length - 1])) rings.push(cleaned);
   }
   return rings;
 }
