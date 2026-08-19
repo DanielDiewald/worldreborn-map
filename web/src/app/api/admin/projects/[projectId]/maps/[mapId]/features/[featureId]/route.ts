@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { hasValidAdminSession } from "@/lib/auth/session";
-import { patchMapFeatureGeometry, patchMapFeatureStyle } from "@/lib/map-feature-patches";
+import { patchMapFeatureGeometry, patchMapFeatureGeometryBatch, patchMapFeatureMetadata, patchMapFeatureStyle } from "@/lib/map-feature-patches";
 import { deleteMapFeature, updateMapFeature } from "@/lib/map-features";
 
 function positiveInt(value:string){const parsed=Number.parseInt(value,10);return Number.isSafeInteger(parsed)&&parsed>0?parsed:null;}
@@ -12,7 +12,9 @@ export async function PATCH(request:Request,{params}:{params:Promise<{projectId:
   try{
     const body=await request.json();
     if(body?.patchType==="geometry")await patchMapFeatureGeometry(projectId,mapId,featureId,body.geometry);
+    else if(body?.patchType==="geometry_batch")await patchMapFeatureGeometryBatch(projectId,mapId,featureId,body.geometry,body.peers);
     else if(body?.patchType==="style")await patchMapFeatureStyle(projectId,mapId,featureId,body.style);
+    else if(body?.patchType==="metadata")await patchMapFeatureMetadata(projectId,mapId,featureId,body.metadata);
     else await updateMapFeature(projectId,mapId,featureId,body);
     return NextResponse.json({ok:true});
   }catch(error){return NextResponse.json({error:error instanceof Error?error.message:"Feature could not be updated"},{status:400});}
