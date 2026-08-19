@@ -3,48 +3,214 @@ import "server-only";
 import { z } from "zod";
 import { pool } from "@/lib/db";
 
-const geometrySchema=z.object({type:z.enum(["Point","LineString","Polygon","MultiPoint","MultiLineString","MultiPolygon"]),coordinates:z.unknown()}).passthrough();
-const locationKindSchema=z.enum(["world","continent","country","region","province","city","town","village","district","building","landmark","wilderness","other"]);
+const geometrySchema = z.object({
+  type: z.enum(["Point", "LineString", "Polygon", "MultiPoint", "MultiLineString", "MultiPolygon"]),
+  coordinates: z.unknown(),
+}).passthrough();
+const locationKindSchema = z.enum(["world", "continent", "country", "region", "province", "city", "town", "village", "district", "building", "landmark", "wilderness", "other"]);
 
-const featureInputSchema=z.object({
-  layerId:z.coerce.number().int().positive(),geometry:geometrySchema,
-  entityType:z.string().trim().max(40).nullable().optional(),entityId:z.coerce.number().int().positive().nullable().optional(),
-  label:z.string().trim().min(1).max(200),shortDescription:z.string().trim().max(10000).nullable().optional(),
-  visibilityMode:z.enum(["admin_only","all_players","selected_players"]).default("admin_only"),
-  selectedPlayerIds:z.array(z.coerce.number().int().positive()).default([]),style:z.record(z.string(),z.unknown()).default({}),metadata:z.record(z.string(),z.unknown()).default({}),
-  createLocation:z.object({kind:locationKindSchema,parentLocationId:z.coerce.number().int().positive().nullable().optional(),locationType:z.string().trim().max(80).nullable().optional()}).nullable().optional(),
-}).superRefine((value,ctx)=>{if((value.entityType==null)!=(value.entityId==null))ctx.addIssue({code:"custom",message:"Entity type and ID must be set together."});if(value.createLocation&&value.entityId)ctx.addIssue({code:"custom",message:"Cannot create and link an existing entity at the same time."});});
+const featureInputSchema = z.object({
+  layerId: z.coerce.number().int().positive(),
+  geometry: geometrySchema,
+  entityType: z.string().trim().max(40).nullable().optional(),
+  entityId: z.coerce.number().int().positive().nullable().optional(),
+  label: z.string().trim().min(1).max(200),
+  shortDescription: z.string().trim().max(10000).nullable().optional(),
+  visibilityMode: z.enum(["admin_only", "all_players", "selected_players"]).default("admin_only"),
+  selectedPlayerIds: z.array(z.coerce.number().int().positive()).default([]),
+  style: z.record(z.string(), z.unknown()).default({}),
+  metadata: z.record(z.string(), z.unknown()).default({}),
+  createLocation: z.object({
+    kind: locationKindSchema,
+    parentLocationId: z.coerce.number().int().positive().nullable().optional(),
+    locationType: z.string().trim().max(80).nullable().optional(),
+  }).nullable().optional(),
+}).superRefine((value, ctx) => {
+  if ((value.entityType == null) !== (value.entityId == null)) ctx.addIssue({ code: "custom", message: "Entity type and ID must be set together." });
+  if (value.createLocation && value.entityId) ctx.addIssue({ code: "custom", message: "Cannot create and link an existing entity at the same time." });
+});
 
-const layerInputSchema=z.object({
-  name:z.string().trim().min(1).max(120),layerType:z.enum(["raster","vector"]),sourceType:z.enum(["image","tile","geojson","drawn","media"]),
-  sourceUrl:z.string().trim().max(4000).nullable().optional(),mediaId:z.coerce.number().int().positive().nullable().optional(),layerRole:z.string().trim().max(80).nullable().optional(),
-  opacity:z.coerce.number().min(0).max(1).default(1),zIndex:z.coerce.number().int().min(-100000).max(100000).default(0),visibleByDefault:z.coerce.boolean().default(true),
-  visibilityMode:z.enum(["admin_only","all_players","selected_players"]).default("admin_only"),style:z.record(z.string(),z.unknown()).default({}),config:z.record(z.string(),z.unknown()).default({}),locked:z.coerce.boolean().default(false),
-}).superRefine((value,ctx)=>{if(["image","tile","geojson"].includes(value.sourceType)&&!value.sourceUrl)ctx.addIssue({code:"custom",message:"Source URL is required."});if(value.sourceType==="media"&&!value.mediaId)ctx.addIssue({code:"custom",message:"Media ID is required for media layers."});});
+const layerInputSchema = z.object({
+  name: z.string().trim().min(1).max(120),
+  layerType: z.enum(["raster", "vector"]),
+  sourceType: z.enum(["image", "tile", "geojson", "drawn", "media"]),
+  sourceUrl: z.string().trim().max(4000).nullable().optional(),
+  mediaId: z.coerce.number().int().positive().nullable().optional(),
+  layerRole: z.string().trim().max(80).nullable().optional(),
+  opacity: z.coerce.number().min(0).max(1).default(1),
+  zIndex: z.coerce.number().int().min(-100000).max(100000).default(0),
+  visibleByDefault: z.coerce.boolean().default(true),
+  visibilityMode: z.enum(["admin_only", "all_players", "selected_players"]).default("admin_only"),
+  style: z.record(z.string(), z.unknown()).default({}),
+  config: z.record(z.string(), z.unknown()).default({}),
+  locked: z.coerce.boolean().default(false),
+}).superRefine((value, ctx) => {
+  if (["image", "tile", "geojson"].includes(value.sourceType) && !value.sourceUrl) ctx.addIssue({ code: "custom", message: "Source URL is required." });
+  if (value.sourceType === "media" && !value.mediaId) ctx.addIssue({ code: "custom", message: "Media ID is required for media layers." });
+});
 
-export type ProjectMapLayer={layer_id:string;project_id:number;map_id:string;name:string;layer_type:"raster"|"vector";source_type:"image"|"tile"|"geojson"|"drawn"|"media";source_url:string|null;media_id:string|null;layer_role:string|null;opacity:number;z_index:number;visible_by_default:boolean;visibility_mode:"admin_only"|"all_players"|"selected_players";style:Record<string,unknown>;config:Record<string,unknown>;locked:boolean};
-export type MapFeatureRow={feature_id:string;project_id:number;map_id:string;layer_id:string;geometry_type:string;geometry:{type:string;coordinates:unknown};entity_type:string|null;entity_id:string|null;label:string;short_description:string|null;visibility_mode:string;style:Record<string,unknown>;metadata:Record<string,unknown>};
+export type ProjectMapLayer = {
+  layer_id: string; project_id: number; map_id: string; name: string;
+  layer_type: "raster" | "vector"; source_type: "image" | "tile" | "geojson" | "drawn" | "media";
+  source_url: string | null; media_id: string | null; layer_role: string | null; opacity: number; z_index: number;
+  visible_by_default: boolean; visibility_mode: "admin_only" | "all_players" | "selected_players";
+  style: Record<string, unknown>; config: Record<string, unknown>; locked: boolean;
+};
+export type MapFeatureRow = {
+  feature_id: string; project_id: number; map_id: string; layer_id: string; geometry_type: string;
+  geometry: { type: string; coordinates: unknown }; entity_type: string | null; entity_id: string | null;
+  label: string; short_description: string | null; visibility_mode: string; style: Record<string, unknown>; metadata: Record<string, unknown>;
+};
 
-const layerSelect=`layer_id,project_id,map_id,name,layer_type,source_type,source_url,media_id,layer_role,opacity,z_index,visible_by_default,visibility_mode,style,config,locked`;
-export async function listMapLayers(projectId:number,mapId:number){const result=await pool.query<ProjectMapLayer>(`SELECT ${layerSelect} FROM project_map_layers WHERE project_id=$1 AND map_id=$2 ORDER BY z_index,layer_id`,[projectId,mapId]);return result.rows;}
-export async function listMapFeatures(projectId:number,mapId:number){const result=await pool.query<MapFeatureRow>(`SELECT feature_id,project_id,map_id,layer_id,geometry_type,geometry,entity_type,entity_id,label,short_description,visibility_mode,style,metadata FROM map_features WHERE project_id=$1 AND map_id=$2 ORDER BY feature_id`,[projectId,mapId]);return result.rows;}
+const layerSelect = `layer_id,project_id,map_id,name,layer_type,source_type,source_url,media_id,layer_role,opacity,z_index,visible_by_default,visibility_mode,style,config,locked`;
+export async function listMapLayers(projectId: number, mapId: number) {
+  const result = await pool.query<ProjectMapLayer>(`SELECT ${layerSelect} FROM project_map_layers WHERE project_id=$1 AND map_id=$2 ORDER BY z_index,layer_id`, [projectId, mapId]);
+  return result.rows;
+}
+export async function listMapFeatures(projectId: number, mapId: number) {
+  const result = await pool.query<MapFeatureRow>(`SELECT feature_id,project_id,map_id,layer_id,geometry_type,geometry,entity_type,entity_id,label,short_description,visibility_mode,style,metadata FROM map_features WHERE project_id=$1 AND map_id=$2 ORDER BY feature_id`, [projectId, mapId]);
+  return result.rows;
+}
 
-export async function listVisibleMapLayers(projectId:number,mapId:number,playerId:number){const result=await pool.query<ProjectMapLayer>(`SELECT ${layerSelect.split(",").map(v=>`l.${v}`).join(",")} FROM project_map_layers l WHERE l.project_id=$1 AND l.map_id=$2 AND (l.visibility_mode='all_players' OR (l.visibility_mode='selected_players' AND EXISTS(SELECT 1 FROM map_layer_visibility v WHERE v.layer_id=l.layer_id AND v.player_id=$3 AND v.visible))) ORDER BY l.z_index,l.layer_id`,[projectId,mapId,playerId]);return result.rows;}
-export async function listVisibleMapFeatures(projectId:number,mapId:number,playerId:number){const result=await pool.query<MapFeatureRow>(`SELECT f.feature_id,f.project_id,f.map_id,f.layer_id,f.geometry_type,f.geometry,f.entity_type,f.entity_id,f.label,f.short_description,f.visibility_mode,f.style,f.metadata FROM map_features f JOIN project_map_layers l ON l.layer_id=f.layer_id AND l.project_id=f.project_id AND l.map_id=f.map_id WHERE f.project_id=$1 AND f.map_id=$2 AND (l.visibility_mode='all_players' OR (l.visibility_mode='selected_players' AND EXISTS(SELECT 1 FROM map_layer_visibility lv WHERE lv.layer_id=l.layer_id AND lv.player_id=$3 AND lv.visible))) AND (f.visibility_mode='all_players' OR (f.visibility_mode='selected_players' AND EXISTS(SELECT 1 FROM map_feature_visibility fv WHERE fv.feature_id=f.feature_id AND fv.player_id=$3 AND fv.visible))) ORDER BY f.feature_id`,[projectId,mapId,playerId]);return result.rows;}
+export async function listVisibleMapLayers(projectId: number, mapId: number, playerId: number) {
+  const result = await pool.query<ProjectMapLayer>(`SELECT ${layerSelect.split(",").map((value) => `l.${value}`).join(",")} FROM project_map_layers l WHERE l.project_id=$1 AND l.map_id=$2 AND (l.visibility_mode='all_players' OR (l.visibility_mode='selected_players' AND EXISTS(SELECT 1 FROM map_layer_visibility v WHERE v.layer_id=l.layer_id AND v.player_id=$3 AND v.visible))) ORDER BY l.z_index,l.layer_id`, [projectId, mapId, playerId]);
+  return result.rows;
+}
+export async function listVisibleMapFeatures(projectId: number, mapId: number, playerId: number) {
+  const result = await pool.query<MapFeatureRow>(`SELECT f.feature_id,f.project_id,f.map_id,f.layer_id,f.geometry_type,f.geometry,f.entity_type,f.entity_id,f.label,f.short_description,f.visibility_mode,f.style,f.metadata FROM map_features f JOIN project_map_layers l ON l.layer_id=f.layer_id AND l.project_id=f.project_id AND l.map_id=f.map_id WHERE f.project_id=$1 AND f.map_id=$2 AND (l.visibility_mode='all_players' OR (l.visibility_mode='selected_players' AND EXISTS(SELECT 1 FROM map_layer_visibility lv WHERE lv.layer_id=l.layer_id AND lv.player_id=$3 AND lv.visible))) AND (f.visibility_mode='all_players' OR (f.visibility_mode='selected_players' AND EXISTS(SELECT 1 FROM map_feature_visibility fv WHERE fv.feature_id=f.feature_id AND fv.player_id=$3 AND fv.visible))) ORDER BY f.feature_id`, [projectId, mapId, playerId]);
+  return result.rows;
+}
 
-async function assertParentLocation(client:any,projectId:number,parentLocationId:number|null|undefined){if(!parentLocationId)return;const row=await client.query("SELECT 1 FROM locations WHERE camp_id=$1 AND loc_id=$2 AND archived_at IS NULL",[projectId,parentLocationId]);if(row.rowCount!==1)throw new Error("Parent location does not belong to this project.");}
+async function assertParentLocation(client: any, projectId: number, parentLocationId: number | null | undefined) {
+  if (!parentLocationId) return;
+  const row = await client.query("SELECT 1 FROM locations WHERE camp_id=$1 AND loc_id=$2 AND archived_at IS NULL", [projectId, parentLocationId]);
+  if (row.rowCount !== 1) throw new Error("Parent location does not belong to this project.");
+}
 
-export async function createMapFeature(projectId:number,mapId:number,input:unknown){const data=featureInputSchema.parse(input);const client=await pool.connect();try{await client.query("BEGIN");const layer=await client.query("SELECT 1 FROM project_map_layers WHERE project_id=$1 AND map_id=$2 AND layer_id=$3 AND layer_type='vector' FOR SHARE",[projectId,mapId,data.layerId]);if(layer.rowCount!==1)throw new Error("Vector layer not found in this map.");
-  let entityType=data.entityType??null;let entityId=data.entityId??null;let createdLocationId:number|null=null;
-  if(data.createLocation){await assertParentLocation(client,projectId,data.createLocation.parentLocationId);const location=await client.query<{loc_id:number}>(`INSERT INTO locations(camp_id,name,parent_loc_id,location_type,location_kind,description,visibility_mode,map_id,metadata,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,now()) RETURNING loc_id`,[projectId,data.label,data.createLocation.parentLocationId??null,data.createLocation.locationType??data.createLocation.kind,data.createLocation.kind,data.shortDescription??null,data.visibilityMode,mapId,JSON.stringify({created_from_map_editor:true})]);createdLocationId=location.rows[0].loc_id;entityType="location";entityId=createdLocationId;}
-  const result=await client.query<{feature_id:string}>(`INSERT INTO map_features(project_id,map_id,layer_id,geometry_type,geometry,entity_type,entity_id,label,short_description,visibility_mode,style,metadata) VALUES($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10,$11::jsonb,$12::jsonb) RETURNING feature_id`,[projectId,mapId,data.layerId,data.geometry.type,JSON.stringify(data.geometry),entityType,entityId,data.label,data.shortDescription??null,data.visibilityMode,JSON.stringify(data.style),JSON.stringify(data.metadata)]);const featureId=Number(result.rows[0].feature_id);
-  if(createdLocationId)await client.query("UPDATE locations SET map_feature_id=$3 WHERE camp_id=$1 AND loc_id=$2",[projectId,createdLocationId,featureId]);
-  if(data.visibilityMode==="selected_players"&&data.selectedPlayerIds.length)await client.query(`INSERT INTO map_feature_visibility(feature_id,player_id,visible) SELECT $1,u.user_id,true FROM users u WHERE u.camp_id=$2 AND u.user_id=ANY($3::int[]) ON CONFLICT(feature_id,player_id) DO UPDATE SET visible=true`,[featureId,projectId,data.selectedPlayerIds]);
-  await client.query("COMMIT");return{featureId,locationId:createdLocationId};
- }catch(error){await client.query("ROLLBACK");throw error;}finally{client.release();}}
+async function lockExistingLocationForMap(client: any, projectId: number, entityType: string | null, entityId: number | null) {
+  if (entityType !== "location" || !entityId) return null;
+  const result = await client.query<{ map_id: string | null; map_feature_id: string | null }>(
+    "SELECT map_id,map_feature_id FROM locations WHERE camp_id=$1 AND loc_id=$2 AND archived_at IS NULL FOR UPDATE",
+    [projectId, entityId],
+  );
+  if (result.rowCount !== 1) throw new Error("Location does not belong to this project.");
+  if (result.rows[0].map_feature_id) throw new Error("Diese Location ist bereits auf einer Karte platziert. Öffne ihre bestehende Kartenposition zum Bearbeiten.");
+  return entityId;
+}
 
-export async function updateMapFeature(projectId:number,mapId:number,featureId:number,input:unknown){const data=featureInputSchema.omit({createLocation:true}).parse(input);const client=await pool.connect();try{await client.query("BEGIN");const existing=await client.query("SELECT 1 FROM map_features WHERE project_id=$1 AND map_id=$2 AND feature_id=$3 FOR UPDATE",[projectId,mapId,featureId]);if(existing.rowCount!==1)throw new Error("Feature not found in this map.");const layer=await client.query("SELECT 1 FROM project_map_layers WHERE project_id=$1 AND map_id=$2 AND layer_id=$3 AND layer_type='vector'",[projectId,mapId,data.layerId]);if(layer.rowCount!==1)throw new Error("Vector layer not found in this map.");await client.query(`UPDATE map_features SET layer_id=$4,geometry_type=$5,geometry=$6::jsonb,entity_type=$7,entity_id=$8,label=$9,short_description=$10,visibility_mode=$11,style=$12::jsonb,metadata=$13::jsonb,updated_at=now() WHERE project_id=$1 AND map_id=$2 AND feature_id=$3`,[projectId,mapId,featureId,data.layerId,data.geometry.type,JSON.stringify(data.geometry),data.entityType??null,data.entityId??null,data.label,data.shortDescription??null,data.visibilityMode,JSON.stringify(data.style),JSON.stringify(data.metadata)]);await client.query("DELETE FROM map_feature_visibility WHERE feature_id=$1",[featureId]);if(data.visibilityMode==="selected_players"&&data.selectedPlayerIds.length)await client.query(`INSERT INTO map_feature_visibility(feature_id,player_id,visible) SELECT $1,u.user_id,true FROM users u WHERE u.camp_id=$2 AND u.user_id=ANY($3::int[])`,[featureId,projectId,data.selectedPlayerIds]);await client.query("COMMIT");}catch(error){await client.query("ROLLBACK");throw error;}finally{client.release();}}
+export async function createMapFeature(projectId: number, mapId: number, input: unknown) {
+  const data = featureInputSchema.parse(input);
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const layer = await client.query("SELECT 1 FROM project_map_layers WHERE project_id=$1 AND map_id=$2 AND layer_id=$3 AND layer_type='vector' FOR SHARE", [projectId, mapId, data.layerId]);
+    if (layer.rowCount !== 1) throw new Error("Vector layer not found in this map.");
 
-export async function deleteMapFeature(projectId:number,mapId:number,featureId:number){const result=await pool.query("DELETE FROM map_features WHERE project_id=$1 AND map_id=$2 AND feature_id=$3",[projectId,mapId,featureId]);if(result.rowCount!==1)throw new Error("Feature not found in this map.");}
+    let entityType = data.entityType ?? null;
+    let entityId = data.entityId ?? null;
+    let locationId: number | null = await lockExistingLocationForMap(client, projectId, entityType, entityId);
 
-export async function createMapLayer(projectId:number,mapId:number,input:unknown){const data=layerInputSchema.parse(input);if(data.mediaId){const media=await pool.query("SELECT 1 FROM media WHERE project_id=$1 AND media_id=$2",[projectId,data.mediaId]);if(media.rowCount!==1)throw new Error("Media does not belong to this project.");}const result=await pool.query<{layer_id:string}>(`INSERT INTO project_map_layers(project_id,map_id,name,layer_type,source_type,source_url,media_id,layer_role,opacity,z_index,visible_by_default,visibility_mode,style,config,locked) SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14::jsonb,$15 WHERE EXISTS(SELECT 1 FROM project_maps WHERE project_id=$1 AND map_id=$2) RETURNING layer_id`,[projectId,mapId,data.name,data.layerType,data.sourceType,data.sourceUrl??null,data.mediaId??null,data.layerRole??null,data.opacity,data.zIndex,data.visibleByDefault,data.visibilityMode,JSON.stringify(data.style),JSON.stringify(data.config),data.locked]);if(result.rowCount!==1)throw new Error("Map not found in this project.");return Number(result.rows[0].layer_id);}
+    if (data.createLocation) {
+      await assertParentLocation(client, projectId, data.createLocation.parentLocationId);
+      const location = await client.query<{ loc_id: number }>(
+        `INSERT INTO locations(camp_id,name,parent_loc_id,location_type,location_kind,description,visibility_mode,map_id,metadata,updated_at)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,now()) RETURNING loc_id`,
+        [projectId, data.label, data.createLocation.parentLocationId ?? null, data.createLocation.locationType ?? data.createLocation.kind, data.createLocation.kind, data.shortDescription ?? null, data.visibilityMode, mapId, JSON.stringify({ created_from_map_editor: true })],
+      );
+      locationId = location.rows[0].loc_id;
+      entityType = "location";
+      entityId = locationId;
+    }
+
+    const result = await client.query<{ feature_id: string }>(
+      `INSERT INTO map_features(project_id,map_id,layer_id,geometry_type,geometry,entity_type,entity_id,label,short_description,visibility_mode,style,metadata)
+       VALUES($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10,$11::jsonb,$12::jsonb) RETURNING feature_id`,
+      [projectId, mapId, data.layerId, data.geometry.type, JSON.stringify(data.geometry), entityType, entityId, data.label, data.shortDescription ?? null, data.visibilityMode, JSON.stringify(data.style), JSON.stringify(data.metadata)],
+    );
+    const featureId = Number(result.rows[0].feature_id);
+
+    if (locationId) {
+      await client.query(
+        "UPDATE locations SET map_id=$3,map_feature_id=$4,updated_at=now() WHERE camp_id=$1 AND loc_id=$2",
+        [projectId, locationId, mapId, featureId],
+      );
+    }
+
+    if (data.visibilityMode === "selected_players" && data.selectedPlayerIds.length) {
+      await client.query(
+        `INSERT INTO map_feature_visibility(feature_id,player_id,visible)
+         SELECT $1,u.user_id,true FROM users u WHERE u.camp_id=$2 AND u.user_id=ANY($3::int[])
+         ON CONFLICT(feature_id,player_id) DO UPDATE SET visible=true`,
+        [featureId, projectId, data.selectedPlayerIds],
+      );
+    }
+    await client.query("COMMIT");
+    return { featureId, locationId };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function updateMapFeature(projectId: number, mapId: number, featureId: number, input: unknown) {
+  const data = featureInputSchema.omit({ createLocation: true }).parse(input);
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const existing = await client.query("SELECT 1 FROM map_features WHERE project_id=$1 AND map_id=$2 AND feature_id=$3 FOR UPDATE", [projectId, mapId, featureId]);
+    if (existing.rowCount !== 1) throw new Error("Feature not found in this map.");
+    const layer = await client.query("SELECT 1 FROM project_map_layers WHERE project_id=$1 AND map_id=$2 AND layer_id=$3 AND layer_type='vector'", [projectId, mapId, data.layerId]);
+    if (layer.rowCount !== 1) throw new Error("Vector layer not found in this map.");
+    await client.query(
+      `UPDATE map_features SET layer_id=$4,geometry_type=$5,geometry=$6::jsonb,entity_type=$7,entity_id=$8,label=$9,short_description=$10,visibility_mode=$11,style=$12::jsonb,metadata=$13::jsonb,updated_at=now() WHERE project_id=$1 AND map_id=$2 AND feature_id=$3`,
+      [projectId, mapId, featureId, data.layerId, data.geometry.type, JSON.stringify(data.geometry), data.entityType ?? null, data.entityId ?? null, data.label, data.shortDescription ?? null, data.visibilityMode, JSON.stringify(data.style), JSON.stringify(data.metadata)],
+    );
+    await client.query("DELETE FROM map_feature_visibility WHERE feature_id=$1", [featureId]);
+    if (data.visibilityMode === "selected_players" && data.selectedPlayerIds.length) {
+      await client.query(`INSERT INTO map_feature_visibility(feature_id,player_id,visible) SELECT $1,u.user_id,true FROM users u WHERE u.camp_id=$2 AND u.user_id=ANY($3::int[])`, [featureId, projectId, data.selectedPlayerIds]);
+    }
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function deleteMapFeature(projectId: number, mapId: number, featureId: number) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(
+      "UPDATE locations SET map_id=NULL,map_feature_id=NULL,updated_at=now() WHERE camp_id=$1 AND map_id=$2 AND map_feature_id=$3",
+      [projectId, mapId, featureId],
+    );
+    const result = await client.query("DELETE FROM map_features WHERE project_id=$1 AND map_id=$2 AND feature_id=$3", [projectId, mapId, featureId]);
+    if (result.rowCount !== 1) throw new Error("Feature not found in this map.");
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function createMapLayer(projectId: number, mapId: number, input: unknown) {
+  const data = layerInputSchema.parse(input);
+  if (data.mediaId) {
+    const media = await pool.query("SELECT 1 FROM media WHERE project_id=$1 AND media_id=$2", [projectId, data.mediaId]);
+    if (media.rowCount !== 1) throw new Error("Media does not belong to this project.");
+  }
+  const result = await pool.query<{ layer_id: string }>(
+    `INSERT INTO project_map_layers(project_id,map_id,name,layer_type,source_type,source_url,media_id,layer_role,opacity,z_index,visible_by_default,visibility_mode,style,config,locked)
+     SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14::jsonb,$15
+     WHERE EXISTS(SELECT 1 FROM project_maps WHERE project_id=$1 AND map_id=$2) RETURNING layer_id`,
+    [projectId, mapId, data.name, data.layerType, data.sourceType, data.sourceUrl ?? null, data.mediaId ?? null, data.layerRole ?? null, data.opacity, data.zIndex, data.visibleByDefault, data.visibilityMode, JSON.stringify(data.style), JSON.stringify(data.config), data.locked],
+  );
+  if (result.rowCount !== 1) throw new Error("Map not found in this project.");
+  return Number(result.rows[0].layer_id);
+}
