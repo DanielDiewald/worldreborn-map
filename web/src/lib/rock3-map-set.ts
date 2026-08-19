@@ -2,51 +2,238 @@ import "server-only";
 
 import path from "node:path";
 import { pool } from "@/lib/db";
+import { createProjectMap, deleteProjectMap, setPrimaryMap } from "@/lib/map-management";
 import { saveMediaUpload } from "@/lib/media";
-import { detectRock3Preset,ROCK3_LAYER_PRESETS } from "@/lib/rock3-presets";
-import { extractZipEntry,listZipEntries } from "@/lib/zip-reader";
+import { detectRock3Preset, ROCK3_LAYER_PRESETS, type Rock3LayerPreset } from "@/lib/rock3-presets";
+import { extractZipEntry, listZipEntries, type ZipEntry } from "@/lib/zip-reader";
 
-async function ensureEditorLayers(projectId:number,mapId:number){const defaults=[
-  {name:"Political",role:"political",z:200,opacity:.38,style:{fill:"#7c6ee6",stroke:"#ffffff",strokeWidth:2}},
-  {name:"Settlements",role:"settlements",z:220,opacity:1,style:{fill:"#f0b35a",stroke:"#ffffff",strokeWidth:2}},
-  {name:"Routes & Rivers",role:"routes",z:230,opacity:1,style:{stroke:"#67a9cf",strokeWidth:3}},
-];for(const layer of defaults)await pool.query(`INSERT INTO project_map_layers(project_id,map_id,name,layer_type,source_type,layer_role,opacity,z_index,visible_by_default,visibility_mode,style,config) VALUES($1,$2,$3,'vector','drawn',$4,$5,$6,true,'admin_only',$7::jsonb,'{}'::jsonb) ON CONFLICT(project_id,map_id,name) DO UPDATE SET layer_role=COALESCE(project_map_layers.layer_role,EXCLUDED.layer_role)`,[projectId,mapId,layer.name,layer.role,layer.opacity,layer.z,JSON.stringify(layer.style)]);}
+type Rock3ImportOptions = { setSatelliteAsBase?: boolean };
+type Rock3ArchiveMatch = { entry: ZipEntry; filename: string; preset: Rock3LayerPreset };
 
-async function prepareImport(projectId:number,mapId:number){const map=await pool.query("SELECT 1 FROM project_maps WHERE project_id=$1 AND map_id=$2",[projectId,mapId]);if(map.rowCount!==1)throw new Error("Map not found in this project.");await ensureEditorLayers(projectId,mapId);}
+type ParsedRock3Archive = {
+  zip: Buffer;
+  entries: ZipEntry[];
+  matches: Rock3ArchiveMatch[];
+  missingRoles: string[];
+};
 
-async function importOneRock3File(projectId:number,mapId:number,file:File,options:{setSatelliteAsBase?:boolean}){
-  const preset=detectRock3Preset(file.name);if(!preset)return null;
-  const mediaId=await saveMediaUpload(projectId,file,{title:`Rock 3 · ${preset.name}`,altText:`Rock 3 ${preset.name} map layer`});
-  const media=await pool.query<{width:number|null;height:number|null}>("SELECT NULLIF(metadata->>'width','')::int AS width,NULLIF(metadata->>'height','')::int AS height FROM media WHERE project_id=$1 AND media_id=$2",[projectId,mediaId]);
-  const satelliteBase=preset.role==="satellite"&&options.setSatelliteAsBase!==false;const visible=satelliteBase?false:preset.visible;const visibilityMode=preset.role==="satellite"?"all_players":"admin_only";
-  const row=await pool.query<{layer_id:string}>(`INSERT INTO project_map_layers(project_id,map_id,name,layer_type,source_type,media_id,layer_role,opacity,z_index,visible_by_default,visibility_mode,style,config) VALUES($1,$2,$3,'raster','media',$4,$5,$6,$7,$8,$9,'{}'::jsonb,$10::jsonb) ON CONFLICT(project_id,map_id,name) DO UPDATE SET source_type='media',source_url=NULL,media_id=EXCLUDED.media_id,layer_role=EXCLUDED.layer_role,opacity=EXCLUDED.opacity,z_index=EXCLUDED.z_index,visible_by_default=EXCLUDED.visible_by_default,visibility_mode=EXCLUDED.visibility_mode,config=EXCLUDED.config,updated_at=now() RETURNING layer_id`,[projectId,mapId,preset.name,mediaId,preset.role,preset.opacity,preset.zIndex,visible,visibilityMode,JSON.stringify({category:preset.category,rock3:true,originalFilename:file.name})]);
-  const layerId=Number(row.rows[0].layer_id);
-  if(satelliteBase){const width=media.rows[0]?.width??8192,height=media.rows[0]?.height??4096;await pool.query(`UPDATE project_maps SET map_type='image',image_path=$3,tile_url=NULL,bounds=$4::jsonb,config=COALESCE(config,'{}'::jsonb)||$5::jsonb,updated_at=now() WHERE project_id=$1 AND map_id=$2`,[projectId,mapId,String(mediaId),JSON.stringify([[0,0],[height,width]]),JSON.stringify({width,height,crs:"simple",rock3:true})]);}
-  return{filename:file.name,mediaId,role:preset.role,layerId};
-}
+async function ensureEditorLayers(projectId: number, mapId: number) {
+  const defaults = [
+    { name: "Political", role: "political", z: 200, opacity: 0.38, style: { fill: "#7c6ee6", stroke: "#ffffff", strokeWidth: 2 } },
+    { name: "Settlements", role: "settlements", z: 220, opacity: 1, style: { fill: "#f0b35a", stroke: "#ffffff", strokeWidth: 2 } },
+    { name: "Routes & Rivers", role: "routes", z: 230, opacity: 1, style: { stroke: "#67a9cf", strokeWidth: 3 } },
+  ];
 
-export async function importRock3Files(projectId:number,mapId:number,files:File[],options:{setSatelliteAsBase?:boolean}={}){
-  await prepareImport(projectId,mapId);const imported:Array<{filename:string;mediaId:number;role:string;layerId:number}>=[];const skipped:string[]=[];
-  for(const file of files){if(!(file instanceof File)||file.size===0)continue;const result=await importOneRock3File(projectId,mapId,file,options);if(result)imported.push(result);else skipped.push(file.name);}
-  return{imported,skipped,expectedRoles:ROCK3_LAYER_PRESETS.map(p=>p.role)};
-}
-
-function mimeForFilename(filename:string){const lower=filename.toLowerCase();if(lower.endsWith(".png"))return"image/png";if(lower.endsWith(".webp"))return"image/webp";if(lower.endsWith(".jpg")||lower.endsWith(".jpeg"))return"image/jpeg";return"application/octet-stream";}
-
-export async function importRock3Archive(projectId:number,mapId:number,archive:File,options:{setSatelliteAsBase?:boolean}={}){
-  if(!(archive instanceof File)||archive.size===0)throw new Error("Keine ZIP-Datei ausgewählt.");
-  if(!archive.name.toLowerCase().endsWith(".zip")&&!/zip/i.test(archive.type))throw new Error("Bitte einen Rock-3-Export als ZIP-Datei hochladen.");
-  await prepareImport(projectId,mapId);
-  const zip=Buffer.from(await archive.arrayBuffer()),entries=listZipEntries(zip);
-  const imported:Array<{filename:string;mediaId:number;role:string;layerId:number}>=[],skipped:string[]=[];
-  for(const entry of entries){
-    if(entry.directory)continue;
-    const filename=path.posix.basename(entry.name.replace(/\\/g,"/"));
-    if(!filename||filename.startsWith("."))continue;
-    const preset=detectRock3Preset(filename);if(!preset){skipped.push(entry.name);continue;}
-    const data=extractZipEntry(zip,entry);const file=new File([new Uint8Array(data)],filename,{type:mimeForFilename(filename)});
-    const result=await importOneRock3File(projectId,mapId,file,options);if(result)imported.push(result);
+  for (const layer of defaults) {
+    await pool.query(
+      `INSERT INTO project_map_layers(project_id,map_id,name,layer_type,source_type,layer_role,opacity,z_index,visible_by_default,visibility_mode,style,config)
+       VALUES($1,$2,$3,'vector','drawn',$4,$5,$6,true,'admin_only',$7::jsonb,'{}'::jsonb)
+       ON CONFLICT(project_id,map_id,name)
+       DO UPDATE SET layer_role=COALESCE(project_map_layers.layer_role,EXCLUDED.layer_role)`,
+      [projectId, mapId, layer.name, layer.role, layer.opacity, layer.z, JSON.stringify(layer.style)],
+    );
   }
-  if(!imported.length)throw new Error("In der ZIP-Datei wurden keine unterstützten Rock-3-Karten erkannt.");
-  return{archiveName:archive.name,archiveEntries:entries.filter(entry=>!entry.directory).length,imported,skipped,expectedRoles:ROCK3_LAYER_PRESETS.map(p=>p.role)};
+}
+
+async function prepareImport(projectId: number, mapId: number) {
+  const map = await pool.query("SELECT 1 FROM project_maps WHERE project_id=$1 AND map_id=$2", [projectId, mapId]);
+  if (map.rowCount !== 1) throw new Error("Map not found in this project.");
+  await ensureEditorLayers(projectId, mapId);
+}
+
+function mimeForFilename(filename: string) {
+  const lower = filename.toLowerCase();
+  if (lower.endsWith(".png")) return "image/png";
+  if (lower.endsWith(".webp")) return "image/webp";
+  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
+  return "application/octet-stream";
+}
+
+async function parseRock3Archive(archive: File): Promise<ParsedRock3Archive> {
+  if (!(archive instanceof File) || archive.size === 0) throw new Error("Keine ZIP-Datei ausgewählt.");
+  if (!archive.name.toLowerCase().endsWith(".zip") && !/zip/i.test(archive.type)) {
+    throw new Error("Bitte einen Rock-3-Export als ZIP-Datei hochladen.");
+  }
+
+  const zip = Buffer.from(await archive.arrayBuffer());
+  const entries = listZipEntries(zip);
+  const matches: Rock3ArchiveMatch[] = [];
+
+  for (const entry of entries) {
+    if (entry.directory) continue;
+    const filename = path.posix.basename(entry.name.replace(/\\/g, "/"));
+    if (!filename || filename.startsWith(".")) continue;
+    const preset = detectRock3Preset(filename);
+    if (preset) matches.push({ entry, filename, preset });
+  }
+
+  if (!matches.length) throw new Error("In der ZIP-Datei wurden keine unterstützten Rock-3-Karten erkannt.");
+
+  const roles = new Set(matches.map((match) => match.preset.role));
+  return {
+    zip,
+    entries,
+    matches,
+    missingRoles: ROCK3_LAYER_PRESETS.filter((preset) => !roles.has(preset.role)).map((preset) => preset.role),
+  };
+}
+
+async function importOneRock3File(projectId: number, mapId: number, file: File, options: Rock3ImportOptions) {
+  const preset = detectRock3Preset(file.name);
+  if (!preset) return null;
+
+  const mediaId = await saveMediaUpload(projectId, file, {
+    title: `Rock 3 · ${preset.name}`,
+    altText: `Rock 3 ${preset.name} map layer`,
+  });
+
+  const media = await pool.query<{ width: number | null; height: number | null }>(
+    "SELECT NULLIF(metadata->>'width','')::int AS width,NULLIF(metadata->>'height','')::int AS height FROM media WHERE project_id=$1 AND media_id=$2",
+    [projectId, mediaId],
+  );
+
+  const satelliteBase = preset.role === "satellite" && options.setSatelliteAsBase !== false;
+  const visible = satelliteBase ? false : preset.visible;
+  const visibilityMode = preset.role === "satellite" ? "all_players" : "admin_only";
+  const row = await pool.query<{ layer_id: string }>(
+    `INSERT INTO project_map_layers(project_id,map_id,name,layer_type,source_type,media_id,layer_role,opacity,z_index,visible_by_default,visibility_mode,style,config)
+     VALUES($1,$2,$3,'raster','media',$4,$5,$6,$7,$8,$9,'{}'::jsonb,$10::jsonb)
+     ON CONFLICT(project_id,map_id,name)
+     DO UPDATE SET source_type='media',source_url=NULL,media_id=EXCLUDED.media_id,layer_role=EXCLUDED.layer_role,
+       opacity=EXCLUDED.opacity,z_index=EXCLUDED.z_index,visible_by_default=EXCLUDED.visible_by_default,
+       visibility_mode=EXCLUDED.visibility_mode,config=EXCLUDED.config,updated_at=now()
+     RETURNING layer_id`,
+    [
+      projectId,
+      mapId,
+      preset.name,
+      mediaId,
+      preset.role,
+      preset.opacity,
+      preset.zIndex,
+      visible,
+      visibilityMode,
+      JSON.stringify({ category: preset.category, rock3: true, originalFilename: file.name }),
+    ],
+  );
+
+  const layerId = Number(row.rows[0].layer_id);
+  if (satelliteBase) {
+    const width = media.rows[0]?.width ?? 8192;
+    const height = media.rows[0]?.height ?? 4096;
+    await pool.query(
+      `UPDATE project_maps
+          SET map_type='image',image_path=$3,tile_url=NULL,bounds=$4::jsonb,
+              config=COALESCE(config,'{}'::jsonb)||$5::jsonb,updated_at=now()
+        WHERE project_id=$1 AND map_id=$2`,
+      [
+        projectId,
+        mapId,
+        String(mediaId),
+        JSON.stringify([[0, 0], [height, width]]),
+        JSON.stringify({ width, height, crs: "simple", rock3: true }),
+      ],
+    );
+  }
+
+  return { filename: file.name, mediaId, role: preset.role, layerId };
+}
+
+async function importParsedRock3Archive(
+  projectId: number,
+  mapId: number,
+  archiveName: string,
+  parsed: ParsedRock3Archive,
+  options: Rock3ImportOptions,
+) {
+  await prepareImport(projectId, mapId);
+  const imported: Array<{ filename: string; mediaId: number; role: string; layerId: number }> = [];
+  const matchedEntryNames = new Set(parsed.matches.map((match) => match.entry.name));
+  const skipped = parsed.entries
+    .filter((entry) => !entry.directory && !matchedEntryNames.has(entry.name))
+    .map((entry) => entry.name);
+
+  // Satellite first, so a newly created world map gets its real dimensions/base immediately.
+  const ordered = [...parsed.matches].sort((a, b) => Number(b.preset.role === "satellite") - Number(a.preset.role === "satellite"));
+  for (const match of ordered) {
+    const data = extractZipEntry(parsed.zip, match.entry);
+    const file = new File([new Uint8Array(data)], match.filename, { type: mimeForFilename(match.filename) });
+    const result = await importOneRock3File(projectId, mapId, file, options);
+    if (result) imported.push(result);
+  }
+
+  return {
+    archiveName,
+    archiveEntries: parsed.entries.filter((entry) => !entry.directory).length,
+    imported,
+    skipped,
+    missingRoles: parsed.missingRoles,
+    expectedRoles: ROCK3_LAYER_PRESETS.map((preset) => preset.role),
+  };
+}
+
+export async function importRock3Files(projectId: number, mapId: number, files: File[], options: Rock3ImportOptions = {}) {
+  await prepareImport(projectId, mapId);
+  const imported: Array<{ filename: string; mediaId: number; role: string; layerId: number }> = [];
+  const skipped: string[] = [];
+
+  for (const file of files) {
+    if (!(file instanceof File) || file.size === 0) continue;
+    const result = await importOneRock3File(projectId, mapId, file, options);
+    if (result) imported.push(result);
+    else skipped.push(file.name);
+  }
+
+  return { imported, skipped, expectedRoles: ROCK3_LAYER_PRESETS.map((preset) => preset.role) };
+}
+
+export async function importRock3Archive(projectId: number, mapId: number, archive: File, options: Rock3ImportOptions = {}) {
+  const parsed = await parseRock3Archive(archive);
+  return importParsedRock3Archive(projectId, mapId, archive.name, parsed, options);
+}
+
+export async function createRock3MapFromArchive(
+  projectId: number,
+  archive: File,
+  input: { name: string; isPrimary?: boolean },
+) {
+  const name = input.name.trim();
+  if (!name || name.length > 120) throw new Error("Bitte einen Kartennamen mit maximal 120 Zeichen eingeben.");
+
+  const parsed = await parseRock3Archive(archive);
+  if (!parsed.matches.some((match) => match.preset.role === "satellite")) {
+    throw new Error("Die ZIP enthält keine „Satellite Color“-Karte. Diese wird zum Erstellen einer Weltkarte benötigt.");
+  }
+
+  const mapId = await createProjectMap(projectId, {
+    mapType: "image",
+    name,
+    imagePath: "pending-rock3-import",
+    minZoom: -2,
+    maxZoom: 5,
+    width: 8192,
+    height: 4096,
+    isPrimary: false,
+  });
+
+  try {
+    const result = await importParsedRock3Archive(projectId, mapId, archive.name, parsed, { setSatelliteAsBase: true });
+    const primary = await pool.query("SELECT 1 FROM project_maps WHERE project_id=$1 AND is_primary LIMIT 1", [projectId]);
+    const becamePrimary = Boolean(input.isPrimary) || primary.rowCount === 0;
+    if (becamePrimary) await setPrimaryMap(projectId, mapId);
+
+    return {
+      mapId,
+      name,
+      becamePrimary,
+      ...result,
+    };
+  } catch (error) {
+    try {
+      await deleteProjectMap(projectId, mapId);
+    } catch {
+      // Preserve the original import error. The temporary map is non-primary and has no markers.
+    }
+    throw error;
+  }
 }
