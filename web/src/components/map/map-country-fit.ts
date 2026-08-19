@@ -180,9 +180,13 @@ export function fitCountryAroundExistingCountries(subject: JsonMapGeometry, bloc
     const extent = geometryExtent(geometry);
     return Boolean(extent && extentIntersects(subjectExtent, extent));
   });
-  if (!validBlockers.length) return { geometry: subject, keptPixels: 0, removedPixels: 0, grid: { width: 0, height: 0 } };
   const grid = createGrid(subject, maxSide); if (!grid) return null;
   const subjectMask = rasterize(pixelPolygons(subject, grid), grid.width, grid.height);
+  if (!validBlockers.length) {
+    let keptPixels = 0;
+    for (const value of subjectMask) if (value) keptPixels += 1;
+    return { geometry: subject, keptPixels, removedPixels: 0, grid: { width: grid.width, height: grid.height } };
+  }
   const blockerMask = new Uint8Array(grid.width * grid.height);
   for (const blocker of validBlockers) {
     const mask = rasterize(pixelPolygons(blocker, grid), grid.width, grid.height);
