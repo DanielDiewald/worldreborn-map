@@ -7,78 +7,462 @@ import type { MapSearchItem, WorldMapConfig, WorldMapFeature, WorldMapLayer } fr
 import { locationKindLabel } from "@/lib/location-presentation";
 import type { LocationKind } from "@/lib/entities/locations";
 
-type ToolId="country"|"province"|"region"|"city"|"place"|"river"|"road";
-type DrawMode="Point"|"LineString"|"Polygon";
-type HistoryEntry={featureId:number;before:{type:string;coordinates:unknown};after:{type:string;coordinates:unknown};label:string};
+type ToolId = "country" | "province" | "region" | "city" | "place" | "river" | "road";
+type DrawMode = "Point" | "LineString" | "Polygon";
+type ExistingLocation = { id: number; name: string; kind: LocationKind };
+type HistoryEntry = { featureId: number; before: { type: string; coordinates: unknown }; after: { type: string; coordinates: unknown }; label: string };
 
-const TOOLS:Record<ToolId,{label:string;description:string;mode:DrawMode;role:string;kind:LocationKind|null;color:string}>={
-  country:{label:"Land",description:"Politische Landesgrenze",mode:"Polygon",role:"political",kind:"country",color:"#7c6ee6"},
-  province:{label:"Provinz",description:"Teilgebiet eines Landes",mode:"Polygon",role:"political",kind:"province",color:"#9a8be8"},
-  region:{label:"Region",description:"Geografisches oder politisches Gebiet",mode:"Polygon",role:"political",kind:"region",color:"#8e80d8"},
-  city:{label:"Stadt",description:"Siedlung als Kartenpunkt",mode:"Point",role:"settlements",kind:"city",color:"#f0b35a"},
-  place:{label:"Ort",description:"Gebäude, Landmarke oder besonderer Ort",mode:"Point",role:"settlements",kind:"landmark",color:"#d9b66f"},
-  river:{label:"Fluss",description:"Flusslauf als Linie",mode:"LineString",role:"routes",kind:null,color:"#67a9cf"},
-  road:{label:"Straße",description:"Straße oder Route als Linie",mode:"LineString",role:"routes",kind:null,color:"#c79a63"},
+const TOOLS: Record<ToolId, { label: string; description: string; mode: DrawMode; role: string; kind: LocationKind | null; color: string }> = {
+  country: { label: "Land", description: "Politische Landesgrenze", mode: "Polygon", role: "political", kind: "country", color: "#7c6ee6" },
+  province: { label: "Provinz", description: "Teilgebiet eines Landes", mode: "Polygon", role: "political", kind: "province", color: "#9a8be8" },
+  region: { label: "Region", description: "Geografisches oder politisches Gebiet", mode: "Polygon", role: "political", kind: "region", color: "#8e80d8" },
+  city: { label: "Stadt", description: "Siedlung als Kartenpunkt", mode: "Point", role: "settlements", kind: "city", color: "#f0b35a" },
+  place: { label: "Ort", description: "Gebäude, Landmarke oder besonderer Ort", mode: "Point", role: "settlements", kind: "landmark", color: "#d9b66f" },
+  river: { label: "Fluss", description: "Flusslauf als Linie", mode: "LineString", role: "routes", kind: null, color: "#67a9cf" },
+  road: { label: "Straße", description: "Straße oder Route als Linie", mode: "LineString", role: "routes", kind: null, color: "#c79a63" },
 };
 
-function toolFromString(value:string|null|undefined):ToolId|null{return value&&value in TOOLS?value as ToolId:null;}
-function geometryLabel(type:string){return type.includes("Polygon")?"Fläche":type.includes("Line")?"Linie":"Punkt";}
+function toolFromString(value: string | null | undefined): ToolId | null {
+  return value && value in TOOLS ? value as ToolId : null;
+}
+function toolForLocationKind(kind: LocationKind): ToolId {
+  if (kind === "country") return "country";
+  if (kind === "province") return "province";
+  if (kind === "region") return "region";
+  if (["city", "town", "village"].includes(kind)) return "city";
+  return "place";
+}
+function geometryLabel(type: string) {
+  return type.includes("Polygon") ? "Fläche" : type.includes("Line") ? "Linie" : "Punkt";
+}
 
-export function MapEditor({projectId,mapConfig,layers,features,initialTool,focusFeatureId}:{projectId:number;mapConfig:WorldMapConfig;layers:WorldMapLayer[];features:WorldMapFeature[];initialTool?:string|null;focusFeatureId?:number|null}){
-  const targetRef=useRef<HTMLDivElement>(null),mapRef=useRef<any>(null),drawRef=useRef<any>(null),selectRef=useRef<any>(null),modifyRef=useRef<any>(null);
-  const sourceRefs=useRef(new Map<number,any>()),layerRefs=useRef(new Map<number,any>()),featureRefs=useRef(new Map<number,any>()),rowRefs=useRef(new Map<number,WorldMapFeature>());
-  const beforeGeometry=useRef(new Map<number,{type:string;coordinates:unknown}>()),saveTimers=useRef(new Map<number,ReturnType<typeof setTimeout>>());
-  const vectorLayers=useMemo(()=>layers.filter(layer=>layer.layer_type==="vector"),[layers]);const rasterLayers=useMemo(()=>layers.filter(layer=>layer.layer_type==="raster"),[layers]);
-  const [tool,setTool]=useState<ToolId|null>(()=>toolFromString(initialTool));const [name,setName]=useState("");const [color,setColor]=useState(()=>toolFromString(initialTool)?TOOLS[toolFromString(initialTool)!].color:"#7c6ee6");
-  const [parentId,setParentId]=useState<number|null>(null),[drawing,setDrawing]=useState(false),[selectedId,setSelectedId]=useState<number|null>(focusFeatureId??null),[status,setStatus]=useState(""),[error,setError]=useState("");
-  const [saveState,setSaveState]=useState<"idle"|"saving"|"saved">("idle"),[query,setQuery]=useState(""),[searchResults,setSearchResults]=useState<MapSearchItem[]>([]),[searching,setSearching]=useState(false);
-  const [undoStack,setUndoStack]=useState<HistoryEntry[]>([]),[redoStack,setRedoStack]=useState<HistoryEntry[]>([]),[activeView,setActiveView]=useState("default");
-  const activeTool=tool?TOOLS[tool]:null;const selectedRow=selectedId?rowRefs.current.get(selectedId)??null:null;
+export function MapEditor({
+  projectId,
+  mapConfig,
+  layers,
+  features,
+  initialTool,
+  focusFeatureId,
+  existingLocation = null,
+}: {
+  projectId: number;
+  mapConfig: WorldMapConfig;
+  layers: WorldMapLayer[];
+  features: WorldMapFeature[];
+  initialTool?: string | null;
+  focusFeatureId?: number | null;
+  existingLocation?: ExistingLocation | null;
+}) {
+  const targetRef = useRef<HTMLDivElement>(null);
+  const mapRef = useRef<any>(null);
+  const drawRef = useRef<any>(null);
+  const selectRef = useRef<any>(null);
+  const modifyRef = useRef<any>(null);
+  const sourceRefs = useRef(new Map<number, any>());
+  const layerRefs = useRef(new Map<number, any>());
+  const featureRefs = useRef(new Map<number, any>());
+  const rowRefs = useRef(new Map<number, WorldMapFeature>());
+  const beforeGeometry = useRef(new Map<number, { type: string; coordinates: unknown }>());
+  const saveTimers = useRef(new Map<number, ReturnType<typeof setTimeout>>());
 
-  function chooseTool(next:ToolId){setTool(next);setColor(TOOLS[next].color);setParentId(null);setDrawing(false);setError("");setStatus(`${TOOLS[next].label} gewählt. Namen eingeben und Zeichnen starten.`);}
-  function layerForRole(role:string){return vectorLayers.find(layer=>layer.layer_role===role)??vectorLayers[0]??null;}
-  function scheduleLayerPatch(id:number,patch:Record<string,unknown>){const previous=saveTimers.current.get(id);if(previous)clearTimeout(previous);saveTimers.current.set(id,setTimeout(async()=>{const response=await fetch(`/api/admin/projects/${projectId}/maps/${mapConfig.mapId}/layers/${id}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(patch)});if(!response.ok){const body=await response.json().catch(()=>({}));setError(body.error||"Kartenebene konnte nicht gespeichert werden.");}},280));}
-  async function patchGeometry(featureId:number,geometry:{type:string;coordinates:unknown}){setSaveState("saving");const response=await fetch(`/api/admin/projects/${projectId}/maps/${mapConfig.mapId}/features/${featureId}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({patchType:"geometry",geometry})});const body=await response.json().catch(()=>({}));if(!response.ok)throw new Error(body.error||"Grenze konnte nicht gespeichert werden.");const row=rowRefs.current.get(featureId);if(row)row.geometry=geometry;setSaveState("saved");window.setTimeout(()=>setSaveState("idle"),1200);}
-  async function patchStyle(featureId:number,style:Record<string,unknown>){setSaveState("saving");const response=await fetch(`/api/admin/projects/${projectId}/maps/${mapConfig.mapId}/features/${featureId}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({patchType:"style",style})});const body=await response.json().catch(()=>({}));if(!response.ok)throw new Error(body.error||"Darstellung konnte nicht gespeichert werden.");const row=rowRefs.current.get(featureId);if(row)row.style={...row.style,...style};setSaveState("saved");window.setTimeout(()=>setSaveState("idle"),1200);}
-  function focusFeature(id:number){const feature=featureRefs.current.get(id),map=mapRef.current;if(!feature||!map)return false;const extent=feature.getGeometry()?.getExtent();if(extent)map.getView().fit(extent,{padding:[80,80,80,80],maxZoom:Math.min(mapConfig.maxZoom,5),duration:250});selectRef.current?.getFeatures().clear();selectRef.current?.getFeatures().push(feature);setSelectedId(id);return true;}
+  const vectorLayers = useMemo(() => layers.filter((layer) => layer.layer_type === "vector"), [layers]);
+  const rasterLayers = useMemo(() => layers.filter((layer) => layer.layer_type === "raster"), [layers]);
+  const firstTool = existingLocation ? toolForLocationKind(existingLocation.kind) : toolFromString(initialTool);
 
-  useEffect(()=>{let active=true;ensureOpenLayers().then(ol=>{if(!active||!targetRef.current)return;sourceRefs.current.clear();layerRefs.current.clear();featureRefs.current.clear();rowRefs.current.clear();
-    const simple=mapConfig.mapType==="image",bounds=parseMapBounds(mapConfig.bounds)??[[0,0],[4096,8192]],extent=[bounds[0][1],bounds[0][0],bounds[1][1],bounds[1][0]],projection=simple?new ol.proj.Projection({code:`WORLDREBORN:EDIT:${mapConfig.mapId}`,units:"pixels",extent}):undefined,mapLayers:any[]=[];
-    if(simple&&mapConfig.imagePath){const url=mediaMapUrl(mapConfig.imagePath);if(url)mapLayers.push(new ol.layer.Image({zIndex:-1000,source:new ol.source.ImageStatic({url,projection,imageExtent:extent})}));}else if(mapConfig.tileUrl)mapLayers.push(new ol.layer.Tile({zIndex:-1000,source:new ol.source.XYZ({url:mapConfig.tileUrl,wrapX:false,minZoom:mapConfig.minZoom,maxZoom:mapConfig.maxZoom})}));
-    for(const layer of rasterLayers){const id=Number(layer.layer_id),isBase=layer.layer_role==="satellite"&&layer.media_id!=null&&String(layer.media_id)===String(mapConfig.imagePath);if(isBase)continue;const url=layer.source_type==="media"&&layer.media_id?`/api/media/${layer.media_id}`:layer.source_url;if(!url)continue;let rendered:any=null;if(simple&&(layer.source_type==="media"||layer.source_type==="image"))rendered=new ol.layer.Image({opacity:layer.opacity,zIndex:layer.z_index,visible:layer.visible_by_default,source:new ol.source.ImageStatic({url,projection,imageExtent:extent})});else if(layer.source_type==="tile")rendered=new ol.layer.Tile({opacity:layer.opacity,zIndex:layer.z_index,visible:layer.visible_by_default,source:new ol.source.XYZ({url,wrapX:false})});if(rendered){rendered.set("worldrebornLayerId",id);layerRefs.current.set(id,rendered);mapLayers.push(rendered);}}
-    const geojson=new ol.format.GeoJSON();for(const layer of vectorLayers){const id=Number(layer.layer_id),source=new ol.source.Vector();sourceRefs.current.set(id,source);const baseFill=mapColor(layer.style?.fill,"#7c6ee6"),baseStroke=mapColor(layer.style?.stroke,"#f5f5f5"),baseWidth=Number(layer.style?.strokeWidth??2);const rendered=new ol.layer.Vector({source,zIndex:layer.z_index||500,visible:layer.visible_by_default,opacity:layer.opacity,style:(feature:any)=>{const row=rowRefs.current.get(Number(feature.get("featureId"))),type=feature.getGeometry()?.getType(),fill=mapColor(row?.style?.fill,baseFill),stroke=mapColor(row?.style?.stroke,baseStroke);return new ol.style.Style({fill:type?.includes("Polygon")?new ol.style.Fill({color:colorWithAlpha(fill,.3)}):undefined,stroke:new ol.style.Stroke({color:stroke,width:Number(row?.style?.strokeWidth??baseWidth)}),image:new ol.style.Circle({radius:7,fill:new ol.style.Fill({color:fill}),stroke:new ol.style.Stroke({color:stroke,width:2})}),text:feature.get("label")?new ol.style.Text({text:String(feature.get("label")),offsetY:-13,fill:new ol.style.Fill({color:"#fff"}),stroke:new ol.style.Stroke({color:"#111",width:3})}):undefined});}});rendered.set("worldrebornLayerId",id);layerRefs.current.set(id,rendered);mapLayers.push(rendered);
-      for(const row of features.filter(item=>Number(item.layer_id)===id)){try{const featureId=Number(row.feature_id),feature=geojson.readFeature({type:"Feature",geometry:row.geometry,properties:{featureId,label:row.label}});source.addFeature(feature);featureRefs.current.set(featureId,feature);rowRefs.current.set(featureId,{...row});}catch{/* malformed legacy geometry remains isolated */}}
+  const [tool, setTool] = useState<ToolId | null>(firstTool);
+  const [name, setName] = useState(existingLocation?.name ?? "");
+  const [color, setColor] = useState(firstTool ? TOOLS[firstTool].color : "#7c6ee6");
+  const [parentId, setParentId] = useState<number | null>(null);
+  const [drawing, setDrawing] = useState(false);
+  const [selectedId, setSelectedId] = useState<number | null>(focusFeatureId ?? null);
+  const [status, setStatus] = useState(existingLocation ? `${locationKindLabel(existingLocation.kind)} „${existingLocation.name}“ kann jetzt auf dieser Karte platziert werden.` : "");
+  const [error, setError] = useState("");
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
+  const [query, setQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<MapSearchItem[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [undoStack, setUndoStack] = useState<HistoryEntry[]>([]);
+  const [redoStack, setRedoStack] = useState<HistoryEntry[]>([]);
+  const [activeView, setActiveView] = useState("default");
+
+  const activeTool = tool ? TOOLS[tool] : null;
+  const selectedRow = selectedId ? rowRefs.current.get(selectedId) ?? null : null;
+
+  function chooseTool(next: ToolId) {
+    if (existingLocation) return;
+    setTool(next);
+    setColor(TOOLS[next].color);
+    setParentId(null);
+    setDrawing(false);
+    setError("");
+    setStatus(`${TOOLS[next].label} gewählt. Namen eingeben und Zeichnen starten.`);
+  }
+
+  function layerForRole(role: string) {
+    return vectorLayers.find((layer) => layer.layer_role === role) ?? vectorLayers[0] ?? null;
+  }
+
+  function scheduleLayerPatch(id: number, patch: Record<string, unknown>) {
+    const previous = saveTimers.current.get(id);
+    if (previous) clearTimeout(previous);
+    saveTimers.current.set(id, setTimeout(async () => {
+      const response = await fetch(`/api/admin/projects/${projectId}/maps/${mapConfig.mapId}/layers/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        setError(body.error || "Kartenebene konnte nicht gespeichert werden.");
+      }
+    }, 280));
+  }
+
+  async function patchGeometry(featureId: number, geometry: { type: string; coordinates: unknown }) {
+    setSaveState("saving");
+    const response = await fetch(`/api/admin/projects/${projectId}/maps/${mapConfig.mapId}/features/${featureId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ patchType: "geometry", geometry }),
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(body.error || "Grenze konnte nicht gespeichert werden.");
+    const row = rowRefs.current.get(featureId);
+    if (row) row.geometry = geometry;
+    setSaveState("saved");
+    window.setTimeout(() => setSaveState("idle"), 1200);
+  }
+
+  async function patchStyle(featureId: number, style: Record<string, unknown>) {
+    setSaveState("saving");
+    const response = await fetch(`/api/admin/projects/${projectId}/maps/${mapConfig.mapId}/features/${featureId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ patchType: "style", style }),
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(body.error || "Darstellung konnte nicht gespeichert werden.");
+    const row = rowRefs.current.get(featureId);
+    if (row) row.style = { ...row.style, ...style };
+    setSaveState("saved");
+    window.setTimeout(() => setSaveState("idle"), 1200);
+  }
+
+  function focusFeature(id: number) {
+    const feature = featureRefs.current.get(id);
+    const map = mapRef.current;
+    if (!feature || !map) return false;
+    const extent = feature.getGeometry()?.getExtent();
+    if (extent) map.getView().fit(extent, { padding: [80, 80, 80, 80], maxZoom: Math.min(mapConfig.maxZoom, 5), duration: 250 });
+    selectRef.current?.getFeatures().clear();
+    selectRef.current?.getFeatures().push(feature);
+    setSelectedId(id);
+    return true;
+  }
+
+  useEffect(() => {
+    let active = true;
+    ensureOpenLayers().then((ol) => {
+      if (!active || !targetRef.current) return;
+      sourceRefs.current.clear();
+      layerRefs.current.clear();
+      featureRefs.current.clear();
+      rowRefs.current.clear();
+
+      const simple = mapConfig.mapType === "image";
+      const bounds = parseMapBounds(mapConfig.bounds) ?? [[0, 0], [4096, 8192]];
+      const extent = [bounds[0][1], bounds[0][0], bounds[1][1], bounds[1][0]];
+      const projection = simple ? new ol.proj.Projection({ code: `WORLDREBORN:EDIT:${mapConfig.mapId}`, units: "pixels", extent }) : undefined;
+      const mapLayers: any[] = [];
+
+      if (simple && mapConfig.imagePath) {
+        const url = mediaMapUrl(mapConfig.imagePath);
+        if (url) mapLayers.push(new ol.layer.Image({ zIndex: -1000, source: new ol.source.ImageStatic({ url, projection, imageExtent: extent }) }));
+      } else if (mapConfig.tileUrl) {
+        mapLayers.push(new ol.layer.Tile({ zIndex: -1000, source: new ol.source.XYZ({ url: mapConfig.tileUrl, wrapX: false, minZoom: mapConfig.minZoom, maxZoom: mapConfig.maxZoom }) }));
+      }
+
+      for (const layer of rasterLayers) {
+        const id = Number(layer.layer_id);
+        const isBase = layer.layer_role === "satellite" && layer.media_id != null && String(layer.media_id) === String(mapConfig.imagePath);
+        if (isBase) continue;
+        const url = layer.source_type === "media" && layer.media_id ? `/api/media/${layer.media_id}` : layer.source_url;
+        if (!url) continue;
+        let rendered: any = null;
+        if (simple && (layer.source_type === "media" || layer.source_type === "image")) rendered = new ol.layer.Image({ opacity: layer.opacity, zIndex: layer.z_index, visible: layer.visible_by_default, source: new ol.source.ImageStatic({ url, projection, imageExtent: extent }) });
+        else if (layer.source_type === "tile") rendered = new ol.layer.Tile({ opacity: layer.opacity, zIndex: layer.z_index, visible: layer.visible_by_default, source: new ol.source.XYZ({ url, wrapX: false }) });
+        if (rendered) {
+          rendered.set("worldrebornLayerId", id);
+          layerRefs.current.set(id, rendered);
+          mapLayers.push(rendered);
+        }
+      }
+
+      const geojson = new ol.format.GeoJSON();
+      for (const layer of vectorLayers) {
+        const id = Number(layer.layer_id);
+        const source = new ol.source.Vector();
+        sourceRefs.current.set(id, source);
+        const baseFill = mapColor(layer.style?.fill, "#7c6ee6");
+        const baseStroke = mapColor(layer.style?.stroke, "#f5f5f5");
+        const baseWidth = Number(layer.style?.strokeWidth ?? 2);
+        const rendered = new ol.layer.Vector({
+          source,
+          zIndex: layer.z_index || 500,
+          visible: layer.visible_by_default,
+          opacity: layer.opacity,
+          style: (feature: any) => {
+            const row = rowRefs.current.get(Number(feature.get("featureId")));
+            const type = feature.getGeometry()?.getType();
+            const fill = mapColor(row?.style?.fill, baseFill);
+            const stroke = mapColor(row?.style?.stroke, baseStroke);
+            return new ol.style.Style({
+              fill: type?.includes("Polygon") ? new ol.style.Fill({ color: colorWithAlpha(fill, 0.3) }) : undefined,
+              stroke: new ol.style.Stroke({ color: stroke, width: Number(row?.style?.strokeWidth ?? baseWidth) }),
+              image: new ol.style.Circle({ radius: 7, fill: new ol.style.Fill({ color: fill }), stroke: new ol.style.Stroke({ color: stroke, width: 2 }) }),
+              text: feature.get("label") ? new ol.style.Text({ text: String(feature.get("label")), offsetY: -13, fill: new ol.style.Fill({ color: "#fff" }), stroke: new ol.style.Stroke({ color: "#111", width: 3 }) }) : undefined,
+            });
+          },
+        });
+        rendered.set("worldrebornLayerId", id);
+        layerRefs.current.set(id, rendered);
+        mapLayers.push(rendered);
+
+        for (const row of features.filter((item) => Number(item.layer_id) === id)) {
+          try {
+            const featureId = Number(row.feature_id);
+            const feature = geojson.readFeature({ type: "Feature", geometry: row.geometry, properties: { featureId, label: row.label } });
+            source.addFeature(feature);
+            featureRefs.current.set(featureId, feature);
+            rowRefs.current.set(featureId, { ...row });
+          } catch {
+            // Malformed legacy geometry remains isolated from the rest of the map.
+          }
+        }
+      }
+
+      const view = simple
+        ? new ol.View({ projection, center: ol.extent.getCenter(extent), zoom: 0, minZoom: mapConfig.minZoom, maxZoom: mapConfig.maxZoom, extent })
+        : new ol.View({ center: ol.proj.fromLonLat([mapConfig.centerLng ?? 0, mapConfig.centerLat ?? 0]), zoom: Math.max(mapConfig.minZoom, 2), minZoom: mapConfig.minZoom, maxZoom: mapConfig.maxZoom });
+      const map = new ol.Map({ target: targetRef.current, layers: mapLayers, view });
+      mapRef.current = map;
+      if (simple) view.fit(extent, { padding: [20, 20, 20, 20] });
+
+      const select = new ol.interaction.Select({ layers: (candidate: any) => Boolean(candidate.get("worldrebornLayerId")) && sourceRefs.current.has(Number(candidate.get("worldrebornLayerId"))) });
+      selectRef.current = select;
+      map.addInteraction(select);
+      select.on("select", (event: any) => setSelectedId(event.selected?.[0] ? Number(event.selected[0].get("featureId")) : null));
+
+      const modify = new ol.interaction.Modify({ features: select.getFeatures(), pixelTolerance: 14 });
+      modifyRef.current = modify;
+      map.addInteraction(modify);
+      modify.on("modifystart", (event: any) => {
+        for (const feature of event.features.getArray()) {
+          const id = Number(feature.get("featureId"));
+          if (id) beforeGeometry.current.set(id, geojson.writeGeometryObject(feature.getGeometry()));
+        }
+      });
+      modify.on("modifyend", async (event: any) => {
+        setError("");
+        try {
+          for (const feature of event.features.getArray()) {
+            const id = Number(feature.get("featureId"));
+            if (!id) continue;
+            const after = geojson.writeGeometryObject(feature.getGeometry());
+            const before = beforeGeometry.current.get(id);
+            await patchGeometry(id, after);
+            if (before) {
+              const label = rowRefs.current.get(id)?.label ?? "Element";
+              setUndoStack((current) => [...current.slice(-29), { featureId: id, before, after, label }]);
+              setRedoStack([]);
+            }
+            beforeGeometry.current.delete(id);
+          }
+          setStatus("Grenze / Position aktualisiert.");
+        } catch (cause) {
+          setError(cause instanceof Error ? cause.message : "Änderung konnte nicht gespeichert werden.");
+        }
+      });
+      for (const source of sourceRefs.current.values()) map.addInteraction(new ol.interaction.Snap({ source, pixelTolerance: 14 }));
+      if (focusFeatureId) window.setTimeout(() => focusFeature(focusFeatureId), 0);
+    }).catch((cause) => setError(cause instanceof Error ? cause.message : "Karte konnte nicht geladen werden."));
+
+    return () => {
+      active = false;
+      for (const timer of saveTimers.current.values()) clearTimeout(timer);
+      saveTimers.current.clear();
+      mapRef.current?.setTarget(undefined);
+      mapRef.current = null;
+      sourceRefs.current.clear();
+      layerRefs.current.clear();
+      featureRefs.current.clear();
+      rowRefs.current.clear();
+    };
+  }, [mapConfig, rasterLayers, vectorLayers, features, focusFeatureId]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    ensureOpenLayers().then((ol) => {
+      if (drawRef.current) {
+        map.removeInteraction(drawRef.current);
+        drawRef.current = null;
+      }
+      selectRef.current?.setActive(!drawing);
+      modifyRef.current?.setActive(!drawing);
+      if (!drawing || !activeTool) return;
+
+      const layer = layerForRole(activeTool.role);
+      if (!layer) {
+        setError("Für dieses Werkzeug fehlt eine passende Inhaltsebene.");
+        setDrawing(false);
+        return;
+      }
+      const source = sourceRefs.current.get(Number(layer.layer_id));
+      if (!source) return;
+      const draw = new ol.interaction.Draw({ source, type: activeTool.mode, snapTolerance: 14, trace: activeTool.mode !== "Point", traceSource: source });
+      drawRef.current = draw;
+      map.addInteraction(draw);
+      draw.on("drawend", async (event: any) => {
+        setError("");
+        setSaveState("saving");
+        try {
+          const geometry = new ol.format.GeoJSON().writeGeometryObject(event.feature.getGeometry());
+          const style = activeTool.mode === "LineString" ? { stroke: color, strokeWidth: 3 } : { fill: color, stroke: "#ffffff", strokeWidth: 2 };
+          const linkedLocationId = existingLocation?.id ?? null;
+          const response = await fetch(`/api/admin/projects/${projectId}/maps/${mapConfig.mapId}/features`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              layerId: Number(layer.layer_id), geometry,
+              entityType: linkedLocationId ? "location" : null,
+              entityId: linkedLocationId,
+              label: name.trim(), visibilityMode: "admin_only", selectedPlayerIds: [], style,
+              metadata: { createdIn: "map-editor-v3", tool, existingLocationId: linkedLocationId },
+              createLocation: !linkedLocationId && activeTool.kind ? { kind: activeTool.kind, parentLocationId: parentId, locationType: locationKindLabel(activeTool.kind) } : null,
+            }),
+          });
+          const body = await response.json().catch(() => ({}));
+          if (!response.ok) throw new Error(body.error || "Element konnte nicht gespeichert werden.");
+          const featureId = Number(body.featureId);
+          const locationId = linkedLocationId ?? (body.locationId ? Number(body.locationId) : null);
+          const row: WorldMapFeature = { feature_id: String(featureId), layer_id: String(layer.layer_id), geometry, entity_type: locationId ? "location" : null, entity_id: locationId ? String(locationId) : null, label: name.trim(), short_description: null, visibility_mode: "admin_only", style, metadata: { createdIn: "map-editor-v3", tool, existingLocationId: linkedLocationId } };
+          rowRefs.current.set(featureId, row);
+          featureRefs.current.set(featureId, event.feature);
+          event.feature.set("featureId", featureId);
+          event.feature.set("label", row.label);
+          selectRef.current?.getFeatures().clear();
+          selectRef.current?.getFeatures().push(event.feature);
+          setSelectedId(featureId);
+          setDrawing(false);
+          if (!existingLocation) { setName(""); setParentId(null); }
+          setSaveState("saved");
+          setStatus(existingLocation ? `„${existingLocation.name}“ wurde auf der Karte platziert.` : `${activeTool.label} „${row.label}“ wurde erstellt.`);
+          window.setTimeout(() => setSaveState("idle"), 1200);
+        } catch (cause) {
+          source.removeFeature(event.feature);
+          setSaveState("idle");
+          setError(cause instanceof Error ? cause.message : "Element konnte nicht gespeichert werden.");
+          setDrawing(false);
+        }
+      });
+    });
+    return () => {
+      if (drawRef.current) { map.removeInteraction(drawRef.current); drawRef.current = null; }
+      selectRef.current?.setActive(true);
+      modifyRef.current?.setActive(true);
+    };
+  }, [drawing, activeTool, name, color, parentId, projectId, mapConfig.mapId, tool, vectorLayers, existingLocation]);
+
+  useEffect(() => {
+    const term = query.trim();
+    if (term.length < 2) { setSearchResults([]); return; }
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
+      setSearching(true);
+      try {
+        const response = await fetch(`/api/admin/projects/${projectId}/maps/${mapConfig.mapId}/search?q=${encodeURIComponent(term)}`, { signal: controller.signal });
+        const body = await response.json().catch(() => ({}));
+        if (response.ok) setSearchResults(Array.isArray(body.items) ? body.items : []);
+      } finally { setSearching(false); }
+    }, 180);
+    return () => { controller.abort(); window.clearTimeout(timer); };
+  }, [query, projectId, mapConfig.mapId]);
+
+  async function deleteSelected() {
+    if (!selectedId) return;
+    const row = rowRefs.current.get(selectedId);
+    if (!row || !window.confirm(`„${row.label}“ von der Karte entfernen? Die verknüpfte Location bleibt bestehen.`)) return;
+    const response = await fetch(`/api/admin/projects/${projectId}/maps/${mapConfig.mapId}/features/${selectedId}`, { method: "DELETE" });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) { setError(body.error || "Element konnte nicht entfernt werden."); return; }
+    const source = sourceRefs.current.get(Number(row.layer_id));
+    const feature = featureRefs.current.get(selectedId);
+    if (source && feature) source.removeFeature(feature);
+    featureRefs.current.delete(selectedId);
+    rowRefs.current.delete(selectedId);
+    selectRef.current?.getFeatures().clear();
+    setSelectedId(null);
+    setStatus(`„${row.label}“ wurde von der Karte entfernt. Die Location bleibt erhalten.`);
+  }
+
+  async function changeSelectedColor(next: string) {
+    if (!selectedId) return;
+    const row = rowRefs.current.get(selectedId);
+    if (!row) return;
+    const key = row.geometry.type.includes("Line") ? "stroke" : "fill";
+    try { await patchStyle(selectedId, { [key]: next }); sourceRefs.current.get(Number(row.layer_id))?.changed(); setStatus("Farbe gespeichert."); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : "Farbe konnte nicht gespeichert werden."); }
+  }
+
+  async function applyHistory(entry: HistoryEntry, direction: "undo" | "redo") {
+    const geometry = direction === "undo" ? entry.before : entry.after;
+    const feature = featureRefs.current.get(entry.featureId);
+    if (!feature) return;
+    const ol = await ensureOpenLayers();
+    feature.setGeometry(new ol.format.GeoJSON().readGeometry(geometry));
+    await patchGeometry(entry.featureId, geometry);
+    sourceRefs.current.get(Number(rowRefs.current.get(entry.featureId)?.layer_id))?.changed();
+    focusFeature(entry.featureId);
+  }
+  async function undo() { const entry = undoStack.at(-1); if (!entry) return; try { await applyHistory(entry, "undo"); setUndoStack((current) => current.slice(0, -1)); setRedoStack((current) => [...current, entry]); setStatus(`Änderung an „${entry.label}“ rückgängig gemacht.`); } catch (cause) { setError(cause instanceof Error ? cause.message : "Rückgängig fehlgeschlagen."); } }
+  async function redo() { const entry = redoStack.at(-1); if (!entry) return; try { await applyHistory(entry, "redo"); setRedoStack((current) => current.slice(0, -1)); setUndoStack((current) => [...current, entry]); setStatus(`Änderung an „${entry.label}“ wiederhergestellt.`); } catch (cause) { setError(cause instanceof Error ? cause.message : "Wiederholen fehlgeschlagen."); } }
+
+  function toggleLayer(layer: WorldMapLayer, visible: boolean) { layerRefs.current.get(Number(layer.layer_id))?.setVisible(visible); scheduleLayerPatch(Number(layer.layer_id), { visibleByDefault: visible }); setActiveView("custom"); }
+  function setOpacity(layer: WorldMapLayer, value: number) { layerRefs.current.get(Number(layer.layer_id))?.setOpacity(value); scheduleLayerPatch(Number(layer.layer_id), { opacity: value }); }
+  function applyView(view: string) {
+    setActiveView(view);
+    for (const layer of layers) {
+      const id = Number(layer.layer_id), ref = layerRefs.current.get(id);
+      if (!ref) continue;
+      let visible = layer.visible_by_default;
+      if (view === "political") visible = layer.layer_type === "vector" && ["political", "settlements"].includes(layer.layer_role ?? "");
+      if (view === "climate") visible = layer.layer_role === "biomes" || (layer.layer_type === "vector" && layer.layer_role === "political");
+      if (view === "rainfall") visible = layer.layer_role === "rainfall_annual" || (layer.layer_type === "vector" && layer.layer_role === "political");
+      if (view === "topography") visible = ["elevation_full", "elevation_land", "land_mask"].includes(layer.layer_role ?? "") || (layer.layer_type === "vector" && layer.layer_role === "political");
+      ref.setVisible(visible);
+      const checkbox = document.querySelector<HTMLInputElement>(`[data-editor-layer="${id}"]`);
+      if (checkbox) checkbox.checked = visible;
     }
-    const view=simple?new ol.View({projection,center:ol.extent.getCenter(extent),zoom:0,minZoom:mapConfig.minZoom,maxZoom:mapConfig.maxZoom,extent}):new ol.View({center:ol.proj.fromLonLat([mapConfig.centerLng??0,mapConfig.centerLat??0]),zoom:Math.max(mapConfig.minZoom,2),minZoom:mapConfig.minZoom,maxZoom:mapConfig.maxZoom});const map=new ol.Map({target:targetRef.current,layers:mapLayers,view});mapRef.current=map;if(simple)view.fit(extent,{padding:[20,20,20,20]});
-    const select=new ol.interaction.Select({layers:(candidate:any)=>Boolean(candidate.get("worldrebornLayerId"))&&sourceRefs.current.has(Number(candidate.get("worldrebornLayerId")))});selectRef.current=select;map.addInteraction(select);select.on("select",(event:any)=>setSelectedId(event.selected?.[0]?Number(event.selected[0].get("featureId")):null));
-    const modify=new ol.interaction.Modify({features:select.getFeatures(),pixelTolerance:14});modifyRef.current=modify;map.addInteraction(modify);modify.on("modifystart",(event:any)=>{for(const feature of event.features.getArray()){const id=Number(feature.get("featureId"));if(id)beforeGeometry.current.set(id,geojson.writeGeometryObject(feature.getGeometry()));}});modify.on("modifyend",async(event:any)=>{setError("");try{for(const feature of event.features.getArray()){const id=Number(feature.get("featureId"));if(!id)continue;const after=geojson.writeGeometryObject(feature.getGeometry()),before=beforeGeometry.current.get(id);await patchGeometry(id,after);if(before){const label=rowRefs.current.get(id)?.label??"Element";setUndoStack(current=>[...current.slice(-29),{featureId:id,before,after,label}]);setRedoStack([]);}beforeGeometry.current.delete(id);}setStatus("Grenze aktualisiert.");}catch(cause){setError(cause instanceof Error?cause.message:"Änderung konnte nicht gespeichert werden.");}});for(const source of sourceRefs.current.values())map.addInteraction(new ol.interaction.Snap({source,pixelTolerance:14}));
-    if(focusFeatureId)window.setTimeout(()=>focusFeature(focusFeatureId),0);
-  }).catch(cause=>setError(cause instanceof Error?cause.message:"Karte konnte nicht geladen werden."));return()=>{active=false;for(const timer of saveTimers.current.values())clearTimeout(timer);saveTimers.current.clear();mapRef.current?.setTarget(undefined);mapRef.current=null;sourceRefs.current.clear();layerRefs.current.clear();featureRefs.current.clear();rowRefs.current.clear();};},[mapConfig,rasterLayers,vectorLayers,features,focusFeatureId]);
+  }
+  function chooseSearch(item: MapSearchItem) {
+    if (item.featureId && focusFeature(item.featureId)) { setQuery(""); setSearchResults([]); return; }
+    if (item.markerId) { window.location.assign(`/admin/projects/${projectId}/map?mapId=${mapConfig.mapId}&markerId=${item.markerId}`); return; }
+    if (item.href) window.location.assign(item.href);
+  }
 
-  useEffect(()=>{const map=mapRef.current;if(!map)return;ensureOpenLayers().then(ol=>{if(drawRef.current){map.removeInteraction(drawRef.current);drawRef.current=null;}selectRef.current?.setActive(!drawing);modifyRef.current?.setActive(!drawing);if(!drawing||!activeTool)return;const layer=layerForRole(activeTool.role);if(!layer){setError("Für dieses Werkzeug fehlt eine passende Inhaltsebene.");setDrawing(false);return;}const source=sourceRefs.current.get(Number(layer.layer_id));if(!source)return;const draw=new ol.interaction.Draw({source,type:activeTool.mode,snapTolerance:14,trace:activeTool.mode!=="Point",traceSource:source});drawRef.current=draw;map.addInteraction(draw);draw.on("drawend",async(event:any)=>{setError("");setSaveState("saving");try{const geometry=new ol.format.GeoJSON().writeGeometryObject(event.feature.getGeometry()),style=activeTool.mode==="LineString"?{stroke:color,strokeWidth:3}:{fill:color,stroke:"#ffffff",strokeWidth:2};const response=await fetch(`/api/admin/projects/${projectId}/maps/${mapConfig.mapId}/features`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({layerId:Number(layer.layer_id),geometry,label:name.trim(),visibilityMode:"admin_only",selectedPlayerIds:[],style,metadata:{createdIn:"map-editor-v3",tool},createLocation:activeTool.kind?{kind:activeTool.kind,parentLocationId:parentId,locationType:locationKindLabel(activeTool.kind)}:null})});const body=await response.json().catch(()=>({}));if(!response.ok)throw new Error(body.error||"Element konnte nicht gespeichert werden.");const featureId=Number(body.featureId),row:WorldMapFeature={feature_id:String(featureId),layer_id:String(layer.layer_id),geometry,entity_type:body.locationId?"location":null,entity_id:body.locationId?String(body.locationId):null,label:name.trim(),short_description:null,visibility_mode:"admin_only",style,metadata:{createdIn:"map-editor-v3",tool}};rowRefs.current.set(featureId,row);featureRefs.current.set(featureId,event.feature);event.feature.set("featureId",featureId);event.feature.set("label",row.label);setSelectedId(featureId);setDrawing(false);setName("");setParentId(null);setSaveState("saved");setStatus(`${activeTool.label} „${row.label}“ wurde erstellt.`);window.setTimeout(()=>setSaveState("idle"),1200);}catch(cause){source.removeFeature(event.feature);setSaveState("idle");setError(cause instanceof Error?cause.message:"Element konnte nicht gespeichert werden.");setDrawing(false);}});});return()=>{if(drawRef.current){map.removeInteraction(drawRef.current);drawRef.current=null;}selectRef.current?.setActive(true);modifyRef.current?.setActive(true);};},[drawing,activeTool,name,color,parentId,projectId,mapConfig.mapId,tool,vectorLayers]);
-
-  useEffect(()=>{const term=query.trim();if(term.length<2){setSearchResults([]);return;}const controller=new AbortController(),timer=window.setTimeout(async()=>{setSearching(true);try{const response=await fetch(`/api/admin/projects/${projectId}/maps/${mapConfig.mapId}/search?q=${encodeURIComponent(term)}`,{signal:controller.signal});const body=await response.json().catch(()=>({}));if(response.ok)setSearchResults(Array.isArray(body.items)?body.items:[]);}finally{setSearching(false);}},180);return()=>{controller.abort();window.clearTimeout(timer);};},[query,projectId,mapConfig.mapId]);
-
-  async function deleteSelected(){if(!selectedId)return;const row=rowRefs.current.get(selectedId);if(!row||!window.confirm(`„${row.label}“ von der Karte entfernen? Die verknüpfte Location bleibt bestehen.`))return;const response=await fetch(`/api/admin/projects/${projectId}/maps/${mapConfig.mapId}/features/${selectedId}`,{method:"DELETE"});const body=await response.json().catch(()=>({}));if(!response.ok){setError(body.error||"Element konnte nicht entfernt werden.");return;}const source=sourceRefs.current.get(Number(row.layer_id)),feature=featureRefs.current.get(selectedId);if(source&&feature)source.removeFeature(feature);featureRefs.current.delete(selectedId);rowRefs.current.delete(selectedId);selectRef.current?.getFeatures().clear();setSelectedId(null);setStatus(`„${row.label}“ wurde von der Karte entfernt. Die Location bleibt erhalten.`);}
-  async function changeSelectedColor(next:string){if(!selectedId)return;const row=rowRefs.current.get(selectedId);if(!row)return;const key=row.geometry.type.includes("Line")?"stroke":"fill";try{await patchStyle(selectedId,{[key]:next});sourceRefs.current.get(Number(row.layer_id))?.changed();setStatus("Farbe gespeichert.");}catch(cause){setError(cause instanceof Error?cause.message:"Farbe konnte nicht gespeichert werden.");}}
-  async function applyHistory(entry:HistoryEntry,direction:"undo"|"redo"){const geometry=direction==="undo"?entry.before:entry.after,feature=featureRefs.current.get(entry.featureId);if(!feature)return;const ol=await ensureOpenLayers();feature.setGeometry(new ol.format.GeoJSON().readGeometry(geometry));await patchGeometry(entry.featureId,geometry);sourceRefs.current.get(Number(rowRefs.current.get(entry.featureId)?.layer_id))?.changed();focusFeature(entry.featureId);}
-  async function undo(){const entry=undoStack.at(-1);if(!entry)return;try{await applyHistory(entry,"undo");setUndoStack(current=>current.slice(0,-1));setRedoStack(current=>[...current,entry]);setStatus(`Änderung an „${entry.label}“ rückgängig gemacht.`);}catch(cause){setError(cause instanceof Error?cause.message:"Rückgängig fehlgeschlagen.");}}
-  async function redo(){const entry=redoStack.at(-1);if(!entry)return;try{await applyHistory(entry,"redo");setRedoStack(current=>current.slice(0,-1));setUndoStack(current=>[...current,entry]);setStatus(`Änderung an „${entry.label}“ wiederhergestellt.`);}catch(cause){setError(cause instanceof Error?cause.message:"Wiederholen fehlgeschlagen.");}}
-  function toggleLayer(layer:WorldMapLayer,visible:boolean){layerRefs.current.get(Number(layer.layer_id))?.setVisible(visible);scheduleLayerPatch(Number(layer.layer_id),{visibleByDefault:visible});setActiveView("custom");}
-  function setOpacity(layer:WorldMapLayer,value:number){layerRefs.current.get(Number(layer.layer_id))?.setOpacity(value);scheduleLayerPatch(Number(layer.layer_id),{opacity:value});}
-  function applyView(view:string){setActiveView(view);for(const layer of layers){const ref=layerRefs.current.get(Number(layer.layer_id));if(!ref)continue;let visible=layer.visible_by_default;if(view==="political")visible=layer.layer_type==="vector"&&["political","settlements"].includes(layer.layer_role??"");if(view==="climate")visible=layer.layer_role==="biomes"||(layer.layer_type==="vector"&&layer.layer_role==="political");if(view==="rainfall")visible=layer.layer_role==="rainfall_annual"||(layer.layer_type==="vector"&&layer.layer_role==="political");if(view==="topography")visible=["elevation_full","elevation_land","land_mask"].includes(layer.layer_role??"")||(layer.layer_type==="vector"&&layer.layer_role==="political");ref.setVisible(visible);}}
-  function chooseSearch(item:MapSearchItem){if(item.featureId&&focusFeature(item.featureId)){setQuery("");setSearchResults([]);return;}if(item.markerId){window.location.assign(`/admin/projects/${projectId}/map?mapId=${mapConfig.mapId}&markerId=${item.markerId}`);return;}if(item.href)window.location.assign(item.href);}
-
-  return <><style>{`.map-editor-v3{display:grid;grid-template-columns:minmax(250px,300px) minmax(0,1fr);gap:12px;align-items:start}.map-editor-v3.has-selection{grid-template-columns:minmax(250px,290px) minmax(0,1fr) minmax(220px,260px)}.map-editor-side{display:grid;gap:10px;max-height:78vh;overflow:auto}.map-editor-canvas{height:78vh;min-height:580px;border-radius:12px;overflow:hidden;background:#10141a}@media(max-width:1100px){.map-editor-v3.has-selection{grid-template-columns:minmax(240px,290px) minmax(0,1fr)}.map-editor-inspector{grid-column:1/-1}}@media(max-width:850px){.map-editor-v3,.map-editor-v3.has-selection{grid-template-columns:1fr}.map-editor-side{max-height:none;overflow:visible}.map-editor-canvas{height:65vh;min-height:430px}}`}</style>
-  <div className={`map-editor-v3${selectedRow?" has-selection":""}`}>
-    <aside className="map-editor-side">
-      <section className="panel-card stack"><div><span className="panel-kicker">ERSTELLEN</span><h3 style={{marginBottom:4}}>Was möchtest du einzeichnen?</h3><p className="muted" style={{margin:0}}>Werkzeug und Kartenebene werden automatisch gewählt.</p></div><div className="row wrap-row">{(Object.keys(TOOLS) as ToolId[]).map(id=><button key={id} type="button" className={tool===id?"button primary":"button ghost"} onClick={()=>chooseTool(id)} title={TOOLS[id].description}>{TOOLS[id].label}</button>)}</div></section>
-      {activeTool?<section className="panel-card stack"><div><span className="panel-kicker">DETAILS</span><h3 style={{marginBottom:4}}>{activeTool.label} anlegen</h3><small className="muted">{activeTool.description}</small></div><label>Name<input value={name} onChange={event=>setName(event.target.value)} placeholder={activeTool.kind==="country"?"z. B. Königreich Erigon":activeTool.kind==="city"?"z. B. Erigon":"Name"}/></label><label>Farbe<div className="row"><input type="color" value={color} onChange={event=>setColor(event.target.value)}/><span className="muted">{color}</span></div></label>{activeTool.kind&&activeTool.kind!=="world"?<MapLocationPicker projectId={projectId} parentFor={activeTool.kind} value={parentId} onChange={id=>setParentId(id)}/>:null}<button type="button" className="button primary" disabled={!name.trim()||drawing} onClick={()=>setDrawing(true)}>{drawing?"Zeichne jetzt auf der Karte …":"Zeichnen beginnen"}</button>{drawing?<div className="notice">{activeTool.mode==="Polygon"?"Klicke entlang der Grenze. Klicke auf den ersten Punkt, um die Fläche zu schließen. Vorhandene Grenzen werden magnetisch übernommen.":activeTool.mode==="Point"?"Klicke auf die gewünschte Position.":"Klicke entlang des Verlaufs. Doppelklick beendet die Linie."}</div>:null}</section>:null}
-      <section className="panel-card stack"><div><span className="panel-kicker">SUCHEN</span><h3 style={{marginBottom:4}}>In dieser Welt finden</h3></div><input value={query} onChange={event=>setQuery(event.target.value)} placeholder="Land, Stadt, NPC oder Marker …"/>{searching?<small className="muted">Suche …</small>:null}{searchResults.length?<div className="stack" style={{gap:4}}>{searchResults.map((item,index)=><button key={`${item.kind}-${item.id}-${index}`} type="button" className="button ghost" style={{textAlign:"left"}} onClick={()=>chooseSearch(item)}><strong>{item.name}</strong>{item.subtitle?<><br/><small className="muted">{item.subtitle}</small></>:null}</button>)}</div>:null}</section>
-      <section className="panel-card stack"><div><span className="panel-kicker">ANSICHT</span><h3 style={{marginBottom:4}}>Kartenmodus</h3></div><div className="row wrap-row"><button type="button" className={activeView==="default"?"button primary":"button ghost"} onClick={()=>applyView("default")}>Standard</button><button type="button" className={activeView==="political"?"button primary":"button ghost"} onClick={()=>applyView("political")}>Politisch</button><button type="button" className={activeView==="climate"?"button primary":"button ghost"} onClick={()=>applyView("climate")}>Klima</button><button type="button" className={activeView==="rainfall"?"button primary":"button ghost"} onClick={()=>applyView("rainfall")}>Niederschlag</button><button type="button" className={activeView==="topography"?"button primary":"button ghost"} onClick={()=>applyView("topography")}>Topografie</button></div><details><summary style={{cursor:"pointer"}}>Kartenebenen</summary><div className="stack" style={{paddingTop:8}}>{layers.map(layer=>{const id=Number(layer.layer_id),isBase=layer.layer_role==="satellite"&&layer.media_id!=null&&String(layer.media_id)===String(mapConfig.imagePath);return <div key={id} style={{borderTop:"1px solid rgba(127,127,127,.2)",paddingTop:7}}><label className="row" style={{justifyContent:"space-between"}}><span>{layer.name}{isBase?" · Basiskarte":""}</span><input type="checkbox" defaultChecked={isBase||layer.visible_by_default} disabled={isBase} onChange={event=>toggleLayer(layer,event.target.checked)}/></label>{!isBase?<label className="row muted">Deckkraft<input type="range" min="0" max="1" step="0.05" defaultValue={layer.opacity} onChange={event=>setOpacity(layer,Number(event.target.value))}/></label>:null}</div>;})}</div></details></section>
-      <details className="panel-card"><summary style={{cursor:"pointer",fontWeight:600}}>Erweiterte Zeichenwerkzeuge</summary><div className="stack" style={{paddingTop:8}}><p className="muted">Formpunkte lassen sich nach Auswahl direkt ziehen. Snapping und Tracing sind aktiv.</p><div className="row wrap-row"><button type="button" className="button ghost" disabled={!undoStack.length} onClick={()=>void undo()}>↶ Rückgängig</button><button type="button" className="button ghost" disabled={!redoStack.length} onClick={()=>void redo()}>↷ Wiederholen</button></div></div></details>
-    </aside>
-    <div className="stack"><div className="row wrap-row" style={{justifyContent:"space-between"}}><span className="muted">{drawing?"Zeichenmodus aktiv":"Objekt anklicken, um Details zu sehen oder die Form zu bearbeiten."}</span><span className="soft-label">{saveState==="saving"?"Speichert …":saveState==="saved"?"Gespeichert ✓":"Autosave"}</span></div><div ref={targetRef} className="map-editor-canvas"/>{status?<div className="success-message" aria-live="polite">{status}</div>:null}{error?<div className="error-message" aria-live="assertive">{error}</div>:null}</div>
-    {selectedRow?<aside className="map-editor-inspector stack"><section className="panel-card stack"><div><span className="panel-kicker">AUSGEWÄHLT</span><h3 style={{marginBottom:4}}>{selectedRow.label}</h3><span className="soft-label">{geometryLabel(selectedRow.geometry.type)}</span></div><p className="muted" style={{margin:0}}>Ziehe die sichtbaren Formpunkte direkt auf der Karte. Änderungen werden automatisch gespeichert.</p><label>Farbe<input type="color" defaultValue={mapColor(selectedRow.style?.fill??selectedRow.style?.stroke,"#7c6ee6")} onChange={event=>void changeSelectedColor(event.target.value)}/></label>{selectedRow.entity_type==="location"&&selectedRow.entity_id?<a className="button primary" href={`/admin/projects/${projectId}/locations/${selectedRow.entity_id}`}>Location öffnen</a>:null}<button type="button" className="button danger" onClick={()=>void deleteSelected()}>Von Karte entfernen</button><small className="muted">Die verknüpfte Lore-Location wird dabei nicht gelöscht.</small></section></aside>:null}
-  </div></>;
+  return <>
+    <style>{`.map-editor-v3{display:grid;grid-template-columns:minmax(250px,300px) minmax(0,1fr);gap:12px;align-items:start}.map-editor-v3.has-selection{grid-template-columns:minmax(250px,290px) minmax(0,1fr) minmax(220px,260px)}.map-editor-side{display:grid;gap:10px;max-height:78vh;overflow:auto}.map-editor-canvas{height:78vh;min-height:580px;border-radius:12px;overflow:hidden;background:#10141a}@media(max-width:1100px){.map-editor-v3.has-selection{grid-template-columns:minmax(240px,290px) minmax(0,1fr)}.map-editor-inspector{grid-column:1/-1}}@media(max-width:850px){.map-editor-v3,.map-editor-v3.has-selection{grid-template-columns:1fr}.map-editor-side{max-height:none;overflow:visible}.map-editor-canvas{height:65vh;min-height:430px}}`}</style>
+    <div className={`map-editor-v3${selectedRow ? " has-selection" : ""}`}>
+      <aside className="map-editor-side">
+        {existingLocation ? <section className="panel-card stack"><div><span className="panel-kicker">BESTEHENDEN ORT PLATZIEREN</span><h3 style={{ marginBottom: 4 }}>{existingLocation.name}</h3></div><p className="muted" style={{ margin: 0 }}>Diese vorhandene {locationKindLabel(existingLocation.kind)}-Location wird mit der neuen Karten-Geometrie verknüpft. Es entsteht kein doppelter Lore-Datensatz.</p><span className="soft-label">{activeTool?.label ?? locationKindLabel(existingLocation.kind)}</span></section> : <section className="panel-card stack"><div><span className="panel-kicker">ERSTELLEN</span><h3 style={{ marginBottom: 4 }}>Was möchtest du einzeichnen?</h3><p className="muted" style={{ margin: 0 }}>Werkzeug und Kartenebene werden automatisch gewählt.</p></div><div className="row wrap-row">{(Object.keys(TOOLS) as ToolId[]).map((id) => <button key={id} type="button" className={tool === id ? "button primary" : "button ghost"} onClick={() => chooseTool(id)} title={TOOLS[id].description}>{TOOLS[id].label}</button>)}</div></section>}
+        {activeTool ? <section className="panel-card stack"><div><span className="panel-kicker">DETAILS</span><h3 style={{ marginBottom: 4 }}>{existingLocation ? `${activeTool.label} platzieren` : `${activeTool.label} anlegen`}</h3><small className="muted">{activeTool.description}</small></div><label>Name<input value={name} onChange={(event) => setName(event.target.value)} readOnly={Boolean(existingLocation)} placeholder="Name"/></label><label>Farbe<div className="row"><input type="color" value={color} onChange={(event) => setColor(event.target.value)}/><span className="muted">{color}</span></div></label>{!existingLocation && activeTool.kind ? <MapLocationPicker projectId={projectId} parentFor={activeTool.kind} value={parentId} onChange={(id) => setParentId(id)}/> : null}<button type="button" className="button primary" disabled={!name.trim() || drawing} onClick={() => setDrawing(true)}>{drawing ? "Zeichne jetzt auf der Karte …" : "Zeichnen beginnen"}</button>{drawing ? <div className="notice">{activeTool.mode === "Polygon" ? "Klicke entlang der Grenze. Klicke auf den ersten Punkt, um die Fläche zu schließen. Vorhandene Grenzen werden magnetisch übernommen." : activeTool.mode === "Point" ? "Klicke auf die gewünschte Position." : "Klicke entlang des Verlaufs. Doppelklick beendet die Linie."}</div> : null}</section> : null}
+        <section className="panel-card stack"><div><span className="panel-kicker">SUCHEN</span><h3 style={{ marginBottom: 4 }}>In dieser Welt finden</h3></div><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Land, Stadt, NPC oder Marker …"/>{searching ? <small className="muted">Suche …</small> : null}{searchResults.length ? <div className="stack" style={{ gap: 4 }}>{searchResults.map((item, index) => <button key={`${item.kind}-${item.id}-${index}`} type="button" className="button ghost" style={{ textAlign: "left" }} onClick={() => chooseSearch(item)}><strong>{item.name}</strong>{item.subtitle ? <><br/><small className="muted">{item.subtitle}</small></> : null}</button>)}</div> : null}</section>
+        <section className="panel-card stack"><div><span className="panel-kicker">ANSICHT</span><h3 style={{ marginBottom: 4 }}>Kartenmodus</h3></div><div className="row wrap-row"><button type="button" className={activeView === "default" ? "button primary" : "button ghost"} onClick={() => applyView("default")}>Standard</button><button type="button" className={activeView === "political" ? "button primary" : "button ghost"} onClick={() => applyView("political")}>Politisch</button><button type="button" className={activeView === "climate" ? "button primary" : "button ghost"} onClick={() => applyView("climate")}>Klima</button><button type="button" className={activeView === "rainfall" ? "button primary" : "button ghost"} onClick={() => applyView("rainfall")}>Niederschlag</button><button type="button" className={activeView === "topography" ? "button primary" : "button ghost"} onClick={() => applyView("topography")}>Topografie</button></div><details><summary style={{ cursor: "pointer" }}>Kartenebenen</summary><div className="stack" style={{ paddingTop: 8 }}>{layers.map((layer) => { const id = Number(layer.layer_id); const isBase = layer.layer_role === "satellite" && layer.media_id != null && String(layer.media_id) === String(mapConfig.imagePath); return <div key={id} style={{ borderTop: "1px solid rgba(127,127,127,.2)", paddingTop: 7 }}><label className="row" style={{ justifyContent: "space-between" }}><span>{layer.name}{isBase ? " · Basiskarte" : ""}</span><input data-editor-layer={id} type="checkbox" defaultChecked={isBase || layer.visible_by_default} disabled={isBase} onChange={(event) => toggleLayer(layer, event.target.checked)}/></label>{!isBase ? <label className="row muted">Deckkraft<input type="range" min="0" max="1" step="0.05" defaultValue={layer.opacity} onChange={(event) => setOpacity(layer, Number(event.target.value))}/></label> : null}</div>; })}</div></details></section>
+        <details className="panel-card"><summary style={{ cursor: "pointer", fontWeight: 600 }}>Erweiterte Zeichenwerkzeuge</summary><div className="stack" style={{ paddingTop: 8 }}><p className="muted">Formpunkte lassen sich nach Auswahl direkt ziehen. Snapping und Tracing sind aktiv.</p><div className="row wrap-row"><button type="button" className="button ghost" disabled={!undoStack.length} onClick={() => void undo()}>↶ Rückgängig</button><button type="button" className="button ghost" disabled={!redoStack.length} onClick={() => void redo()}>↷ Wiederholen</button></div></div></details>
+      </aside>
+      <div className="stack"><div className="row wrap-row" style={{ justifyContent: "space-between" }}><span className="muted">{drawing ? "Zeichenmodus aktiv" : "Objekt anklicken, um Details zu sehen oder die Form zu bearbeiten."}</span><span className="soft-label">{saveState === "saving" ? "Speichert …" : saveState === "saved" ? "Gespeichert ✓" : "Autosave"}</span></div><div ref={targetRef} className="map-editor-canvas"/>{status ? <div className="success-message" aria-live="polite">{status}</div> : null}{error ? <div className="error-message" aria-live="assertive">{error}</div> : null}</div>
+      {selectedRow ? <aside className="map-editor-inspector stack"><section className="panel-card stack"><div><span className="panel-kicker">AUSGEWÄHLT</span><h3 style={{ marginBottom: 4 }}>{selectedRow.label}</h3><span className="soft-label">{geometryLabel(selectedRow.geometry.type)}</span></div><p className="muted" style={{ margin: 0 }}>Ziehe die sichtbaren Formpunkte direkt auf der Karte. Änderungen werden automatisch gespeichert.</p><label>Farbe<input key={selectedId ?? 0} type="color" defaultValue={mapColor(selectedRow.style?.fill ?? selectedRow.style?.stroke, "#7c6ee6")} onChange={(event) => void changeSelectedColor(event.target.value)}/></label>{selectedRow.entity_type === "location" && selectedRow.entity_id ? <a className="button primary" href={`/admin/projects/${projectId}/locations/${selectedRow.entity_id}`}>Location öffnen</a> : null}<button type="button" className="button danger" onClick={() => void deleteSelected()}>Von Karte entfernen</button><small className="muted">Die verknüpfte Lore-Location wird dabei nicht gelöscht.</small></section></aside> : null}
+    </div>
+  </>;
 }
