@@ -5,6 +5,7 @@ type Polygon = Ring[];
 type Edge = { start: [number, number]; end: [number, number]; dir: 0 | 1 | 2 | 3 };
 type Grid = { width: number; height: number; extent: MapExtent; mask: Uint8Array };
 type Seed = { x: number; y: number; weight: number; phase: number; angle: number; stretch: number };
+type Assignment = { owners: Int16Array; counts: Int32Array; sumsX: Float64Array; sumsY: Float64Array };
 
 export type AutoSubdivisionOptions = {
   count: number;
@@ -143,10 +144,13 @@ function organicWarp(x: number, y: number, irregularity: number, grid: Grid, noi
   const coarseY = fractalNoise(nx * 3.15 - 8.2, ny * 3.15 + 14.3, noiseSeed ^ 0x7f4a7c15);
   const fineX = fractalNoise(nx * 6.4 + coarseY * 0.8, ny * 6.4 + coarseX * 0.8, noiseSeed ^ 0x2c9277b5);
   const fineY = fractalNoise(nx * 6.4 - coarseX * 0.8, ny * 6.4 + coarseY * 0.8, noiseSeed ^ 0x165667b1);
+  const detail = Math.pow(clamp((irregularity - 0.62) / 0.38, 0, 1), 1.15);
+  const microX = detail ? fractalNoise(nx * 15.5 + fineY, ny * 15.5 - fineX, noiseSeed ^ 0x68e31da4) : 0;
+  const microY = detail ? fractalNoise(nx * 15.5 - fineX, ny * 15.5 + fineY, noiseSeed ^ 0x1b56c4e9) : 0;
   const amplitude = maxDimension * (0.045 * irregularity + 0.085 * irregularity * irregularity);
   return [
-    x + amplitude * (coarseX * 0.7 + fineX * 0.3),
-    y + amplitude * (coarseY * 0.7 + fineY * 0.3),
+    x + amplitude * (coarseX * 0.58 + fineX * 0.3 + microX * 0.22 * detail),
+    y + amplitude * (coarseY * 0.58 + fineY * 0.3 + microY * 0.22 * detail),
   ];
 }
 
@@ -178,9 +182,11 @@ function organicDistance(warped: MapCoordinate, seed: Seed, irregularity: number
   const angle = Math.atan2(ry, rx);
   const localWave = Math.sin(warped[0] * 0.032 + seedIndex * 1.71) * 0.55 + Math.cos(warped[1] * 0.027 - seedIndex * 1.13) * 0.45;
   const lobe = Math.sin(angle * 2.15 + seed.phase + localWave * 0.9);
-  return elongated * (1 + irregularity * 0.085 * lobe);
+  const wildDetail = Math.pow(clamp((irregularity - 0.58) / 0.42, 0, 1), 1.35);
+  const modulation = irregularity * 0.075 + wildDetail * wildDetail * 0.23;
+  return elongated * clamp(1 + modulation * lobe, 0.58, 1.5);
 }
-function assignCells(grid: Grid, cells: number[], seeds: Seed[], irregularity: number, noiseSeed: number) {
+function assignCells(grid: Grid, cells: number[], seeds: Seed[], irregularity: number, noiseSeed: number): Assignment {
   const owners = new Int16Array(grid.mask.length); owners.fill(-1);
   const counts = new Int32Array(seeds.length), sumsX = new Float64Array(seeds.length), sumsY = new Float64Array(seeds.length);
   for (const index of cells) {
@@ -194,6 +200,72 @@ function assignCells(grid: Grid, cells: number[], seeds: Seed[], irregularity: n
     owners[index] = best; counts[best] += 1; sumsX[best] += x; sumsY[best] += y;
   }
   return { owners, counts, sumsX, sumsY };
+}
+function recomputeAssignment(grid: Grid, cells: number[], owners: Int16Array, count: number): Assignment {
+  const counts = new Int32Array(count), sumsX = new Float64Array(count), sumsY = new Float64Array(count);
+  for (const index of cells) {
+    const owner = owners[index]; if (owner < 0 || owner >= count) continue;
+    const x = index % grid.width, y = Math.floor(index / grid.width);
+    counts[owner] += 1; sumsX[owner] += x; sumsY[owner] += y;
+  }
+  return { owners, counts, sumsX, sumsY };
+}
+function boundaryField(x: number, y: number, owner: number, irregularity: number, grid: Grid, noiseSeed: number) {
+  const maxDimension = Math.max(grid.width, grid.height), nx = x / maxDimension, ny = y / maxDimension;
+  const detail = Math.pow(clamp((irregularity - 0.55) / 0.45, 0, 1), 1.15);
+  const ownerSeed = (noiseSeed ^ Math.imul(owner + 1, 0x45d9f3b)) | 0;
+  const broad = fractalNoise(nx * 5.4 + owner * 2.71, ny * 5.4 - owner * 3.17, ownerSeed);
+  const middle = fractalNoise(nx * 13.5 - owner * 1.19, ny * 13.5 + owner * 1.83, ownerSeed ^ 0x27d4eb2d);
+  const fine = fractalNoise(nx * 31.0 + owner * 0.73, ny * 31.0 - owner * 0.91, ownerSeed ^ 0x165667b1);
+  return broad * 0.5 + middle * (0.34 + detail * 0.08) + fine * (0.16 + detail * 0.42);
+}
+function roughenAssignment(grid: Grid, cells: number[], assignment: Assignment, count: number, irregularity: number, balance: number, noiseSeed: number): Assignment {
+  const wild = Math.pow(clamp((irregularity - 0.34) / 0.66, 0, 1), 1.2);
+  if (wild <= 0.001) return assignment;
+  let current = assignment;
+  const target = cells.length / count, passes = 3 + Math.round(wild * 10 + wild * wild * 12);
+  const offsets = [[1,0],[-1,0],[0,1],[0,-1]] as const;
+  for (let pass = 0; pass < passes; pass += 1) {
+    const nextOwners = current.owners.slice();
+    let changed = 0;
+    for (const index of cells) {
+      const owner = current.owners[index]; if (owner < 0) continue;
+      const x = index % grid.width, y = Math.floor(index / grid.width);
+      const neighborOwners: number[] = [];
+      let ownSupport = 0;
+      for (const [dx, dy] of offsets) {
+        const nx = x + dx, ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= grid.width || ny >= grid.height) continue;
+        const neighbor = current.owners[ny * grid.width + nx];
+        if (neighbor === owner) ownSupport += 1;
+        else if (neighbor >= 0 && !neighborOwners.includes(neighbor)) neighborOwners.push(neighbor);
+      }
+      if (!neighborOwners.length || ownSupport <= 2 || current.counts[owner] <= target * 0.48) continue;
+      const ownerField = boundaryField(x, y, owner, irregularity, grid, noiseSeed);
+      let bestOwner = owner, bestAdvantage = 0;
+      for (const candidate of neighborOwners) {
+        let candidateSupport = 0;
+        for (const [dx, dy] of offsets) {
+          const nx = x + dx, ny = y + dy;
+          if (nx < 0 || ny < 0 || nx >= grid.width || ny >= grid.height) continue;
+          if (current.owners[ny * grid.width + nx] === candidate) candidateSupport += 1;
+        }
+        if (!candidateSupport) continue;
+        const fieldDelta = boundaryField(x, y, candidate, irregularity, grid, noiseSeed) - ownerField;
+        const candidatePressure = (current.counts[candidate] - target) / Math.max(1, target);
+        const ownerPressure = (current.counts[owner] - target) / Math.max(1, target);
+        const areaPenalty = (candidatePressure - ownerPressure) * (0.12 + balance * 0.24);
+        const supportBias = (candidateSupport - ownSupport) * (0.025 * (1 - wild));
+        const advantage = fieldDelta * (0.82 + wild * 0.75) + supportBias - areaPenalty;
+        if (advantage > bestAdvantage) { bestAdvantage = advantage; bestOwner = candidate; }
+      }
+      const threshold = 0.25 - wild * 0.19;
+      if (bestOwner !== owner && bestAdvantage > threshold) { nextOwners[index] = bestOwner; changed += 1; }
+    }
+    if (!changed) break;
+    current = recomputeAssignment(grid, cells, nextOwners, count);
+  }
+  return current;
 }
 function rebalanceSeeds(grid: Grid, cells: number[], seeds: Seed[], irregularity: number, balance: number, noiseSeed: number) {
   const total = cells.length, target = total / seeds.length;
@@ -212,7 +284,7 @@ function rebalanceSeeds(grid: Grid, cells: number[], seeds: Seed[], irregularity
     }
     assignment = assignCells(grid, cells, seeds, irregularity, noiseSeed);
   }
-  return assignment;
+  return roughenAssignment(grid, cells, assignment, seeds.length, irregularity, balance, noiseSeed);
 }
 
 function hasCell(mask: Uint8Array, width: number, height: number, x: number, y: number) { return x >= 0 && y >= 0 && x < width && y < height && mask[y * width + x] === 1; }
@@ -278,7 +350,7 @@ function geometryFromMask(grid: Grid, mask: Uint8Array): JsonMapGeometry | null 
 export function autoSubdividePolygon(parent: JsonMapGeometry, options: AutoSubdivisionOptions): AutoSubdivisionResult | null {
   if (!["Polygon", "MultiPolygon"].includes(parent.type)) return null;
   const count = clamp(Math.round(options.count), 2, 24), seedValue = Math.max(1, Math.round(options.seed ?? 1));
-  const irregularity = clamp(options.irregularity ?? 0.7, 0, 1), balance = clamp(options.balance ?? 0.82, 0, 1), maxSide = clamp(Math.round(options.maxSide ?? 420), 256, 720);
+  const irregularity = clamp(options.irregularity ?? 0.72, 0, 1), balance = clamp(options.balance ?? 0.82, 0, 1), maxSide = clamp(Math.round(options.maxSide ?? 420), 256, 720);
   const grid = createGrid(parent, maxSide); if (!grid) return null;
   const cells = landCells(grid); if (cells.length < count * 40) return null;
   const random = mulberry32(seedValue), seeds = chooseSeeds(grid, cells, count, random);
