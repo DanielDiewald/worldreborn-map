@@ -56,7 +56,7 @@ export default async function AdminMapPage({
       <div>
         <div className="breadcrumb"><Link href={`/admin/projects/${projectId}`}>{project.name}</Link><span>/</span><strong>Map</strong></div>
         <h1>{selected.name}</h1>
-        <p>Marker platzieren, verschieben, mit Lore verknüpfen, in Layer gliedern und gezielt für Spieler freigeben.</p>
+        <p>Marker platzieren und mit Lore verknüpfen. Länder, Regionen, Straßen und Flüsse werden im OpenLayers Vector Studio gezeichnet.</p>
       </div>
       <div className="row wrap-row">
         {maps.length>1?<form method="get" className="row">
@@ -65,6 +65,7 @@ export default async function AdminMapPage({
           </select>
           <button className="button ghost">Öffnen</button>
         </form>:null}
+        <Link className="button primary" href={`/admin/projects/${projectId}/map/studio?mapId=${selected.map_id}`}>Vector Studio</Link>
         <Link className="button ghost" href={`/admin/projects/${projectId}/map/maps`}>Maps</Link>
         <Link className="button ghost" href={`/admin/projects/${projectId}/map/markers?mapId=${selected.map_id}`}>Marker verwalten</Link>
         <Link className="button ghost" href={`/admin/projects/${projectId}/settings`}>Map Settings</Link>
