@@ -54,7 +54,7 @@ export function ProvinceDividerTool({ projectId, mapId, map, row, hasProvinceChi
   const [targetKind, setTargetKind] = useState<TargetKind>(initialTarget);
   const [count, setCount] = useState(6);
   const [seed, setSeed] = useState(() => Math.max(1, Number(row.feature_id) % 100000 + 17));
-  const [irregularity, setIrregularity] = useState(0.7);
+  const [irregularity, setIrregularity] = useState(0.75);
   const [balance, setBalance] = useState(0.84);
   const [namePrefix, setNamePrefix] = useState(TARGET_LABEL[initialTarget]);
   const [preview, setPreview] = useState<AutoSubdivisionResult | null>(null);
@@ -224,6 +224,7 @@ export function ProvinceDividerTool({ projectId, mapId, map, row, hasProvinceChi
 
   const smallest = preview ? Math.min(...preview.shares) * 100 : 0;
   const largest = preview ? Math.max(...preview.shares) * 100 : 0;
+  const organicityLabel = irregularity >= 0.975 ? "Extrem" : irregularity >= 0.8 ? "Wild" : irregularity >= 0.45 ? "Natürlich" : "Geordnet";
 
   return <aside className={`${styles.createPanel} ${styles.glass}`} style={{ width: 370 }}>
     <div className={styles.panelHeader}>
@@ -244,19 +245,20 @@ export function ProvinceDividerTool({ projectId, mapId, map, row, hasProvinceChi
         <label className={styles.field}>Anzahl<div className="row" style={{ gap: 8 }}><input type="range" min="2" max="24" step="1" value={count} disabled={saving} onChange={(event) => { setCount(Number(event.target.value)); invalidatePreview(); }}/><input type="number" min="2" max="24" value={count} disabled={saving} style={{ width: 72 }} onChange={(event) => { setCount(Math.max(2, Math.min(24, Number(event.target.value) || 2))); invalidatePreview(); }}/></div></label>
         <label className={styles.field}>Namenspräfix<input value={namePrefix} disabled={saving} maxLength={160} onChange={(event) => setNamePrefix(event.target.value)} placeholder={TARGET_LABEL[targetKind]}/></label>
         <label className={styles.field}>Gleichmäßigkeit <span className={styles.colorValue}>{Math.round(balance * 100)}%</span><input type="range" min="0" max="1" step="0.05" value={balance} disabled={saving} onChange={(event) => { setBalance(Number(event.target.value)); invalidatePreview(); }}/></label>
-        <label className={styles.field}>Grenzorganik <span className={styles.colorValue}>{Math.round(irregularity * 100)}%</span><input type="range" min="0" max="1" step="0.05" value={irregularity} disabled={saving} onChange={(event) => { setIrregularity(Number(event.target.value)); invalidatePreview(); }}/></label>
+        <label className={styles.field}>Grenzorganik <span className={styles.colorValue}>{organicityLabel} · {Math.round(irregularity * 100)}%</span><input type="range" min="0" max="1" step="0.025" value={irregularity} disabled={saving} onChange={(event) => { setIrregularity(Number(event.target.value)); invalidatePreview(); }}/></label>
         <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>
-          <button type="button" className="button ghost" disabled={saving} onClick={() => applyOrganicPreset(0.25)}>Geordnet</button>
-          <button type="button" className="button ghost" disabled={saving} onClick={() => applyOrganicPreset(0.7)}>Natürlich</button>
-          <button type="button" className="button ghost" disabled={saving} onClick={() => applyOrganicPreset(0.95)}>Wild</button>
+          <button type="button" className="button ghost" disabled={saving} onClick={() => applyOrganicPreset(0.2)}>Geordnet</button>
+          <button type="button" className="button ghost" disabled={saving} onClick={() => applyOrganicPreset(0.62)}>Natürlich</button>
+          <button type="button" className="button ghost" disabled={saving} onClick={() => applyOrganicPreset(0.86)}>Wild</button>
+          <button type="button" className="button ghost" disabled={saving} onClick={() => applyOrganicPreset(1)}>Extrem</button>
         </div>
-        <small className={styles.panelText}>Grenzorganik verzerrt die inneren Grenzen mit einem zusammenhängenden mehrstufigen Feld. Dadurch entstehen geschwungene, unterschiedlich lange Grenzverläufe statt gerader Voronoi-Speichen.</small>
+        <small className={styles.panelText}>Ab hoher Grenzorganik werden die Innenkanten zusätzlich lokal verschoben. „Wild“ erzeugt deutlich geschwungene Grenzen; „Extrem“ fügt kleinere Buchten, Vorsprünge und ungleichmäßige Abschnitte hinzu, ohne Lücken zwischen den Teilgebieten zu erzeugen.</small>
         <label className={styles.field}>Seed<input type="number" min="1" max="2147483647" value={seed} disabled={saving} onChange={(event) => { setSeed(Math.max(1, Number(event.target.value) || 1)); invalidatePreview(); }}/></label>
         <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>
           <button type="button" className="button primary" disabled={previewing || saving || locked} onClick={() => void generateAutoPreview()}>{previewing ? "Berechnet …" : preview ? "Vorschau neu berechnen" : "Vorschau erzeugen"}</button>
           <button type="button" className="button ghost" disabled={previewing || saving || locked} onClick={randomize}>↻ Andere Verteilung</button>
         </div>
-        {preview ? <div className={styles.drawHint}><strong>{preview.parts.length} Teilgebiete bereit.</strong><br/>Flächenanteile ca. {smallest.toFixed(1)}–{largest.toFixed(1)} %. Seed {preview.seed}. Die farbige Vorschau wird noch nicht gespeichert.</div> : <div className={styles.drawHint}>Die Parent-Fläche wird vollständig und ohne absichtliche Lücken aufgeteilt. Inseln können als MultiPolygon einem Teilgebiet zugeordnet werden.</div>}
+        {preview ? <div className={styles.drawHint}><strong>{preview.parts.length} Teilgebiete bereit.</strong><br/>Flächenanteile ca. {smallest.toFixed(1)}–{largest.toFixed(1)} %. Seed {preview.seed}. Grenzorganik: {organicityLabel}. Die farbige Vorschau wird noch nicht gespeichert.</div> : <div className={styles.drawHint}>Die Parent-Fläche wird vollständig und ohne absichtliche Lücken aufgeteilt. Inseln können als MultiPolygon einem Teilgebiet zugeordnet werden.</div>}
         <button type="button" className={`button primary ${styles.primaryAction}`} disabled={!preview || saving || locked || !namePrefix.trim()} onClick={() => void saveAutoSubdivision()}>{saving ? `${count} Teilgebiete werden gespeichert …` : `${count} ${targetOptions.find((option) => option.id === targetKind)?.label ?? "Teilgebiete"} speichern`}</button>
         <small className={styles.panelText}>Bereits gezeichnete polygonale Untergebiete blockieren die Automatik. Vorhandene direkt zugeordnete Städte/Punkte werden beim Speichern automatisch dem räumlich passenden neuen Teilgebiet zugeordnet.</small>
       </>}
