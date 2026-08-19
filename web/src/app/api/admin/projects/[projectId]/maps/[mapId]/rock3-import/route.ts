@@ -12,7 +12,7 @@ export async function POST(request:Request,{params}:{params:Promise<{projectId:s
     const form=await request.formData();
     const files=form.getAll("files").filter((value):value is File=>value instanceof File&&value.size>0);
     if(!files.length)return NextResponse.json({error:"Keine Rock-3-Bilder ausgewählt."},{status:400});
-    const result=await importRock3Files(projectId,mapId,files,{setSatelliteAsBase:form.get("setSatelliteAsBase")!=="false"});
+    const result=await importRock3Files(projectId,mapId,files,{setSatelliteAsBase:form.get("setSatelliteAsBase")==="true"});
     return NextResponse.json(result,{status:201});
   }catch(error){return NextResponse.json({error:error instanceof Error?error.message:"Rock-3-Import fehlgeschlagen."},{status:400});}
 }
