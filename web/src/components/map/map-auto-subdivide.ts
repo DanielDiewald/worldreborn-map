@@ -4,7 +4,7 @@ type Ring = MapCoordinate[];
 type Polygon = Ring[];
 type Edge = { start: [number, number]; end: [number, number]; dir: 0 | 1 | 2 | 3 };
 type Grid = { width: number; height: number; extent: MapExtent; mask: Uint8Array };
-type Seed = { x: number; y: number; weight: number; phase: number };
+type Seed = { x: number; y: number; weight: number; phase: number; angle: number; stretch: number };
 
 export type AutoSubdivisionOptions = {
   count: number;
@@ -112,10 +112,48 @@ function landCells(grid: Grid) {
 function cellPoint(index: number, width: number): MapCoordinate { return [index % width, Math.floor(index / width)]; }
 function squaredDistance(a: MapCoordinate, b: MapCoordinate) { const dx = a[0] - b[0], dy = a[1] - b[1]; return dx * dx + dy * dy; }
 
+function hashNoise(x: number, y: number, seed: number) {
+  let value = Math.imul(x | 0, 374761393) ^ Math.imul(y | 0, 668265263) ^ Math.imul(seed | 0, 1442695041);
+  value = Math.imul(value ^ (value >>> 13), 1274126177);
+  value ^= value >>> 16;
+  return ((value >>> 0) / 4294967295) * 2 - 1;
+}
+function smoothStep(value: number) { return value * value * (3 - 2 * value); }
+function valueNoise(x: number, y: number, seed: number) {
+  const x0 = Math.floor(x), y0 = Math.floor(y), tx = smoothStep(x - x0), ty = smoothStep(y - y0);
+  const a = hashNoise(x0, y0, seed), b = hashNoise(x0 + 1, y0, seed), c = hashNoise(x0, y0 + 1, seed), d = hashNoise(x0 + 1, y0 + 1, seed);
+  const top = a + (b - a) * tx, bottom = c + (d - c) * tx;
+  return top + (bottom - top) * ty;
+}
+function fractalNoise(x: number, y: number, seed: number) {
+  let value = 0, amplitude = 0.56, frequency = 1, normalizer = 0;
+  for (let octave = 0; octave < 4; octave += 1) {
+    value += valueNoise(x * frequency, y * frequency, seed + octave * 1013) * amplitude;
+    normalizer += amplitude;
+    amplitude *= 0.5;
+    frequency *= 2.03;
+  }
+  return value / Math.max(1e-9, normalizer);
+}
+function organicWarp(x: number, y: number, irregularity: number, grid: Grid, noiseSeed: number): MapCoordinate {
+  if (irregularity <= 0.001) return [x, y];
+  const maxDimension = Math.max(grid.width, grid.height);
+  const nx = x / maxDimension, ny = y / maxDimension;
+  const coarseX = fractalNoise(nx * 3.15 + 11.7, ny * 3.15 - 4.9, noiseSeed ^ 0x4f1bbcdc);
+  const coarseY = fractalNoise(nx * 3.15 - 8.2, ny * 3.15 + 14.3, noiseSeed ^ 0x7f4a7c15);
+  const fineX = fractalNoise(nx * 6.4 + coarseY * 0.8, ny * 6.4 + coarseX * 0.8, noiseSeed ^ 0x2c9277b5);
+  const fineY = fractalNoise(nx * 6.4 - coarseX * 0.8, ny * 6.4 + coarseY * 0.8, noiseSeed ^ 0x165667b1);
+  const amplitude = maxDimension * (0.045 * irregularity + 0.085 * irregularity * irregularity);
+  return [
+    x + amplitude * (coarseX * 0.7 + fineX * 0.3),
+    y + amplitude * (coarseY * 0.7 + fineY * 0.3),
+  ];
+}
+
 function chooseSeeds(grid: Grid, cells: number[], count: number, random: () => number) {
   const seeds: Seed[] = [];
   const first = cellPoint(cells[Math.floor(random() * cells.length)], grid.width);
-  seeds.push({ x: first[0], y: first[1], weight: 1, phase: random() * Math.PI * 2 });
+  seeds.push({ x: first[0], y: first[1], weight: 1, phase: random() * Math.PI * 2, angle: random() * Math.PI, stretch: 0.72 + random() * 0.72 });
   const sampleCount = Math.min(cells.length, 3000);
   while (seeds.length < count) {
     let bestPoint = first, bestScore = -1;
@@ -123,22 +161,28 @@ function chooseSeeds(grid: Grid, cells: number[], count: number, random: () => n
       const point = cellPoint(cells[Math.floor(random() * cells.length)], grid.width);
       let nearest = Number.POSITIVE_INFINITY;
       for (const seed of seeds) nearest = Math.min(nearest, squaredDistance(point, [seed.x, seed.y]));
-      const score = nearest * (0.92 + random() * 0.16);
+      const score = nearest * (0.9 + random() * 0.2);
       if (score > bestScore) { bestScore = score; bestPoint = point; }
     }
-    seeds.push({ x: bestPoint[0], y: bestPoint[1], weight: 1, phase: random() * Math.PI * 2 });
+    seeds.push({ x: bestPoint[0], y: bestPoint[1], weight: 1, phase: random() * Math.PI * 2, angle: random() * Math.PI, stretch: 0.72 + random() * 0.72 });
   }
   return seeds;
 }
-function warpedPoint(x: number, y: number, irregularity: number, phase: number, grid: Grid): MapCoordinate {
-  if (irregularity <= 0.001) return [x, y];
-  const scale = Math.max(grid.width, grid.height) * 0.035 * irregularity;
-  const f = 0.035;
-  const wx = x + scale * (Math.sin(y * f + phase) * 0.62 + Math.sin((x + y) * f * 0.57 + phase * 1.7) * 0.38);
-  const wy = y + scale * (Math.sin(x * f * 0.83 + phase * 0.71) * 0.58 + Math.sin((x - y) * f * 0.51 + phase * 1.13) * 0.42);
-  return [wx, wy];
+function organicDistance(point: MapCoordinate, seed: Seed, irregularity: number, grid: Grid, noiseSeed: number, seedIndex: number) {
+  const warped = organicWarp(point[0], point[1], irregularity, grid, noiseSeed);
+  const dx = warped[0] - seed.x, dy = warped[1] - seed.y;
+  const cosine = Math.cos(seed.angle), sine = Math.sin(seed.angle);
+  const rx = dx * cosine + dy * sine, ry = -dx * sine + dy * cosine;
+  const stretch = 1 + (seed.stretch - 1) * irregularity;
+  const elongated = (rx * rx) / Math.max(0.3, stretch * stretch) + (ry * ry) * Math.max(0.3, stretch * stretch);
+  if (irregularity <= 0.001) return elongated;
+  const maxDimension = Math.max(grid.width, grid.height);
+  const localNoise = fractalNoise((point[0] / maxDimension) * 4.7 + seedIndex * 0.31, (point[1] / maxDimension) * 4.7 - seedIndex * 0.19, noiseSeed + seedIndex * 7919);
+  const angle = Math.atan2(ry, rx);
+  const lobe = Math.sin(angle * 2.15 + seed.phase + localNoise * 1.35);
+  return elongated * (1 + irregularity * 0.085 * lobe);
 }
-function assignCells(grid: Grid, cells: number[], seeds: Seed[], irregularity: number) {
+function assignCells(grid: Grid, cells: number[], seeds: Seed[], irregularity: number, noiseSeed: number) {
   const owners = new Int16Array(grid.mask.length); owners.fill(-1);
   const counts = new Int32Array(seeds.length), sumsX = new Float64Array(seeds.length), sumsY = new Float64Array(seeds.length);
   for (const index of cells) {
@@ -146,18 +190,16 @@ function assignCells(grid: Grid, cells: number[], seeds: Seed[], irregularity: n
     let best = 0, bestScore = Number.POSITIVE_INFINITY;
     for (let seedIndex = 0; seedIndex < seeds.length; seedIndex += 1) {
       const seed = seeds[seedIndex];
-      const warped = warpedPoint(x, y, irregularity, seed.phase, grid);
-      const dx = warped[0] - seed.x, dy = warped[1] - seed.y;
-      const score = (dx * dx + dy * dy) / Math.max(0.18, seed.weight);
+      const score = organicDistance([x, y], seed, irregularity, grid, noiseSeed, seedIndex) / Math.max(0.18, seed.weight);
       if (score < bestScore) { bestScore = score; best = seedIndex; }
     }
     owners[index] = best; counts[best] += 1; sumsX[best] += x; sumsY[best] += y;
   }
   return { owners, counts, sumsX, sumsY };
 }
-function rebalanceSeeds(grid: Grid, cells: number[], seeds: Seed[], irregularity: number, balance: number) {
+function rebalanceSeeds(grid: Grid, cells: number[], seeds: Seed[], irregularity: number, balance: number, noiseSeed: number) {
   const total = cells.length, target = total / seeds.length;
-  let assignment = assignCells(grid, cells, seeds, irregularity);
+  let assignment = assignCells(grid, cells, seeds, irregularity, noiseSeed);
   for (let iteration = 0; iteration < 5; iteration += 1) {
     for (let index = 0; index < seeds.length; index += 1) {
       const count = assignment.counts[index];
@@ -170,7 +212,7 @@ function rebalanceSeeds(grid: Grid, cells: number[], seeds: Seed[], irregularity
       const correction = Math.pow(clamp(ratio, 0.55, 1.8), 0.72 * balance);
       seeds[index].weight = clamp(seeds[index].weight * correction, 0.28, 3.8);
     }
-    assignment = assignCells(grid, cells, seeds, irregularity);
+    assignment = assignCells(grid, cells, seeds, irregularity, noiseSeed);
   }
   return assignment;
 }
@@ -238,11 +280,11 @@ function geometryFromMask(grid: Grid, mask: Uint8Array): JsonMapGeometry | null 
 export function autoSubdividePolygon(parent: JsonMapGeometry, options: AutoSubdivisionOptions): AutoSubdivisionResult | null {
   if (!["Polygon", "MultiPolygon"].includes(parent.type)) return null;
   const count = clamp(Math.round(options.count), 2, 24), seedValue = Math.max(1, Math.round(options.seed ?? 1));
-  const irregularity = clamp(options.irregularity ?? 0.42, 0, 1), balance = clamp(options.balance ?? 0.82, 0, 1), maxSide = clamp(Math.round(options.maxSide ?? 420), 256, 720);
+  const irregularity = clamp(options.irregularity ?? 0.7, 0, 1), balance = clamp(options.balance ?? 0.82, 0, 1), maxSide = clamp(Math.round(options.maxSide ?? 420), 256, 720);
   const grid = createGrid(parent, maxSide); if (!grid) return null;
   const cells = landCells(grid); if (cells.length < count * 40) return null;
   const random = mulberry32(seedValue), seeds = chooseSeeds(grid, cells, count, random);
-  const assignment = rebalanceSeeds(grid, cells, seeds, irregularity, balance);
+  const assignment = rebalanceSeeds(grid, cells, seeds, irregularity, balance, seedValue);
   if ([...assignment.counts].some((area) => area < Math.max(12, cells.length * 0.003))) return null;
 
   const parts: JsonMapGeometry[] = [], pixelAreas: number[] = [];
