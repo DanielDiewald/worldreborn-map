@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { AdminShell } from "@/components/admin/admin-shell";
+import { EntityImageFrame } from "@/components/entity-image-frame";
 import { requireAdminSession } from "@/lib/auth/session";
 import { listRaces, type RaceRow } from "@/lib/entities/races";
 import { listProjectMaps } from "@/lib/maps";
@@ -23,9 +24,12 @@ function mapHref(projectId: number, race: RaceRow) {
 }
 
 function preview(race: RaceRow, compact = false) {
-  return <span className={compact ? styles.subAvatar : styles.heroAvatar}>
-    {race.image && race.image !== "noimage" ? <img src={race.image} alt="" loading="lazy"/> : race.name.slice(0, 1).toUpperCase()}
-  </span>;
+  return <EntityImageFrame
+    className={compact ? styles.subAvatar : styles.heroAvatar}
+    src={race.image}
+    fallback={race.name.slice(0, 1).toUpperCase()}
+    alt={`${race.name} – Speziesbild`}
+  />;
 }
 
 function SubspeciesRow({ projectId, race }: { projectId: number; race: RaceRow }) {
