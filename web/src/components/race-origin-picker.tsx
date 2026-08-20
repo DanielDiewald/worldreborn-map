@@ -100,6 +100,8 @@ export function RaceOriginPicker({ maps, initial }: { maps: OriginMap[]; initial
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedMap]);
 
+  const submittedMapId = mode ? mapId : null;
+
   return <fieldset className="image-source-fieldset">
     <legend>Ungefährer Ursprung auf der Karte</legend>
     <div className="field-grid two">
@@ -109,11 +111,11 @@ export function RaceOriginPicker({ maps, initial }: { maps: OriginMap[]; initial
     {selectedMap ? <>
       <div ref={targetRef} style={{ width: "100%", height: 360, borderRadius: 12, overflow: "hidden", border: "1px solid rgba(255,255,255,.12)", background: "#10151d" }}/>
       <div className="row wrap-row" style={{ justifyContent: "space-between", marginTop: 8 }}>
-        <small className="muted">{mode === "xy" && x != null && y != null ? `X ${x} · Y ${y}` : mode === "latlng" && lat != null && lng != null ? `${lat.toFixed(5)}°, ${lng.toFixed(5)}°` : "Noch kein Ursprungspunkt gesetzt."}</small>
+        <small className="muted">{mode === "xy" && x != null && y != null ? `X ${x} · Y ${y}` : mode === "latlng" && lat != null && lng != null ? `${lat.toFixed(5)}°, ${lng.toFixed(5)}°` : "Noch kein Ursprungspunkt gesetzt. Die Kartenauswahl allein wird nicht gespeichert."}</small>
         {mode ? <button type="button" className="button ghost" onClick={() => clearPoint(true)}>Punkt entfernen</button> : null}
       </div>
     </> : null}
-    <input type="hidden" name="originMapId" value={mapId ?? ""}/>
+    <input type="hidden" name="originMapId" value={submittedMapId ?? ""}/>
     <input type="hidden" name="originCoordinateMode" value={mode ?? ""}/>
     <input type="hidden" name="originX" value={x ?? ""}/>
     <input type="hidden" name="originY" value={y ?? ""}/>
