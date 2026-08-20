@@ -28,6 +28,11 @@ const PRESETS = [
 ] as const;
 
 const EMPTY_MARKERS: WorldMapMarker[] = [];
+const SPECIES_VISIBILITY_STORAGE_PREFIX = "worldreborn:map-species-visibility:";
+const VIEWER_CONTENT_FILTERS: Array<{ id: keyof MapContentVisibility; label: string; hint: string; icon: string }> = [
+  ...MAP_CONTENT_FILTERS,
+  { id: "species", label: "Spezies & Ursprünge", hint: "Ursprungspunkte mit Vorschaubildern", icon: "◉" },
+];
 
 type Selection = { label: string; subtitle: string | null; href: string | null; image: string | null; featureId: number | null; markerId: number | null };
 
@@ -115,9 +120,12 @@ export function WorldMapViewer({
   const speciesMarkerCount = useMemo(() => markers.filter((marker) => marker.marker_type === "species").length, [markers]);
   const regularMarkerCount = markers.length - speciesMarkerCount;
 
-  function refreshContentVisibility(next: MapContentVisibility) {
+  function refreshContentVisibility(next: MapContentVisibility, persistSpeciesChoice = false) {
     contentVisibilityRef.current = next;
     setContentVisibility(next);
+    if (persistSpeciesChoice) {
+      try { window.localStorage.setItem(`${SPECIES_VISIBILITY_STORAGE_PREFIX}${mapConfig.mapId}`, next.species ? "1" : "0"); } catch { /* local preference is optional */ }
+    }
     for (const layer of vectorLayers) layerRefs.current.get(Number(layer.layer_id))?.changed();
     markerLayerRef.current?.setVisible(next.markers || next.species);
     markerLayerRef.current?.changed();
@@ -133,7 +141,7 @@ export function WorldMapViewer({
   }
 
   function toggleContent(key: keyof MapContentVisibility, visible: boolean) {
-    refreshContentVisibility({ ...contentVisibilityRef.current, [key]: visible });
+    refreshContentVisibility({ ...contentVisibilityRef.current, [key]: visible }, key === "species");
   }
 
   function focusFeature(id: number) {
@@ -186,9 +194,9 @@ export function WorldMapViewer({
   useEffect(() => {
     try {
       const saved = window.localStorage.getItem(`worldreborn:map-content:${mapConfig.mapId}`);
-      if (!saved) return;
-      const parsed = JSON.parse(saved) as Partial<MapContentVisibility>;
-      const next = { ...DEFAULT_MAP_CONTENT_VISIBILITY, ...parsed };
+      const parsed = saved ? JSON.parse(saved) as Partial<MapContentVisibility> : {};
+      const speciesWasExplicitlyEnabled = window.localStorage.getItem(`${SPECIES_VISIBILITY_STORAGE_PREFIX}${mapConfig.mapId}`) === "1";
+      const next = { ...DEFAULT_MAP_CONTENT_VISIBILITY, ...parsed, species: speciesWasExplicitlyEnabled };
       contentVisibilityRef.current = next;
       setContentVisibility(next);
     } catch { /* local preference is optional */ }
@@ -296,7 +304,7 @@ export function WorldMapViewer({
               const image = feature.get("previewImage") ? String(feature.get("previewImage")) : null;
               const labelStyle = new ol.style.Text({
                 text: label,
-                offsetY: image ? 36 : 29,
+                offsetY: image ? 39 : 29,
                 font: "600 11px system-ui, sans-serif",
                 fill: new ol.style.Fill({ color: "#fff8e6" }),
                 stroke: new ol.style.Stroke({ color: "rgba(8,11,15,.96)", width: 4 }),
@@ -304,10 +312,10 @@ export function WorldMapViewer({
                 padding: [3, 5, 3, 5],
               });
               if (image) {
-                return [
-                  new ol.style.Style({ image: new ol.style.Circle({ radius: 26, fill: new ol.style.Fill({ color: "rgba(14,18,24,.96)" }), stroke: new ol.style.Stroke({ color: "#d4b76e", width: 3 }) }) }),
-                  new ol.style.Style({ image: new ol.style.Icon({ src: image, width: 42, height: 42 }), text: labelStyle }),
-                ];
+                return new ol.style.Style({
+                  image: new ol.style.Icon({ src: image, width: 52, height: 52, anchor: [0.5, 0.5] }),
+                  text: labelStyle,
+                });
               }
               return new ol.style.Style({
                 image: new ol.style.Circle({ radius: 15, fill: new ol.style.Fill({ color: "rgba(37,31,19,.96)" }), stroke: new ol.style.Stroke({ color: "#d4b76e", width: 3 }) }),
@@ -469,10 +477,10 @@ export function WorldMapViewer({
           <div>
             <div className={styles.layerSection}>Karteninhalte</div>
             <div className="row" style={{ gap: 6, padding: "4px 8px 7px" }}>
-              <button type="button" className="button ghost" style={{ minHeight: 28, height: 28, padding: "0 8px", fontSize: 9 }} onClick={() => refreshContentVisibility(allContentVisibility(true))}>Alle an</button>
-              <button type="button" className="button ghost" style={{ minHeight: 28, height: 28, padding: "0 8px", fontSize: 9 }} onClick={() => refreshContentVisibility(allContentVisibility(false))}>Alle aus</button>
+              <button type="button" className="button ghost" style={{ minHeight: 28, height: 28, padding: "0 8px", fontSize: 9 }} onClick={() => refreshContentVisibility(allContentVisibility(true), true)}>Alle an</button>
+              <button type="button" className="button ghost" style={{ minHeight: 28, height: 28, padding: "0 8px", fontSize: 9 }} onClick={() => refreshContentVisibility(allContentVisibility(false), true)}>Alle aus</button>
             </div>
-            {MAP_CONTENT_FILTERS.map((filter) => {
+            {VIEWER_CONTENT_FILTERS.map((filter) => {
               const disabled = filter.id === "markers" ? regularMarkerCount === 0 : filter.id === "species" ? speciesMarkerCount === 0 : false;
               return <div className={styles.layerRow} key={filter.id}>
                 <div className={styles.layerInfo}><strong>{filter.icon} {filter.label}</strong><small>{filter.hint}</small></div>
@@ -491,7 +499,7 @@ export function WorldMapViewer({
 
       {selection ? <aside className={`${styles.inspector} ${styles.glass}`}>
         <div className={styles.panelHeader}><div><span className={styles.kicker}>AUSGEWÄHLT</span><h3 className={styles.panelTitle}>{selection.label}</h3></div><button type="button" className={styles.closeButton} onClick={() => setSelection(null)} aria-label="Auswahl schließen">×</button></div>
-        {selection.image ? <img className={styles.inspectorPreview} src={selection.image} alt=""/> : null}
+        {selection.image ? <img className={styles.inspectorPreview} style={{ aspectRatio: "1 / 1", maxHeight: "none" }} src={selection.image} alt=""/> : null}
         {selection.subtitle ? <p className={styles.inspectorText}>{selection.subtitle}</p> : null}
         <div className={styles.inspectorActions}>{selection.href ? <a className="button primary" href={selection.href}>Details öffnen</a> : null}</div>
       </aside> : null}
