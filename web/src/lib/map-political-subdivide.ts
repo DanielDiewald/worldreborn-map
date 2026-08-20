@@ -3,6 +3,7 @@ import "server-only";
 import type { PoolClient } from "pg";
 import { z } from "zod";
 import { autoSubdividePolygon } from "@/components/map/map-auto-subdivide";
+import { defaultFeaturePresentationStyle, generatePoliticalPalette, normalizeHexColor, type PoliticalPaletteMode } from "@/components/map/map-feature-presentation";
 import { pool } from "@/lib/db";
 
 const subdivisionInputSchema = z.object({
@@ -12,6 +13,8 @@ const subdivisionInputSchema = z.object({
   irregularity: z.coerce.number().min(0).max(1).default(0.7),
   balance: z.coerce.number().min(0).max(1).default(0.82),
   namePrefix: z.string().trim().min(1).max(160),
+  paletteMode: z.enum(["parent", "harmonious", "contrast", "single"]).default("parent"),
+  colorSeed: z.coerce.number().int().min(1).max(2_147_483_647).default(1),
   colors: z.array(z.string().regex(/^#[0-9a-f]{6}$/i)).max(24).default([]),
 });
 
@@ -25,6 +28,7 @@ type ParentRow = {
   label: string;
   geometry: JsonGeometry;
   visibility_mode: "admin_only" | "all_players" | "selected_players";
+  style: Record<string, unknown> | null;
   metadata: Record<string, unknown> | null;
   location_kind: string;
 };
@@ -44,16 +48,6 @@ const ALLOWED_TARGETS: Record<string, TargetKind[]> = {
 };
 
 function isLocked(row: ParentRow) { return row.metadata?.editorLocked === true; }
-function fallbackColor(index: number, count: number) {
-  const hue = Math.round((248 + (index * 310) / Math.max(1, count)) % 360);
-  const saturation = 54 + (index % 3) * 4;
-  const lightness = 52 + (index % 2) * 5;
-  const c = (1 - Math.abs((2 * lightness) / 100 - 1)) * saturation / 100;
-  const h = hue / 60, x = c * (1 - Math.abs((h % 2) - 1)), m = lightness / 100 - c / 2;
-  let rgb: [number, number, number];
-  if (h < 1) rgb = [c, x, 0]; else if (h < 2) rgb = [x, c, 0]; else if (h < 3) rgb = [0, c, x]; else if (h < 4) rgb = [0, x, c]; else if (h < 5) rgb = [x, 0, c]; else rgb = [c, 0, x];
-  return `#${rgb.map((value) => Math.round((value + m) * 255).toString(16).padStart(2, "0")).join("")}`;
-}
 
 function readRing(value: unknown): Coordinate[] | null {
   if (!Array.isArray(value)) return null;
@@ -109,7 +103,7 @@ async function createChildArea(client: PoolClient, options: {
   visibilityMode: ParentRow["visibility_mode"];
   targetKind: TargetKind;
   part: GeneratedPart;
-  generation: { seed: number; irregularity: number; balance: number; index: number; total: number };
+  generation: { seed: number; irregularity: number; balance: number; index: number; total: number; paletteMode: PoliticalPaletteMode; colorSeed: number };
 }) {
   const location = await client.query<{ loc_id: number }>(
     `INSERT INTO locations(camp_id,name,parent_loc_id,location_type,location_kind,description,visibility_mode,map_id,metadata,updated_at)
@@ -119,7 +113,7 @@ async function createChildArea(client: PoolClient, options: {
   );
   const locationId = location.rows[0].loc_id;
   const metadata = {
-    createdIn: "auto-subdivision-v1",
+    createdIn: "auto-subdivision-v2",
     tool: options.targetKind === "province" ? "province" : options.targetKind === "region" ? "region" : "district",
     parentLocationId: options.parentLocationId,
     sourceParentFeatureId: options.parentFeatureId,
@@ -127,11 +121,12 @@ async function createChildArea(client: PoolClient, options: {
     editorLocked: false,
     autoSubdivision: options.generation,
   };
+  const style = defaultFeaturePresentationStyle(options.targetKind, options.part.color, options.part.geometry.type);
   const feature = await client.query<{ feature_id: string }>(
     `INSERT INTO map_features(project_id,map_id,layer_id,geometry_type,geometry,entity_type,entity_id,label,short_description,visibility_mode,style,metadata)
      VALUES($1,$2,$3,$4,$5::jsonb,'location',$6,$7,NULL,$8,$9::jsonb,$10::jsonb)
      RETURNING feature_id`,
-    [options.projectId, options.mapId, options.layerId, options.part.geometry.type, JSON.stringify(options.part.geometry), locationId, options.part.name, options.visibilityMode, JSON.stringify({ fill: options.part.color, stroke: "#ffffff", strokeWidth: 2 }), JSON.stringify(metadata)],
+    [options.projectId, options.mapId, options.layerId, options.part.geometry.type, JSON.stringify(options.part.geometry), locationId, options.part.name, options.visibilityMode, JSON.stringify(style), JSON.stringify(metadata)],
   );
   const featureId = Number(feature.rows[0].feature_id);
   await client.query("UPDATE locations SET map_id=$3,map_feature_id=$4,updated_at=now() WHERE camp_id=$1 AND loc_id=$2", [options.projectId, locationId, options.mapId, featureId]);
@@ -152,7 +147,7 @@ export async function autoSubdividePoliticalFeature(projectId: number, mapId: nu
   try {
     await client.query("BEGIN");
     const parentResult = await client.query<ParentRow>(
-      `SELECT f.feature_id,f.layer_id,f.entity_id,f.label,f.geometry,f.visibility_mode,f.metadata,loc.location_kind
+      `SELECT f.feature_id,f.layer_id,f.entity_id,f.label,f.geometry,f.visibility_mode,f.style,f.metadata,loc.location_kind
          FROM map_features f
          JOIN locations loc ON f.entity_type='location' AND loc.loc_id=f.entity_id AND loc.camp_id=f.project_id AND loc.archived_at IS NULL
          JOIN project_map_layers l ON l.layer_id=f.layer_id AND l.project_id=f.project_id AND l.map_id=f.map_id AND l.layer_type='vector'
@@ -192,17 +187,25 @@ export async function autoSubdividePoliticalFeature(projectId: number, mapId: nu
     });
     if (!generated || generated.parts.length !== data.count) throw new Error("Für diese Form konnte keine stabile automatische Unterteilung erzeugt werden. Versuche weniger Teilgebiete oder eine andere Verteilung.");
 
+    const fallbackPalette = generatePoliticalPalette({
+      baseColor: normalizeHexColor(parent.style?.fill, "#7c6ee6"),
+      count: data.count,
+      mode: data.paletteMode,
+      seed: data.colorSeed,
+    });
     const parts: GeneratedPart[] = generated.parts.map((geometry, index) => ({
       name: `${data.namePrefix} ${index + 1}`,
       geometry,
-      color: data.colors[index] ?? fallbackColor(index, data.count),
+      color: data.colors[index] ?? fallbackPalette[index],
     }));
 
     const created: Array<{ featureId: number; locationId: number; name: string; geometry: JsonGeometry }> = [];
     for (let index = 0; index < parts.length; index += 1) {
       created.push(await createChildArea(client, {
         projectId, mapId, layerId, parentLocationId, parentFeatureId: featureId, visibilityMode: parent.visibility_mode,
-        targetKind: data.targetKind, part: parts[index], generation: { seed: data.seed, irregularity: data.irregularity, balance: data.balance, index, total: parts.length },
+        targetKind: data.targetKind,
+        part: parts[index],
+        generation: { seed: data.seed, irregularity: data.irregularity, balance: data.balance, index, total: parts.length, paletteMode: data.paletteMode, colorSeed: data.colorSeed },
       }));
     }
 
@@ -223,7 +226,7 @@ export async function autoSubdividePoliticalFeature(projectId: number, mapId: nu
     }
 
     await client.query("COMMIT");
-    return { targetKind: data.targetKind, created: created.map(({ geometry: _geometry, ...area }) => area), reassigned, seed: generated.seed };
+    return { targetKind: data.targetKind, created: created.map(({ geometry: _geometry, ...area }) => area), reassigned, seed: generated.seed, colorSeed: data.colorSeed, paletteMode: data.paletteMode };
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
