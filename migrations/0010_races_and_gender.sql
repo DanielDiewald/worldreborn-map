@@ -58,19 +58,24 @@ ALTER TABLE public.npcs
 ALTER TABLE public.charakters
   ALTER COLUMN race TYPE character varying(120);
 
--- Restore the legacy view before doing any data migration. The original dump created view_npc
--- WITH NO DATA; if an installation refreshed it later, refresh it again after recreation.
+-- Restore the legacy view before doing any data migration. pg_get_viewdef may return a trailing
+-- semicolon. Strip it before appending WITH NO DATA; otherwise PostgreSQL sees two statements and
+-- reports a syntax error at DATA. If an installation refreshed the materialized view previously,
+-- refresh it again after recreation.
 DO $$
 DECLARE saved record;
 DECLARE idx record;
+DECLARE clean_definition text;
 BEGIN
   SELECT * INTO saved FROM _worldreborn_0010_view_npc LIMIT 1;
   IF NOT FOUND THEN
     RETURN;
   END IF;
 
+  clean_definition := regexp_replace(saved.definition, ';[[:space:]]*$', '');
+
   IF saved.relkind='m' THEN
-    EXECUTE format('CREATE MATERIALIZED VIEW public.view_npc AS %s WITH NO DATA',saved.definition);
+    EXECUTE format('CREATE MATERIALIZED VIEW public.view_npc AS %s WITH NO DATA',clean_definition);
     EXECUTE format('ALTER MATERIALIZED VIEW public.view_npc OWNER TO %I',saved.owner_name);
     FOR idx IN SELECT definition FROM _worldreborn_0010_view_npc_indexes LOOP
       EXECUTE idx.definition;
@@ -79,7 +84,7 @@ BEGIN
       EXECUTE 'REFRESH MATERIALIZED VIEW public.view_npc';
     END IF;
   ELSE
-    EXECUTE format('CREATE VIEW public.view_npc AS %s',saved.definition);
+    EXECUTE format('CREATE VIEW public.view_npc AS %s',clean_definition);
     EXECUTE format('ALTER VIEW public.view_npc OWNER TO %I',saved.owner_name);
   END IF;
 END $$;
