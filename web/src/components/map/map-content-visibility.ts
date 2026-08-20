@@ -44,7 +44,7 @@ export const DEFAULT_MAP_CONTENT_VISIBILITY: MapContentVisibility = {
   rivers: true,
   roads: true,
   other: true,
-  species: true,
+  species: false,
   markers: true,
   labels: true,
 };
