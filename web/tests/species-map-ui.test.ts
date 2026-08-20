@@ -57,12 +57,24 @@ test("direct species map links reveal the focused origin without changing the sa
   assert.doesNotMatch(viewer, /focusIsSpecies[\s\S]{0,500}SPECIES_VISIBILITY_STORAGE_PREFIX/);
 });
 
-test("world map renders the species preview itself and the inspector keeps a square preview", () => {
+test("species preview markers preserve their source aspect ratio", () => {
   const viewer = read("src/components/map/world-map-viewer.tsx");
   assert.match(viewer, /markerType === "species"/);
-  assert.match(viewer, /new ol\.style\.Icon\(\{ src: image, width: 52, height: 52, anchor: \[0\.5, 0\.5\] \}\)/);
-  assert.doesNotMatch(viewer, /new ol\.style\.Circle\(\{ radius: 26/);
+  assert.match(viewer, /height: SPECIES_MARKER_HEIGHT/);
+  assert.doesNotMatch(viewer, /src: image,[\s\S]{0,120}width:[\s\S]{0,80}height:/);
+  assert.match(viewer, /preserves portrait\/landscape aspect ratios/);
   assert.match(viewer, /aspectRatio: "1 \/ 1"/);
   assert.match(viewer, /previewImage/);
   assert.match(viewer, /Details öffnen/);
+});
+
+test("species markers use resolution-aware vertical collision lanes instead of disappearing", () => {
+  const viewer = read("src/components/map/world-map-viewer.tsx");
+  assert.match(viewer, /SPECIES_COLLISION_RADIUS_PX/);
+  assert.match(viewer, /speciesStackLane/);
+  assert.match(viewer, /Math\.hypot\(dxPixels, dyPixels\)/);
+  assert.match(viewer, /stackIndex \* SPECIES_STACK_GAP/);
+  assert.match(viewer, /displacement: \[0, -stackOffset\]/);
+  assert.match(viewer, /declutterMode: "none"/);
+  assert.match(viewer, /renderBuffer:/);
 });
