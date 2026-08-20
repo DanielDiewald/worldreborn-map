@@ -29,6 +29,20 @@ SET gender = CASE lower(btrim(gender))
 END
 WHERE gender IS NOT NULL AND btrim(gender) <> '';
 
+-- Existing unknown custom values may remain until that person is edited. Every new gender write
+-- from this point on is canonical, including writes made outside the web application.
+CREATE OR REPLACE FUNCTION public.worldreborn_validate_person_gender() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+  IF NEW.gender IS NULL OR NEW.gender NOT IN ('male','female','hermaphrodite') THEN
+    RAISE EXCEPTION 'Person gender must be male, female, or hermaphrodite';
+  END IF;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER npcs_validate_gender
+BEFORE INSERT OR UPDATE OF gender ON public.npcs
+FOR EACH ROW EXECUTE FUNCTION public.worldreborn_validate_person_gender();
+
 CREATE TABLE public.races (
   race_id bigserial PRIMARY KEY,
   project_id integer NOT NULL REFERENCES public.campaigns(camp_id) ON UPDATE CASCADE ON DELETE CASCADE,
@@ -121,6 +135,28 @@ FROM public.charakters c
 JOIN public.npcs n ON n.n_id=c.n_id
 WHERE NULLIF(btrim(c.race),'') IS NULL
 ON CONFLICT DO NOTHING;
+
+-- race_id determines the canonical race. The text column remains a readable compatibility shadow.
+CREATE OR REPLACE FUNCTION public.worldreborn_validate_character_race() RETURNS trigger
+LANGUAGE plpgsql AS $$
+DECLARE race_project integer;
+DECLARE race_name character varying(120);
+DECLARE person_project integer;
+BEGIN
+  IF NEW.race_id IS NULL THEN
+    RETURN NEW;
+  END IF;
+  SELECT project_id,name INTO race_project,race_name FROM public.races WHERE race_id=NEW.race_id AND archived_at IS NULL;
+  SELECT camp_id INTO person_project FROM public.npcs WHERE n_id=NEW.n_id;
+  IF race_project IS NULL OR person_project IS NULL OR race_project<>person_project THEN
+    RAISE EXCEPTION 'Character race must belong to the same project as the person';
+  END IF;
+  NEW.race := race_name;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER charakters_validate_race
+BEFORE INSERT OR UPDATE OF n_id,race_id ON public.charakters
+FOR EACH ROW EXECUTE FUNCTION public.worldreborn_validate_character_race();
 
 UPDATE public.charakters c
 SET race_id = r.race_id,
