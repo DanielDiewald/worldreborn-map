@@ -25,6 +25,10 @@ function previewImage(value: string | null) {
   return image;
 }
 
+function managedImage(value: string | null) {
+  return Boolean(value && /^\/api\/media\/\d+$/.test(value));
+}
+
 export async function listRaceOriginMarkers(projectId: number, mapId: number): Promise<WorldMapMarker[]> {
   const result = await pool.query<RaceOriginRow>(
     `SELECT r.race_id,r.name,p.name AS parent_name,r.description,r.image,
@@ -49,11 +53,11 @@ export async function listRaceOriginMarkers(projectId: number, mapId: number): P
     const hierarchy = race.parent_name ? `${race.parent_name} → ${race.name}` : race.name;
     const kind = race.parent_name ? "Subspezies" : "Spezies";
     const description = race.description?.trim();
-    const image = previewImage(race.image);
-    const crop = image && race.crop_source_image === image ? normalizeEntityImageCrop(race.crop) : null;
+    const original = previewImage(race.image);
+    const usesDerivative = managedImage(original);
+    const image = usesDerivative ? `/api/admin/projects/${projectId}/entity-images/race/${raceId}/avatar` : original;
+    const crop = !usesDerivative && original && race.crop_source_image === original ? normalizeEntityImageCrop(race.crop) : null;
     return {
-      // Database marker ids are positive. Negative ids reserve a collision-free transient namespace
-      // for species origins without duplicating them into map_markers.
       marker_id: -raceId,
       marker_type: "species",
       entity_type: "race",
@@ -66,6 +70,8 @@ export async function listRaceOriginMarkers(projectId: number, mapId: number): P
       x: race.origin_x == null ? null : Number(race.origin_x),
       y: race.origin_y == null ? null : Number(race.origin_y),
       icon: image,
+      // The persistent derivative already contains the saved 1:1 crop. External images still use
+      // the client-side crop metadata because WorldReborn does not download arbitrary remote URLs.
       image_crop: crop,
       label: hierarchy,
       short_description: description ? `${kind} · ${description.slice(0, 220)}` : `${kind} · ungefährer Ursprung`,
