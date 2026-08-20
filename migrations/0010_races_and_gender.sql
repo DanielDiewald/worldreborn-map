@@ -117,7 +117,7 @@ BEFORE INSERT OR UPDATE ON public.races
 FOR EACH ROW EXECUTE FUNCTION public.worldreborn_validate_race_origin_map();
 
 ALTER TABLE public.charakters
-  ADD COLUMN race_id bigint REFERENCES public.races(race_id) ON UPDATE CASCADE ON DELETE SET NULL;
+  ADD COLUMN race_id bigint REFERENCES public.races(race_id) ON UPDATE CASCADE ON DELETE RESTRICT;
 
 -- Every existing authored race becomes a first-class project race. The spelling is preserved.
 INSERT INTO public.races(project_id, name, metadata)
@@ -155,7 +155,7 @@ BEGIN
   RETURN NEW;
 END $$;
 CREATE TRIGGER charakters_validate_race
-BEFORE INSERT OR UPDATE OF n_id,race_id ON public.charakters
+BEFORE INSERT OR UPDATE ON public.charakters
 FOR EACH ROW EXECUTE FUNCTION public.worldreborn_validate_character_race();
 
 UPDATE public.charakters c
@@ -166,6 +166,8 @@ JOIN public.races r ON r.project_id=n.camp_id AND r.archived_at IS NULL
 WHERE n.n_id=c.n_id
   AND lower(btrim(r.name)) = lower(COALESCE(NULLIF(btrim(c.race),''),'Unbekannt'));
 
+ALTER TABLE public.charakters
+  ALTER COLUMN race_id SET NOT NULL;
 CREATE INDEX charakters_race_id_idx ON public.charakters(race_id);
 
 COMMIT;
