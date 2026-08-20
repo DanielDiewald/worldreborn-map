@@ -15,11 +15,11 @@ export type MapSelectionScope = "all" | "countries" | "provinces" | "regions" | 
 
 export const MAP_SELECTION_SCOPES: Array<{ id: MapSelectionScope; label: string; hint: string }> = [
   { id: "all", label: "Alles", hint: "Alle sichtbaren Kartenobjekte auswählen" },
-  { id: "countries", label: "Länder", hint: "Nur Länder auswählen" },
-  { id: "provinces", label: "Provinzen", hint: "Nur Provinzen auswählen" },
-  { id: "regions", label: "Regionen", hint: "Nur Regionen auswählen" },
-  { id: "places", label: "Orte", hint: "Städte, Dörfer und Orte auswählen" },
-  { id: "lines", label: "Linien", hint: "Flüsse und Straßen auswählen" },
+  { id: "countries", label: "Länder", hint: "Länder auswählen" },
+  { id: "provinces", label: "Provinzen", hint: "Provinzen auswählen; Länder bleiben als Parent-Flächen anklickbar" },
+  { id: "regions", label: "Regionen", hint: "Regionen auswählen; Länder bleiben als Parent-Flächen anklickbar" },
+  { id: "places", label: "Orte", hint: "Städte, Dörfer und Orte auswählen; Länder bleiben als Parent-Flächen anklickbar" },
+  { id: "lines", label: "Linien", hint: "Flüsse und Straßen auswählen; Länder bleiben als Parent-Flächen anklickbar" },
 ];
 
 export const MAP_CONTENT_FILTERS: Array<{ id: keyof MapContentVisibility; label: string; hint: string; icon: string }> = [
@@ -71,7 +71,10 @@ export function featureContentCategory(row: Pick<WorldMapFeature, "geometry" | "
 export function selectionScopeMatchesFeature(scope: MapSelectionScope, row: Pick<WorldMapFeature, "geometry" | "location_kind" | "metadata">) {
   if (scope === "all") return true;
   const category = featureContentCategory(row);
-  if (scope === "countries") return category === "countries";
+  // Countries are structural parent objects in the editor. Keeping them selectable prevents a
+  // stale child/line selection scope from making an otherwise visible country impossible to edit.
+  if (category === "countries") return true;
+  if (scope === "countries") return false;
   if (scope === "provinces") return category === "provinces";
   if (scope === "regions") return category === "regions";
   if (scope === "places") return category === "settlements" || category === "places";
