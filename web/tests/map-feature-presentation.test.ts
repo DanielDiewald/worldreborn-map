@@ -86,6 +86,17 @@ test("stored label presentation is resolved independently from the map label tex
   assert.equal(presentation.labelMaxZoom, 8);
 });
 
+test("presentation survives the same JSON roundtrip used by JSONB persistence and reload", () => {
+  const stored = defaultFeaturePresentationStyle("province", "#7183c4");
+  const reloadedStyle = JSON.parse(JSON.stringify(stored)) as Record<string, unknown>;
+  const presentation = resolveMapFeaturePresentation(feature("province", reloadedStyle));
+  assert.equal(presentation.fill, "#7183c4");
+  assert.equal(presentation.labelVisible, true);
+  assert.equal(presentation.labelSize, 14);
+  assert.equal(presentation.strokeWidth, 1.6);
+  assert.equal(presentation.autoStroke, true);
+});
+
 test("auto stroke follows fill while manual stroke remains independent", () => {
   const auto = resolveMapFeaturePresentation(feature("country", { fill: "#6879c9", stroke: "#ffffff", autoStroke: true }));
   const manual = resolveMapFeaturePresentation(feature("country", { fill: "#6879c9", stroke: "#123456", autoStroke: false }));
