@@ -43,10 +43,12 @@ export async function updateRaceAction(projectId: number, raceId: number, formDa
   await requireAdminSession(); await assertProject(projectId);
   const current = await getRace(projectId, raceId); if (!current) throw new Error("Spezies wurde nicht gefunden.");
   const source = await resolveEntityImageSource(projectId, formData, { current: current.image, title: current.name });
-  await updateRace(projectId, raceId, raceInput(formData, source.image, source.mediaId));
+  const imageMediaId = source.uploaded ? source.mediaId : source.removed || source.image !== current.image ? null : current.imageMediaId;
+  await updateRace(projectId, raceId, raceInput(formData, source.image, imageMediaId));
   revalidatePath(`/admin/projects/${projectId}/races`);
   revalidatePath(`/admin/projects/${projectId}/races/${raceId}`);
   revalidatePath(`/admin/projects/${projectId}/npcs`);
+  revalidatePath(`/admin/projects/${projectId}/characters`);
 }
 
 export async function archiveRaceAction(projectId: number, raceId: number) {
