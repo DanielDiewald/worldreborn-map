@@ -23,6 +23,14 @@ test("player map is fed by server-filtered visible features", () => {
   assert.doesNotMatch(playerPage, /listMapFeatures\(/);
 });
 
+test("hidden map labels are redacted before player delivery and direct map-label search", () => {
+  const mapFeatures = source("src/lib/map-features.ts");
+  const playerSearch = source("src/app/api/player/maps/[mapId]/search/route.ts");
+  assert.match(mapFeatures, /style->>'labelVisible'/);
+  assert.match(mapFeatures, /THEN '' ELSE f\.label END AS label/);
+  assert.match(playerSearch, /if\(!feature\.label\)continue/);
+});
+
 test("presentation API has an explicit safe patch path and optional lore sync", () => {
   const route = source("src/app/api/admin/projects/[projectId]/maps/[mapId]/features/[featureId]/route.ts");
   const patches = source("src/lib/map-feature-patches.ts");
@@ -35,5 +43,5 @@ test("presentation API has an explicit safe patch path and optional lore sync", 
 test("map label search and lore location search remain separate searchable sources", () => {
   const search = source("src/lib/map-spatial-search.ts");
   assert.match(search, /f\.label ILIKE/);
-  assert.match(search, /loc\.name ILIKE/);
+  assert.match(search, /l\.name ILIKE/);
 });
