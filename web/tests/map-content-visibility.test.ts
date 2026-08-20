@@ -21,7 +21,7 @@ test("all visibility switch controls every semantic category", () => {
   assert.ok(Object.values(shown).every((value) => value === true));
 });
 
-test("selection scopes are independent from visibility categories", () => {
+test("selection scopes keep structural countries selectable while filtering child objects", () => {
   const country = { geometry, location_kind: "country", metadata: {} };
   const province = { geometry, location_kind: "province", metadata: {} };
   const city = { geometry: { type: "Point", coordinates: [1, 1] }, location_kind: "city", metadata: {} };
@@ -29,6 +29,10 @@ test("selection scopes are independent from visibility categories", () => {
   assert.equal(selectionScopeMatchesFeature("countries", country), true);
   assert.equal(selectionScopeMatchesFeature("countries", province), false);
   assert.equal(selectionScopeMatchesFeature("provinces", province), true);
+  assert.equal(selectionScopeMatchesFeature("provinces", country), true);
+  assert.equal(selectionScopeMatchesFeature("regions", country), true);
+  assert.equal(selectionScopeMatchesFeature("places", country), true);
+  assert.equal(selectionScopeMatchesFeature("lines", country), true);
   assert.equal(selectionScopeMatchesFeature("places", city), true);
   assert.equal(selectionScopeMatchesFeature("lines", river), true);
   assert.equal(selectionScopeMatchesFeature("all", province), true);
