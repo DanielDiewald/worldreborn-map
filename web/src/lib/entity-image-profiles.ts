@@ -2,15 +2,18 @@ import "server-only";
 
 import { pool } from "@/lib/db";
 import { normalizeEntityImageCrop, type EntityImageCrop } from "@/lib/entity-image-crop";
+import { deleteEntityAvatarDerivative, ensureEntityAvatarDerivative } from "@/lib/entity-image-derivatives";
 
-export type CroppableEntityType = "person" | "race";
+export type CroppableEntityType = "person" | "race" | "culture";
 export type EntityImageProfile = { sourceImage: string; crop: EntityImageCrop };
 
 async function assertTarget(projectId: number, entityType: CroppableEntityType, entityId: number) {
   if (!Number.isSafeInteger(projectId) || projectId <= 0 || !Number.isSafeInteger(entityId) || entityId <= 0) throw new Error("Ungültiges Bildprofil-Ziel.");
   const query = entityType === "person"
     ? "SELECT 1 FROM npcs WHERE camp_id=$1 AND n_id=$2 AND archived_at IS NULL"
-    : "SELECT 1 FROM races WHERE project_id=$1 AND race_id=$2 AND archived_at IS NULL";
+    : entityType === "race"
+      ? "SELECT 1 FROM races WHERE project_id=$1 AND race_id=$2 AND archived_at IS NULL"
+      : "SELECT 1 FROM cultures WHERE project_id=$1 AND culture_id=$2 AND archived_at IS NULL";
   const result = await pool.query(query, [projectId, entityId]);
   if (result.rowCount !== 1) throw new Error("Das Bildprofil gehört nicht zu dieser Welt.");
 }
@@ -47,6 +50,8 @@ export async function saveEntityImageProfile(projectId: number, entityType: Crop
   const image = sourceImage.trim();
   if (!crop || !image || image === "noimage" || image === "/noimg.jpg") {
     await pool.query("DELETE FROM entity_image_crops WHERE project_id=$1 AND entity_type=$2 AND entity_id=$3", [projectId, entityType, entityId]);
+    if (!image || image === "noimage" || image === "/noimg.jpg") await deleteEntityAvatarDerivative(projectId, entityType, entityId);
+    else await ensureEntityAvatarDerivative(projectId, entityType, entityId);
     return;
   }
   const normalized = normalizeEntityImageCrop(crop);
@@ -58,4 +63,5 @@ export async function saveEntityImageProfile(projectId: number, entityType: Crop
      DO UPDATE SET source_image=EXCLUDED.source_image,crop=EXCLUDED.crop,updated_at=now()`,
     [projectId, entityType, entityId, image, JSON.stringify(normalized)],
   );
+  await ensureEntityAvatarDerivative(projectId, entityType, entityId);
 }
