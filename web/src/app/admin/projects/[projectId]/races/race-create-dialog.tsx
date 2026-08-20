@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ImageSourceInput } from "@/components/image-source-input";
+import { ProfileImageEditor } from "@/components/profile-image-editor";
 import { RaceOriginPicker } from "@/components/race-origin-picker";
 import { SubmitButton } from "@/components/submit-button";
 import { createRaceAction } from "./actions";
@@ -57,9 +57,9 @@ export function RaceCreateDialog({ projectId, rootSpecies, maps }: { projectId: 
             </div>
           </section>
           <section className={styles.formSection}>
-            <div className={styles.sectionTitle}><span>03</span><div><strong>Codex & Erscheinung</strong><small>Beschreibung, Vorschaubild und ungefährer Ursprung</small></div></div>
+            <div className={styles.sectionTitle}><span>03</span><div><strong>Codex & Erscheinung</strong><small>Beschreibung, Originalbild, optionaler 1:1-Profilzuschnitt und ungefährer Ursprung</small></div></div>
             <label>Biologische / taxonomische Beschreibung<textarea name="description" className="large-textarea" maxLength={100000} placeholder="Aussehen, Anatomie, Evolution, Herkunft, besondere körperliche Merkmale …"/></label>
-            <ImageSourceInput label="Vorschaubild der Spezies / Subspezies"/>
+            <ProfileImageEditor label="Vorschaubild der Spezies / Subspezies"/>
             <RaceOriginPicker maps={maps}/>
           </section>
           <div className={styles.dialogActions}><button type="button" className="button ghost" onClick={() => setOpen(false)}>Abbrechen</button><SubmitButton className="primary" pendingLabel="Datensatz wird angelegt …">Spezies anlegen</SubmitButton></div>
