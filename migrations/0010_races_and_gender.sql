@@ -240,6 +240,13 @@ CREATE TRIGGER charakters_validate_race
 BEFORE INSERT OR UPDATE ON public.charakters
 FOR EACH ROW EXECUTE FUNCTION public.worldreborn_validate_character_race();
 
+-- Migration 0004 installs DEFERRABLE constraint triggers on npcs/charakters. The gender update
+-- above may already have queued deferred person-subtype events, and the race backfill below would
+-- queue events on charakters. PostgreSQL refuses ALTER TABLE while such trigger events are pending.
+-- Flush all currently deferred constraints now and keep them immediate for the rest of this
+-- transaction so the subsequent SET NOT NULL is safe without disabling any integrity checks.
+SET CONSTRAINTS ALL IMMEDIATE;
+
 UPDATE public.charakters c
 SET race_id = r.race_id,
     race = r.name
