@@ -3,10 +3,9 @@ import { notFound } from "next/navigation";
 import { AdminShell } from "@/components/admin/admin-shell";
 import { EntityImageFrame } from "@/components/entity-image-frame";
 import { requireAdminSession } from "@/lib/auth/session";
-import { listRaces, type RaceRow } from "@/lib/entities/races";
-import { listEntityImageProfiles, type EntityImageProfile } from "@/lib/entity-image-profiles";
 import { listProjectMaps } from "@/lib/maps";
 import { getProject } from "@/lib/projects";
+import { listRaceRegistry, type RaceRegistryRow } from "@/lib/race-registry";
 import { RaceCreateDialog } from "./race-create-dialog";
 import styles from "./races.module.css";
 
@@ -19,49 +18,44 @@ function mapOptions(rows: Awaited<ReturnType<typeof listProjectMaps>>) {
   }));
 }
 
-function mapHref(projectId: number, race: RaceRow) {
+function mapHref(projectId: number, race: RaceRegistryRow) {
   if (!race.originMapId) return null;
   return `/admin/projects/${projectId}/map?mapId=${race.originMapId}&markerId=${-race.raceId}`;
 }
 
-function cropFor(race: RaceRow, profiles: Map<number, EntityImageProfile>) {
-  const profile = profiles.get(race.raceId);
-  return profile?.sourceImage === race.image ? profile.crop : null;
-}
-
-function preview(race: RaceRow, profiles: Map<number, EntityImageProfile>, compact = false) {
+function preview(race: RaceRegistryRow, compact = false) {
   return <EntityImageFrame
     className={compact ? styles.subAvatar : styles.heroAvatar}
+    mode="thumbnail"
     src={race.image}
-    crop={cropFor(race, profiles)}
     fallback={race.name.slice(0, 1).toUpperCase()}
     alt={`${race.name} – Speziesbild`}
   />;
 }
 
-function SubspeciesRow({ projectId, race, profiles }: { projectId: number; race: RaceRow; profiles: Map<number, EntityImageProfile> }) {
+function SubspeciesRow({ projectId, race }: { projectId: number; race: RaceRegistryRow }) {
   const originHref = mapHref(projectId, race);
   return <div className={styles.subspeciesRow}>
     <Link className={styles.subspeciesMain} href={`/admin/projects/${projectId}/races/${race.raceId}`}>
-      {preview(race, profiles, true)}
+      {preview(race, true)}
       <span className={styles.subspeciesText}><strong>{race.name}</strong><small>{race.characterCount} Character{race.characterCount === 1 ? "" : "s"}{race.originMapName ? ` · Ursprung: ${race.originMapName}` : " · kein Ursprung gesetzt"}</small></span>
     </Link>
     <div className={styles.subspeciesActions}>{originHref ? <Link className="button ghost" href={originHref}>⌖ Karte</Link> : null}<Link className="button ghost" href={`/admin/projects/${projectId}/races/${race.raceId}/image`}>Bild zuschneiden</Link><Link className="button ghost" href={`/admin/projects/${projectId}/races/${race.raceId}`}>Öffnen</Link></div>
   </div>;
 }
 
-function SpeciesCard({ projectId, race, children, profiles }: { projectId: number; race: RaceRow; children: RaceRow[]; profiles: Map<number, EntityImageProfile> }) {
+function SpeciesCard({ projectId, race, children }: { projectId: number; race: RaceRegistryRow; children: RaceRegistryRow[] }) {
   const originHref = mapHref(projectId, race);
   return <article className={styles.speciesCard}>
     <div className={styles.speciesHeader}>
-      <Link href={`/admin/projects/${projectId}/races/${race.raceId}`} className={styles.speciesIdentity}>{preview(race, profiles)}<span><span className={styles.typeLabel}>HAUPT-SPEZIES</span><strong>{race.name}</strong><small>{children.length} Subspezies · {race.characterCount} direkte Character</small></span></Link>
+      <Link href={`/admin/projects/${projectId}/races/${race.raceId}`} className={styles.speciesIdentity}>{preview(race)}<span><span className={styles.typeLabel}>HAUPT-SPEZIES</span><strong>{race.name}</strong><small>{children.length} Subspezies · {race.characterCount} direkte Character</small></span></Link>
       <div className={styles.cardActions}>{originHref ? <Link className="button ghost" href={originHref}>⌖ Auf Karte</Link> : null}<Link className="button ghost" href={`/admin/projects/${projectId}/races/${race.raceId}/image`}>Bild zuschneiden</Link><Link className="button" href={`/admin/projects/${projectId}/races/${race.raceId}`}>Codex öffnen</Link></div>
     </div>
     <p className={styles.description}>{race.description?.trim() ? race.description.slice(0, 260) : "Noch keine biologische oder taxonomische Beschreibung hinterlegt."}</p>
-    <div className={styles.metaRow}>{race.masculineName ? <span className="soft-label">♂ {race.masculineName}</span> : null}{race.feminineName ? <span className="soft-label">♀ {race.feminineName}</span> : null}{race.hermaphroditeName ? <span className="soft-label">⚥ {race.hermaphroditeName}</span> : null}{race.originMapName ? <span className="soft-label">⌖ {race.originMapName}</span> : <span className="soft-label">Kein Ursprung</span>}{cropFor(race,profiles)?<span className="soft-label">1:1-Profilzuschnitt</span>:null}</div>
+    <div className={styles.metaRow}>{race.masculineName ? <span className="soft-label">♂ {race.masculineName}</span> : null}{race.feminineName ? <span className="soft-label">♀ {race.feminineName}</span> : null}{race.hermaphroditeName ? <span className="soft-label">⚥ {race.hermaphroditeName}</span> : null}{race.originMapName ? <span className="soft-label">⌖ {race.originMapName}</span> : <span className="soft-label">Kein Ursprung</span>}{race.hasCrop ? <span className="soft-label">1:1-Profilzuschnitt</span> : null}</div>
     <div className={styles.childrenBlock}>
       <div className={styles.childrenHeader}><div><strong>Subspezies</strong><small>Erben Biologie und Merkmale von {race.name}, solange sie nichts überschreiben.</small></div><span>{children.length}</span></div>
-      {children.length ? <div className={styles.subspeciesList}>{children.map((child) => <SubspeciesRow key={child.raceId} projectId={projectId} race={child} profiles={profiles}/>)}</div> : <div className={styles.emptyChildren}>Noch keine Subspezies angelegt.</div>}
+      {children.length ? <div className={styles.subspeciesList}>{children.map((child) => <SubspeciesRow key={child.raceId} projectId={projectId} race={child}/>)}</div> : <div className={styles.emptyChildren}>Noch keine Subspezies angelegt.</div>}
     </div>
   </article>;
 }
@@ -70,15 +64,14 @@ export default async function RacesPage({ params }: { params: Promise<{ projectI
   await requireAdminSession();
   const projectId = Number.parseInt((await params).projectId, 10);
   if (!Number.isSafeInteger(projectId) || projectId <= 0) notFound();
-  const [project, races, mapsRaw] = await Promise.all([getProject(projectId), listRaces(projectId), listProjectMaps(projectId)]);
+  const [project, races, mapsRaw] = await Promise.all([getProject(projectId), listRaceRegistry(projectId), listProjectMaps(projectId)]);
   if (!project) notFound();
-  const imageProfiles = await listEntityImageProfiles(projectId, "race", races.map((race) => race.raceId));
 
   const maps = mapOptions(mapsRaw);
   const unknownRace = races.find((race) => race.isUnknown) ?? null;
   const rootSpecies = races.filter((race) => race.parentRaceId == null && !race.isUnknown);
   const subspecies = races.filter((race) => race.parentRaceId != null);
-  const byParent = new Map<number, RaceRow[]>();
+  const byParent = new Map<number, RaceRegistryRow[]>();
   for (const race of subspecies) byParent.set(race.parentRaceId!, [...(byParent.get(race.parentRaceId!) ?? []), race]);
   const originCount = races.filter((race) => !race.isUnknown && race.originMapId != null).length;
   const characterCount = races.reduce((sum, race) => sum + race.characterCount, 0);
@@ -97,11 +90,11 @@ export default async function RacesPage({ params }: { params: Promise<{ projectI
       <div className={styles.statCard}><span>Characters</span><strong>{characterCount}</strong><small>aktuell zugeordnet</small></div>
     </section>
 
-    {unknownRace ? <section className={styles.unknownBar}><div>{preview(unknownRace, imageProfiles, true)}<span><strong>Unbekannt</strong><small>System-Fallback für Characters, deren Spezies noch nicht feststeht.</small></span></div><div className="row"><Link className="button ghost" href={`/admin/projects/${projectId}/races/${unknownRace.raceId}/image`}>Bild zuschneiden</Link><Link className="button ghost" href={`/admin/projects/${projectId}/races/${unknownRace.raceId}`}>Fallback öffnen</Link></div></section> : null}
+    {unknownRace ? <section className={styles.unknownBar}><div>{preview(unknownRace, true)}<span><strong>Unbekannt</strong><small>System-Fallback für Characters, deren Spezies noch nicht feststeht.</small></span></div><div className="row"><Link className="button ghost" href={`/admin/projects/${projectId}/races/${unknownRace.raceId}/image`}>Bild zuschneiden</Link><Link className="button ghost" href={`/admin/projects/${projectId}/races/${unknownRace.raceId}`}>Fallback öffnen</Link></div></section> : null}
 
     <section className={styles.registrySection}>
-      <div className={styles.registryHeading}><div><span className="panel-kicker">TAXONOMISCHER CODEX</span><h2>{rootSpecies.length} Haupt-Spezies · {subspecies.length} Subspezies</h2><p>Subspezies stehen direkt unter ihrer Haupt-Spezies. Kartenursprünge öffnen den jeweiligen Punkt auf der Weltkarte.</p></div><RaceCreateDialog projectId={projectId} rootSpecies={rootSpecies} maps={maps}/></div>
-      {rootSpecies.length === 0 ? <div className="panel-card empty-state large"><strong>Noch keine Haupt-Spezies</strong><span>Öffne „Spezies / Subspezies anlegen“, um den ersten biologischen Datensatz zu erstellen.</span></div> : <div className={styles.speciesStack}>{rootSpecies.map((race) => <SpeciesCard key={race.raceId} projectId={projectId} race={race} children={byParent.get(race.raceId) ?? []} profiles={imageProfiles}/>)}</div>}
+      <div className={styles.registryHeading}><div><span className="panel-kicker">TAXONOMISCHER CODEX</span><h2>{rootSpecies.length} Haupt-Spezies · {subspecies.length} Subspezies</h2><p>Counts werden pro Registry-Lauf aggregiert und verwaltete Bilder als kleine Avatar-Derivate ausgeliefert.</p></div><RaceCreateDialog projectId={projectId} rootSpecies={rootSpecies} maps={maps}/></div>
+      {rootSpecies.length === 0 ? <div className="panel-card empty-state large"><strong>Noch keine Haupt-Spezies</strong><span>Öffne „Spezies / Subspezies anlegen“, um den ersten biologischen Datensatz zu erstellen.</span></div> : <div className={styles.speciesStack}>{rootSpecies.map((race) => <SpeciesCard key={race.raceId} projectId={projectId} race={race} children={byParent.get(race.raceId) ?? []}/>)}</div>}
     </section>
   </AdminShell>;
 }
