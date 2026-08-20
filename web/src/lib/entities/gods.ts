@@ -21,7 +21,10 @@ function godFilter(projectId:number,filters:GodListFilters={}){
   return {values,where};
 }
 
-const godSelect=`SELECT g.g_id AS god_id,n.n_id AS person_id,n.n_id AS npc_id,n.name,n.image,g.title,g.domain,g.faction,n.title AS person_title,n.species,n.profession,n.public_description,n.visibility_mode FROM gods g JOIN npcs n ON n.n_id=g.n_id`;
+const godSelect=`SELECT g.g_id AS god_id,n.n_id AS person_id,n.n_id AS npc_id,n.name,
+  CASE WHEN n.image ~ '^/api/media/[0-9]+$' THEN '/api/admin/projects/'||n.camp_id||'/entity-images/person/'||n.n_id||'/avatar' ELSE n.image END AS image,
+  g.title,g.domain,g.faction,n.title AS person_title,n.species,n.profession,LEFT(n.public_description,1200) AS public_description,n.visibility_mode
+  FROM gods g JOIN npcs n ON n.n_id=g.n_id`;
 
 export async function listGods(projectId:number){const r=await pool.query<GodListRow>(`${godSelect} WHERE n.camp_id=$1 AND n.archived_at IS NULL ORDER BY n.name,n.n_id`,[projectId]);return r.rows;}
 
