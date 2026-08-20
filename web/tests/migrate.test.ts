@@ -3,7 +3,7 @@ import test from "node:test";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { normalizeHistoricalMigrationSql } from "../scripts/migrate";
+import { migrationErrorMessage, normalizeHistoricalMigrationSql } from "../scripts/migrate";
 
 const here=path.dirname(fileURLToPath(import.meta.url));
 const repoRoot=path.resolve(here,"../..");
@@ -27,6 +27,14 @@ test("race migration preserves legacy view_npc around typmod changes",()=>{
   assert.match(sql,/DROP MATERIALIZED VIEW public\.view_npc/);
   assert.match(sql,/ALTER COLUMN gender TYPE character varying\(20\)/);
   assert.match(sql,/ALTER COLUMN race TYPE character varying\(120\)/);
-  assert.match(sql,/CREATE MATERIALIZED VIEW public\.view_npc AS/);
+  assert.match(sql,/regexp_replace\(saved\.definition, ';\[\[:space:\]\]\*\$', ''\)/);
+  assert.match(sql,/CREATE MATERIALIZED VIEW public\.view_npc AS %s WITH NO DATA/);
   assert.match(sql,/REFRESH MATERIALIZED VIEW public\.view_npc/);
+});
+
+test("migration errors include the exact migration filename",()=>{
+  assert.equal(
+    migrationErrorMessage("0010_races_and_gender.sql",new Error('syntax error at or near "DATA"')),
+    'Migration 0010_races_and_gender.sql failed: syntax error at or near "DATA"',
+  );
 });
