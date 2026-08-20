@@ -1,6 +1,7 @@
 import "server-only";
 
 import { pool } from "@/lib/db";
+import { normalizeEntityImageCrop } from "@/lib/entity-image-crop";
 import type { WorldMapMarker } from "@/components/map/map-types";
 
 type RaceOriginRow = {
@@ -9,6 +10,8 @@ type RaceOriginRow = {
   parent_name: string | null;
   description: string | null;
   image: string | null;
+  crop_source_image: string | null;
+  crop: unknown;
   origin_coordinate_mode: "xy" | "latlng" | null;
   origin_x: number | null;
   origin_y: number | null;
@@ -25,10 +28,13 @@ function previewImage(value: string | null) {
 export async function listRaceOriginMarkers(projectId: number, mapId: number): Promise<WorldMapMarker[]> {
   const result = await pool.query<RaceOriginRow>(
     `SELECT r.race_id,r.name,p.name AS parent_name,r.description,r.image,
+            pic.source_image AS crop_source_image,pic.crop,
             r.origin_coordinate_mode,r.origin_x,r.origin_y,r.origin_lat,r.origin_lng
        FROM races r
        LEFT JOIN races p
          ON p.project_id=r.project_id AND p.race_id=r.parent_race_id AND p.archived_at IS NULL
+       LEFT JOIN entity_image_crops pic
+         ON pic.project_id=r.project_id AND pic.entity_type='race' AND pic.entity_id=r.race_id
       WHERE r.project_id=$1
         AND r.origin_map_id=$2
         AND r.archived_at IS NULL
@@ -43,6 +49,8 @@ export async function listRaceOriginMarkers(projectId: number, mapId: number): P
     const hierarchy = race.parent_name ? `${race.parent_name} → ${race.name}` : race.name;
     const kind = race.parent_name ? "Subspezies" : "Spezies";
     const description = race.description?.trim();
+    const image = previewImage(race.image);
+    const crop = image && race.crop_source_image === image ? normalizeEntityImageCrop(race.crop) : null;
     return {
       // Database marker ids are positive. Negative ids reserve a collision-free transient namespace
       // for species origins without duplicating them into map_markers.
@@ -57,7 +65,8 @@ export async function listRaceOriginMarkers(projectId: number, mapId: number): P
       lng: race.origin_lng == null ? null : Number(race.origin_lng),
       x: race.origin_x == null ? null : Number(race.origin_x),
       y: race.origin_y == null ? null : Number(race.origin_y),
-      icon: previewImage(race.image),
+      icon: image,
+      image_crop: crop,
       label: hierarchy,
       short_description: description ? `${kind} · ${description.slice(0, 220)}` : `${kind} · ungefährer Ursprung`,
       layer: "species_origins",
