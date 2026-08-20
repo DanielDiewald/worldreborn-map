@@ -18,7 +18,7 @@ export const npcs = pgTable("npcs", {
   campId: integer("camp_id").notNull(),
   name: varchar("name", { length: 100 }).notNull(),
   notes: text("notes").notNull(),
-  gender: varchar("gender", { length: 10 }).notNull(),
+  gender: varchar("gender", { length: 20 }).notNull(),
   image: text("image").notNull(),
   publicDescription: text("public_description"),
   adminNotes: text("admin_notes"),
