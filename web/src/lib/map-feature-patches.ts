@@ -3,14 +3,13 @@ import "server-only";
 import { z } from "zod";
 import { pool } from "@/lib/db";
 import { assertNoOverlapWithinBatch, assertNoPoliticalOverlapForFeature } from "@/lib/map-political-overlap-guard";
-import { mapFeaturePresentationPatchSchema } from "@/lib/map-presentation-schema";
+import { mapFeaturePresentationPatchSchema, mapPresentationStylePatchSchema } from "@/lib/map-presentation-schema";
 
 const geometrySchema = z.object({
   type: z.enum(["Point", "LineString", "Polygon", "MultiPoint", "MultiLineString", "MultiPolygon"]),
   coordinates: z.unknown(),
 }).passthrough();
 
-const styleSchema = z.record(z.string(), z.unknown());
 const metadataPatchSchema = z.record(z.string(), z.unknown());
 const topologyPeerSchema = z.object({
   featureId: z.coerce.number().int().positive(),
@@ -129,7 +128,7 @@ export async function patchMapFeatureGeometryBatch(
 }
 
 export async function patchMapFeatureStyle(projectId: number, mapId: number, featureId: number, style: unknown) {
-  const parsed = styleSchema.parse(style);
+  const parsed = mapPresentationStylePatchSchema.parse(style);
   const result = await pool.query(
     `UPDATE map_features
         SET style=COALESCE(style,'{}'::jsonb)||$4::jsonb,updated_at=now()
