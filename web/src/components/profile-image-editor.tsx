@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { EntityImageFrame, hasEntityImage } from "@/components/entity-image-frame";
 import type { EntityImageCrop } from "@/lib/entity-image-crop";
 
@@ -46,14 +46,14 @@ export function ProfileImageEditor({
     });
   }
 
-  function startDrag(event: React.PointerEvent<HTMLDivElement>) {
+  function startDrag(event: ReactPointerEvent<HTMLDivElement>) {
     if (!cropEnabled || !cropStageRef.current) return;
     const rect = cropStageRef.current.getBoundingClientRect();
     dragRef.current = { pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY, cropX: crop.x, cropY: crop.y, width: rect.width, height: rect.height };
     event.currentTarget.setPointerCapture(event.pointerId);
   }
 
-  function moveDrag(event: React.PointerEvent<HTMLDivElement>) {
+  function moveDrag(event: ReactPointerEvent<HTMLDivElement>) {
     const drag = dragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
     const dx = event.clientX - drag.clientX;
@@ -65,7 +65,7 @@ export function ProfileImageEditor({
     }));
   }
 
-  function endDrag(event: React.PointerEvent<HTMLDivElement>) {
+  function endDrag(event: ReactPointerEvent<HTMLDivElement>) {
     if (dragRef.current?.pointerId === event.pointerId) dragRef.current = null;
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
   }
