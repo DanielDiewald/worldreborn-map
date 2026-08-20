@@ -90,6 +90,20 @@ function rasterize(items: Polygon[], width: number, height: number) {
   }
   return mask;
 }
+function dilateMask(mask: Uint8Array, width: number, height: number, radius: number) {
+  const safeRadius = clamp(Math.round(radius), 0, 8);
+  if (!safeRadius) return mask;
+  const result = mask.slice();
+  for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) {
+    if (!mask[y * width + x]) continue;
+    for (let dy = -safeRadius; dy <= safeRadius; dy += 1) for (let dx = -safeRadius; dx <= safeRadius; dx += 1) {
+      const nextX = x + dx, nextY = y + dy;
+      if (nextX < 0 || nextY < 0 || nextX >= width || nextY >= height) continue;
+      result[nextY * width + nextX] = 1;
+    }
+  }
+  return result;
+}
 function hasCell(mask: Uint8Array, width: number, height: number, x: number, y: number) { return x >= 0 && y >= 0 && x < width && y < height && mask[y * width + x] === 1; }
 function boundaryEdges(mask: Uint8Array, width: number, height: number) {
   const edges: Edge[] = [];
@@ -172,7 +186,7 @@ function groupRings(rings: Ring[]) {
   return result;
 }
 
-export function fitCountryAroundExistingCountries(subject: JsonMapGeometry, blockers: JsonMapGeometry[], maxSide = 2600): CountryFitResult | null {
+export function fitCountryAroundExistingCountries(subject: JsonMapGeometry, blockers: JsonMapGeometry[], maxSide = 2600, clearancePixels = 0): CountryFitResult | null {
   if (!["Polygon", "MultiPolygon"].includes(subject.type)) return null;
   const subjectExtent = geometryExtent(subject); if (!subjectExtent) return null;
   const validBlockers = blockers.filter((geometry) => {
@@ -192,11 +206,12 @@ export function fitCountryAroundExistingCountries(subject: JsonMapGeometry, bloc
     const mask = rasterize(pixelPolygons(blocker, grid), grid.width, grid.height);
     for (let index = 0; index < blockerMask.length; index += 1) if (mask[index]) blockerMask[index] = 1;
   }
+  const protectedBlockerMask = dilateMask(blockerMask, grid.width, grid.height, clearancePixels);
   const resultMask = new Uint8Array(subjectMask.length);
   let keptPixels = 0, removedPixels = 0;
   for (let index = 0; index < subjectMask.length; index += 1) {
     if (!subjectMask[index]) continue;
-    if (blockerMask[index]) { removedPixels += 1; continue; }
+    if (protectedBlockerMask[index]) { removedPixels += 1; continue; }
     resultMask[index] = 1; keptPixels += 1;
   }
   if (keptPixels < 12) return null;
