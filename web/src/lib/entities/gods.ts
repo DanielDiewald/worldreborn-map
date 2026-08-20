@@ -5,7 +5,7 @@ import { pool } from "@/lib/db";
 import { clampPagination, paginatedResult, type Pagination } from "@/lib/pagination";
 
 const visibility=z.enum(["admin_only","all_players","selected_players"]);
-const godSchema=z.object({name:z.string().trim().min(1).max(100),gender:z.string().trim().min(1).max(10).default("unknown"),image:z.string().trim().max(4000).optional(),publicDescription:z.string().max(100000).optional(),adminNotes:z.string().max(100000).optional(),species:z.string().trim().max(80).optional(),profession:z.string().trim().max(120).optional(),personTitle:z.string().trim().max(120).optional(),godTitle:z.string().trim().max(30).optional(),faction:z.string().trim().max(30).optional(),domain:z.string().trim().max(30).optional(),visibilityMode:visibility.default("admin_only")});
+const godSchema=z.object({name:z.string().trim().min(1).max(100),gender:z.enum(["male","female","hermaphrodite"]),image:z.string().trim().max(4000).optional(),publicDescription:z.string().max(100000).optional(),adminNotes:z.string().max(100000).optional(),species:z.string().trim().max(80).optional(),profession:z.string().trim().max(120).optional(),personTitle:z.string().trim().max(120).optional(),godTitle:z.string().trim().max(30).optional(),faction:z.string().trim().max(30).optional(),domain:z.string().trim().max(30).optional(),visibilityMode:visibility.default("admin_only")});
 
 export type GodListFilters={query?:string;visibility?:"admin_only"|"all_players"|"selected_players"};
 type GodListRow={god_id:number;person_id:number;npc_id:number;name:string;image:string;title:string;domain:string;faction:string;person_title:string|null;species:string|null;profession:string|null;public_description:string|null;visibility_mode:string};
