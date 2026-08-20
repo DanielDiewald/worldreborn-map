@@ -35,9 +35,11 @@ export function RaceOriginPicker({ maps, initial }: { maps: OriginMap[]; initial
   const [lng, setLng] = useState<number | null>(initial?.lng ?? null);
   const targetRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<any>(null);
+  const markerSourceRef = useRef<any>(null);
   const selectedMap = useMemo(() => maps.find((map) => map.mapId === mapId) ?? null, [maps, mapId]);
 
   function clearPoint(keepMap = true) {
+    markerSourceRef.current?.clear();
     setMode(null); setX(null); setY(null); setLat(null); setLng(null);
     if (!keepMap) setMapId(null);
   }
@@ -45,7 +47,7 @@ export function RaceOriginPicker({ maps, initial }: { maps: OriginMap[]; initial
   useEffect(() => {
     let active = true;
     if (!selectedMap || !targetRef.current) {
-      mapRef.current?.setTarget(undefined); mapRef.current = null;
+      mapRef.current?.setTarget(undefined); mapRef.current = null; markerSourceRef.current = null;
       return;
     }
     void ensureOpenLayers().then((ol) => {
@@ -66,7 +68,7 @@ export function RaceOriginPicker({ maps, initial }: { maps: OriginMap[]; initial
         view = new ol.View({ center: ol.proj.fromLonLat([selectedMap.centerLng ?? 0, selectedMap.centerLat ?? 0]), zoom: Math.max(selectedMap.minZoom, 2), minZoom: selectedMap.minZoom, maxZoom: selectedMap.maxZoom });
       }
 
-      const markerSource = new ol.source.Vector();
+      const markerSource = new ol.source.Vector(); markerSourceRef.current = markerSource;
       const markerLayer = new ol.layer.Vector({ source: markerSource, zIndex: 1000, style: new ol.style.Style({ image: new ol.style.Circle({ radius: 8, fill: new ol.style.Fill({ color: "rgba(235,196,104,.9)" }), stroke: new ol.style.Stroke({ color: "#17130b", width: 3 }) }) }) });
       layers.push(markerLayer);
       const map = new ol.Map({ target: targetRef.current, layers, view });
@@ -93,7 +95,7 @@ export function RaceOriginPicker({ maps, initial }: { maps: OriginMap[]; initial
         }
       });
     });
-    return () => { active = false; mapRef.current?.setTarget(undefined); mapRef.current = null; };
+    return () => { active = false; markerSourceRef.current = null; mapRef.current?.setTarget(undefined); mapRef.current = null; };
     // Coordinates are intentionally not dependencies: clicking moves only the marker in the live map.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedMap]);
