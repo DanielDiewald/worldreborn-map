@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { colorWithAlpha, ensureOpenLayers, mapColor, mediaMapUrl, parseMapBounds } from "./openlayers-runtime";
+import { createMapFeatureStyle } from "./map-feature-presentation";
+import { ensureOpenLayers, mediaMapUrl, parseMapBounds } from "./openlayers-runtime";
 import {
   DEFAULT_MAP_CONTENT_VISIBILITY,
   MAP_CONTENT_FILTERS,
@@ -214,18 +215,23 @@ export function WorldMapViewer({
       for (const layer of vectorLayers) {
         const id = Number(layer.layer_id); defaultVisibility.current.set(id, layer.visible_by_default);
         const source = new ol.source.Vector();
-        const baseFill = mapColor(layer.style?.fill, "#7c6ee6"), baseStroke = mapColor(layer.style?.stroke, "#f5f5f5"), baseWidth = Number(layer.style?.strokeWidth ?? 2);
         const rendered = new ol.layer.Vector({
-          source, zIndex: layer.z_index || 500, visible: layer.visible_by_default, opacity: layer.opacity,
+          source,
+          zIndex: layer.z_index || 500,
+          visible: layer.visible_by_default,
+          opacity: layer.opacity,
+          declutter: true,
           style: (feature: any) => {
-            const category = feature.get("contentCategory") as keyof MapContentVisibility;
-            if (category && !contentVisibilityRef.current[category]) return null;
-            const featureFill = mapColor(feature.get("fill"), baseFill), featureStroke = mapColor(feature.get("stroke"), baseStroke), geometryType = feature.getGeometry()?.getType();
-            return new ol.style.Style({
-              fill: geometryType?.includes("Polygon") ? new ol.style.Fill({ color: colorWithAlpha(featureFill, 0.28) }) : undefined,
-              stroke: new ol.style.Stroke({ color: featureStroke, width: Number(feature.get("strokeWidth") ?? baseWidth) }),
-              image: new ol.style.Circle({ radius: 6, fill: new ol.style.Fill({ color: featureFill }), stroke: new ol.style.Stroke({ color: featureStroke, width: 2 }) }),
-              text: contentVisibilityRef.current.labels && feature.get("label") ? new ol.style.Text({ text: String(feature.get("label")), offsetY: -12, fill: new ol.style.Fill({ color: "#fff" }), stroke: new ol.style.Stroke({ color: "#111", width: 3 }) }) : undefined,
+            const featureId = Number(feature.get("featureId"));
+            const row = featureRows.get(featureId);
+            if (!row || !contentVisibilityRef.current[featureContentCategory(row)]) return null;
+            return createMapFeatureStyle(ol, {
+              row,
+              layerStyle: layer.style,
+              labelsEnabled: contentVisibilityRef.current.labels,
+              zoom: mapRef.current?.getView().getZoom() ?? null,
+              declutterLabels: true,
+              pointRadius: 6,
             });
           },
         });
@@ -233,7 +239,7 @@ export function WorldMapViewer({
         for (const row of features.filter((item) => Number(item.layer_id) === id)) {
           try {
             const featureId = Number(row.feature_id);
-            const feature = geojson.readFeature({ type: "Feature", geometry: row.geometry, properties: { featureId, label: row.label, subtitle: row.short_description, entityType: row.entity_type, entityId: row.entity_id, contentCategory: featureContentCategory(row), fill: row.style?.fill, stroke: row.style?.stroke, strokeWidth: row.style?.strokeWidth } });
+            const feature = geojson.readFeature({ type: "Feature", geometry: row.geometry, properties: { featureId, label: row.label, subtitle: row.short_description, entityType: row.entity_type, entityId: row.entity_id, contentCategory: featureContentCategory(row) } });
             source.addFeature(feature); featureRefs.current.set(featureId, feature);
           } catch { /* malformed legacy geometry stays isolated */ }
         }
