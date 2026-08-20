@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import "./entity-images.css";
+import "./profile-images.css";
 
 export const metadata: Metadata = {
   title: "WorldReborn",
