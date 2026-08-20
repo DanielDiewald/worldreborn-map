@@ -45,13 +45,13 @@ test("changing only the color seed does not require or mutate geometry", () => {
 });
 
 test("political hierarchy gets visually distinct default border weights", () => {
-  const country = defaultFeaturePresentationStyle("country", "#6678b8") as Record<string, number>;
-  const region = defaultFeaturePresentationStyle("region", "#6678b8") as Record<string, number>;
-  const province = defaultFeaturePresentationStyle("province", "#6678b8") as Record<string, number>;
-  assert.ok(country.strokeWidth > region.strokeWidth);
-  assert.ok(region.strokeWidth > province.strokeWidth);
-  assert.ok(country.labelSize > region.labelSize);
-  assert.ok(region.labelSize > province.labelSize);
+  const country = defaultFeaturePresentationStyle("country", "#6678b8");
+  const region = defaultFeaturePresentationStyle("region", "#6678b8");
+  const province = defaultFeaturePresentationStyle("province", "#6678b8");
+  assert.ok(Number(country.strokeWidth) > Number(region.strokeWidth));
+  assert.ok(Number(region.strokeWidth) > Number(province.strokeWidth));
+  assert.ok(Number(country.labelSize) > Number(region.labelSize));
+  assert.ok(Number(region.labelSize) > Number(province.labelSize));
 });
 
 test("stored label presentation is resolved independently from the map label text", () => {
