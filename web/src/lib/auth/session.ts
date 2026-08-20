@@ -33,12 +33,25 @@ export async function createAdminSession() {
   });
 }
 
-export async function hasValidAdminSession() {
+export async function hasValidAdminSession(options: { touch?: boolean } = {}) {
   const cookieStore = await cookies();
   const token = cookieStore.get(ADMIN_COOKIE)?.value;
   if (!token) return false;
 
   const tokenHash = hashToken(token);
+  if (options.touch === false) {
+    const result = await pool.query<{ session_id: string }>(
+      `SELECT session_id
+         FROM admin_sessions
+        WHERE token_hash = $1
+          AND revoked_at IS NULL
+          AND expires_at > now()
+        LIMIT 1`,
+      [tokenHash],
+    );
+    return result.rowCount === 1;
+  }
+
   const result = await pool.query<{ session_id: string }>(
     `UPDATE admin_sessions
         SET last_seen_at = now()
