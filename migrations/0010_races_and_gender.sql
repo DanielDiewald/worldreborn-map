@@ -3,11 +3,86 @@ BEGIN;
 SET LOCAL lock_timeout = '10s';
 SET LOCAL statement_timeout = '5min';
 
+-- The legacy dump contains public.view_npc as a materialized view. PostgreSQL does not allow
+-- changing the typmod of a base-table column while a view/rule depends on that column. Preserve
+-- the exact legacy SELECT definition (and any materialized-view indexes), remove the view only for
+-- the duration of the column changes, and recreate it before the migration commits.
+CREATE TEMP TABLE _worldreborn_0010_view_npc (
+  relkind "char" NOT NULL,
+  definition text NOT NULL,
+  owner_name text NOT NULL,
+  was_populated boolean NOT NULL
+) ON COMMIT DROP;
+
+INSERT INTO _worldreborn_0010_view_npc(relkind,definition,owner_name,was_populated)
+SELECT c.relkind,
+       pg_get_viewdef(c.oid,true),
+       pg_get_userbyid(c.relowner),
+       CASE WHEN c.relkind='m' THEN c.relispopulated ELSE true END
+FROM pg_class c
+JOIN pg_namespace n ON n.oid=c.relnamespace
+WHERE n.nspname='public'
+  AND c.relname='view_npc'
+  AND c.relkind IN ('v','m');
+
+CREATE TEMP TABLE _worldreborn_0010_view_npc_indexes (
+  definition text NOT NULL
+) ON COMMIT DROP;
+
+INSERT INTO _worldreborn_0010_view_npc_indexes(definition)
+SELECT pg_get_indexdef(i.indexrelid)
+FROM pg_class c
+JOIN pg_namespace n ON n.oid=c.relnamespace
+JOIN pg_index i ON i.indrelid=c.oid
+WHERE n.nspname='public'
+  AND c.relname='view_npc'
+  AND c.relkind='m';
+
+DO $$
+DECLARE saved record;
+BEGIN
+  SELECT * INTO saved FROM _worldreborn_0010_view_npc LIMIT 1;
+  IF NOT FOUND THEN
+    RETURN;
+  END IF;
+  IF saved.relkind='m' THEN
+    EXECUTE 'DROP MATERIALIZED VIEW public.view_npc';
+  ELSE
+    EXECUTE 'DROP VIEW public.view_npc';
+  END IF;
+END $$;
+
 -- The legacy columns were narrow free-text fields. Canonical gender/race values need stable room.
 ALTER TABLE public.npcs
   ALTER COLUMN gender TYPE character varying(20);
 ALTER TABLE public.charakters
   ALTER COLUMN race TYPE character varying(120);
+
+-- Restore the legacy view before doing any data migration. The original dump created view_npc
+-- WITH NO DATA; if an installation refreshed it later, refresh it again after recreation.
+DO $$
+DECLARE saved record;
+DECLARE idx record;
+BEGIN
+  SELECT * INTO saved FROM _worldreborn_0010_view_npc LIMIT 1;
+  IF NOT FOUND THEN
+    RETURN;
+  END IF;
+
+  IF saved.relkind='m' THEN
+    EXECUTE format('CREATE MATERIALIZED VIEW public.view_npc AS %s WITH NO DATA',saved.definition);
+    EXECUTE format('ALTER MATERIALIZED VIEW public.view_npc OWNER TO %I',saved.owner_name);
+    FOR idx IN SELECT definition FROM _worldreborn_0010_view_npc_indexes LOOP
+      EXECUTE idx.definition;
+    END LOOP;
+    IF saved.was_populated THEN
+      EXECUTE 'REFRESH MATERIALIZED VIEW public.view_npc';
+    END IF;
+  ELSE
+    EXECUTE format('CREATE VIEW public.view_npc AS %s',saved.definition);
+    EXECUTE format('ALTER VIEW public.view_npc OWNER TO %I',saved.owner_name);
+  END IF;
+END $$;
 
 -- Normalize values we can identify safely. Unknown legacy values are deliberately preserved
 -- instead of guessing a gender for an existing person.
