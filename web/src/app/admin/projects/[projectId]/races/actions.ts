@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireAdminSession } from "@/lib/auth/session";
+import { pool } from "@/lib/db";
 import {
   RACE_LOCATION_ROLE_OPTIONS,
   RACE_RELATION_OPTIONS,
@@ -32,7 +33,7 @@ function text(formData: FormData, name: string) { return String(formData.get(nam
 function nullableNumber(formData: FormData, name: string) { const raw = text(formData, name); if (!raw) return null; const value = Number(raw); return Number.isFinite(value) ? value : null; }
 function optionalId(formData: FormData, name: string) { const value = nullableNumber(formData, name); return value && Number.isSafeInteger(value) && value > 0 ? Math.trunc(value) : null; }
 async function assertProject(projectId: number) { if (!Number.isSafeInteger(projectId) || projectId <= 0 || !(await getProject(projectId))) throw new Error("Invalid project context"); }
-function refreshRace(projectId: number, raceId: number) { revalidatePath(`/admin/projects/${projectId}/races`); revalidatePath(`/admin/projects/${projectId}/races/${raceId}`); revalidatePath(`/admin/projects/${projectId}/cultures`); }
+function refreshRace(projectId: number, raceId: number) { revalidatePath(`/admin/projects/${projectId}/races`); revalidatePath(`/admin/projects/${projectId}/races/${raceId}`); revalidatePath(`/admin/projects/${projectId}/races/${raceId}/image`); revalidatePath(`/admin/projects/${projectId}/cultures`); revalidatePath(`/admin/projects/${projectId}/map`); }
 
 function raceInput(formData: FormData, image: string, imageMediaId: number | null) {
   const originMapId = nullableNumber(formData, "originMapId"); const originCoordinateMode = text(formData, "originCoordinateMode"); const parentRaceId = nullableNumber(formData, "parentRaceId");
@@ -41,6 +42,7 @@ function raceInput(formData: FormData, image: string, imageMediaId: number | nul
 
 export async function createRaceAction(projectId: number, formData: FormData) { await requireAdminSession(); await assertProject(projectId); const name = text(formData, "name"); const source = await resolveEntityImageSource(projectId, formData, { title: name || "Spezies" }); const created = await createRace(projectId, raceInput(formData, source.image, source.mediaId)); await saveEntityImageProfile(projectId,"race",created.raceId,source.image,entityImageCropFromForm(formData)); redirect(`/admin/projects/${projectId}/races/${created.raceId}`); }
 export async function updateRaceAction(projectId: number, raceId: number, formData: FormData) { await requireAdminSession(); await assertProject(projectId); const current = await getRace(projectId, raceId); if (!current) throw new Error("Spezies wurde nicht gefunden."); const source = await resolveEntityImageSource(projectId, formData, { current: current.image, title: current.name }); const imageMediaId = source.uploaded ? source.mediaId : source.removed || source.image !== current.image ? null : current.imageMediaId; await updateRace(projectId, raceId, raceInput(formData, source.image, imageMediaId)); await saveEntityImageProfile(projectId,"race",raceId,source.image,entityImageCropFromForm(formData)); refreshRace(projectId,raceId); revalidatePath(`/admin/projects/${projectId}/npcs`); revalidatePath(`/admin/projects/${projectId}/characters`); }
+export async function updateRaceImageAction(projectId:number,raceId:number,formData:FormData){await requireAdminSession();await assertProject(projectId);const current=await getRace(projectId,raceId);if(!current)throw new Error("Spezies wurde nicht gefunden.");const source=await resolveEntityImageSource(projectId,formData,{current:current.image,title:current.name});const imageMediaId=source.uploaded?source.mediaId:source.removed||source.image!==current.image?null:current.imageMediaId;const updated=await pool.query("UPDATE races SET image=$3,image_media_id=$4,updated_at=now() WHERE project_id=$1 AND race_id=$2 AND archived_at IS NULL",[projectId,raceId,source.image,imageMediaId]);if(updated.rowCount!==1)throw new Error("Spezies wurde nicht gefunden.");await saveEntityImageProfile(projectId,"race",raceId,source.image,entityImageCropFromForm(formData));refreshRace(projectId,raceId);}
 
 export async function updateRaceBiologyAction(projectId: number, raceId: number, formData: FormData) {
   await requireAdminSession(); await assertProject(projectId); const values: Record<string, unknown> = {};
