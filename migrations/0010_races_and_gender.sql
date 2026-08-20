@@ -63,9 +63,44 @@ CREATE TABLE public.races (
 CREATE UNIQUE INDEX races_project_name_uidx
   ON public.races(project_id, lower(btrim(name)))
   WHERE archived_at IS NULL;
-
 CREATE INDEX races_project_idx
   ON public.races(project_id, archived_at, name, race_id);
+
+-- Keep cross-project references impossible even when SQL is written outside the web app.
+-- When a map is deleted, its FK sets origin_map_id to NULL; this trigger also clears the
+-- corresponding coordinates so the race remains valid and map deletion never gets blocked.
+CREATE OR REPLACE FUNCTION public.worldreborn_validate_race_origin_map() RETURNS trigger
+LANGUAGE plpgsql AS $$
+DECLARE origin_type character varying(20);
+BEGIN
+  IF NEW.origin_map_id IS NULL THEN
+    NEW.origin_coordinate_mode := NULL;
+    NEW.origin_x := NULL;
+    NEW.origin_y := NULL;
+    NEW.origin_lat := NULL;
+    NEW.origin_lng := NULL;
+    RETURN NEW;
+  END IF;
+
+  SELECT map_type INTO origin_type
+  FROM public.project_maps
+  WHERE project_id=NEW.project_id AND map_id=NEW.origin_map_id;
+
+  IF origin_type IS NULL THEN
+    RAISE EXCEPTION 'Race origin map must belong to the same project';
+  END IF;
+  IF origin_type='image' AND NEW.origin_coordinate_mode<>'xy' THEN
+    RAISE EXCEPTION 'Image race origin maps require xy coordinates';
+  END IF;
+  IF origin_type='tile' AND NEW.origin_coordinate_mode<>'latlng' THEN
+    RAISE EXCEPTION 'Tile race origin maps require latlng coordinates';
+  END IF;
+  RETURN NEW;
+END $$;
+
+CREATE TRIGGER races_validate_origin_map
+BEFORE INSERT OR UPDATE OF project_id,origin_map_id,origin_coordinate_mode,origin_x,origin_y,origin_lat,origin_lng ON public.races
+FOR EACH ROW EXECUTE FUNCTION public.worldreborn_validate_race_origin_map();
 
 ALTER TABLE public.charakters
   ADD COLUMN race_id bigint REFERENCES public.races(race_id) ON UPDATE CASCADE ON DELETE SET NULL;
