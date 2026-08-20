@@ -37,13 +37,24 @@ test("species origins are projected into the admin map without duplicating map_m
   assert.match(mapPage, /const markers = \[\.\.\.regularMarkers, \.\.\.speciesMarkers\]/);
 });
 
-test("species origins are opt-in and old automatic map visibility does not silently re-enable them", () => {
+test("species origins are opt-in and have a prominent visibility control", () => {
   const visibility = read("src/components/map/map-content-visibility.ts");
   const viewer = read("src/components/map/world-map-viewer.tsx");
   assert.match(visibility, /species: false/);
   assert.match(viewer, /SPECIES_VISIBILITY_STORAGE_PREFIX/);
   assert.match(viewer, /speciesWasExplicitlyEnabled/);
-  assert.match(viewer, /Spezies & Ursprünge/);
+  assert.match(viewer, /◉ Spezies & Ursprünge/);
+  assert.match(viewer, /standardmäßig ausgeblendet/);
+  assert.match(viewer, /toggleContent\("species", event\.target\.checked\)/);
+  assert.match(viewer, /speciesMarkerCount > 0/);
+});
+
+test("direct species map links reveal the focused origin without changing the saved default", () => {
+  const viewer = read("src/components/map/world-map-viewer.tsx");
+  assert.match(viewer, /focusIsSpecies/);
+  assert.match(viewer, /contentVisibilityRef\.current\.species/);
+  assert.match(viewer, /setContentVisibility\(next\)/);
+  assert.doesNotMatch(viewer, /focusIsSpecies[\s\S]{0,500}SPECIES_VISIBILITY_STORAGE_PREFIX/);
 });
 
 test("world map renders the species preview itself and the inspector keeps a square preview", () => {
