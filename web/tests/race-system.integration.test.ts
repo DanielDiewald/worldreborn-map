@@ -19,6 +19,15 @@ dbTest("every migrated character has a same-project race and synchronized legacy
   assert.equal(await count(pool, `SELECT count(*) value FROM charakters c JOIN races r ON r.race_id=c.race_id WHERE btrim(c.race) IS DISTINCT FROM btrim(r.name)`), 0);
 });
 
+dbTest("every active project has exactly one protected unknown race", async (pool) => {
+  assert.equal(await count(pool, `SELECT count(*) value FROM campaigns c WHERE c.status<>'archived' AND (SELECT count(*) FROM races r WHERE r.project_id=c.camp_id AND r.archived_at IS NULL AND r.is_unknown)<>1`), 0);
+  assert.equal(await count(pool, `SELECT count(*) value FROM races r WHERE r.is_unknown AND (r.archived_at IS NOT NULL OR r.parent_race_id IS NOT NULL OR lower(btrim(r.name))<>'unbekannt')`), 0);
+});
+
+dbTest("subspecies are only one level deep and stay inside their project", async (pool) => {
+  assert.equal(await count(pool, `SELECT count(*) value FROM races child LEFT JOIN races parent ON parent.race_id=child.parent_race_id WHERE child.parent_race_id IS NOT NULL AND (parent.race_id IS NULL OR parent.project_id<>child.project_id OR parent.archived_at IS NOT NULL OR parent.parent_race_id IS NOT NULL OR parent.is_unknown)`), 0);
+});
+
 dbTest("race origins always reference a map from the same project with matching coordinate mode", async (pool) => {
   assert.equal(await count(pool, `SELECT count(*) value FROM races r LEFT JOIN project_maps m ON m.map_id=r.origin_map_id WHERE r.origin_map_id IS NOT NULL AND (m.map_id IS NULL OR m.project_id<>r.project_id)`), 0);
   assert.equal(await count(pool, `SELECT count(*) value FROM races r JOIN project_maps m ON m.map_id=r.origin_map_id WHERE (m.map_type='image' AND r.origin_coordinate_mode<>'xy') OR (m.map_type='tile' AND r.origin_coordinate_mode<>'latlng')`), 0);
