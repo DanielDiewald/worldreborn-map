@@ -12,7 +12,6 @@
     "db:migrate": "tsx scripts/migrate.ts up",
     "db:rollback": "tsx scripts/migrate.ts down",
     "db:audit": "tsx scripts/db-audit.ts",
-    "media:derive": "tsx scripts/build-image-derivatives.ts",
     "import:legacy-map": "tsx scripts/import-legacy-map.ts"
   },
   "dependencies": {
