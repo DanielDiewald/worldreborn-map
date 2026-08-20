@@ -86,6 +86,21 @@ const npcSelect=`SELECT n.n_id AS "nId",c.char_id AS "charId",n.camp_id AS "camp
   LEFT JOIN fantasy_dates birth_fd ON birth_fd.project_id=n.camp_id AND birth_fd.entity_type='person' AND birth_fd.entity_id=n.n_id AND birth_fd.field_key='birth'
   LEFT JOIN fantasy_dates death_fd ON death_fd.project_id=n.camp_id AND death_fd.entity_type='person' AND death_fd.entity_id=n.n_id AND death_fd.field_key='death'`;
 
+// Dense list pages deliberately do not fetch descriptions, admin notes, media metadata or death
+// details. Managed originals are replaced by the lazy 256px derivative endpoint before they ever
+// reach the React tree.
+const npcListSelect=`SELECT n.n_id AS "nId",c.char_id AS "charId",n.camp_id AS "campId",n.name,n.gender,
+  CASE WHEN n.image ~ '^/api/media/[0-9]+$' THEN '/api/admin/projects/'||n.camp_id||'/entity-images/person/'||n.n_id||'/avatar' ELSE n.image END AS image,
+  n.title,n.profession,n.visibility_mode AS "visibilityMode",c.loc_id AS "locId",l.name AS location,c.race_id::int AS "raceId",
+  COALESCE(CASE n.gender WHEN 'male' THEN NULLIF(r.masculine_name,'') WHEN 'female' THEN NULLIF(r.feminine_name,'') WHEN 'hermaphrodite' THEN NULLIF(r.hermaphrodite_name,'') ELSE NULL END,NULLIF(r.name,''),NULLIF(c.race,''),'Unbekannt') AS race,
+  COALESCE(NULLIF(r.name,''),NULLIF(c.race,''),'Unbekannt') AS "raceBaseName",rp.name AS "raceParentName",c.alive,c.follower,c.class AS "className",c.age,
+  birth_fd.era AS "birthEra",birth_fd.year AS "birthYear",birth_fd.month AS "birthMonth",birth_fd.day AS "birthDay",birth_fd.precision AS "birthPrecision",
+  death_fd.era AS "deathEra",death_fd.year AS "deathYear",death_fd.month AS "deathMonth",death_fd.day AS "deathDay",death_fd.precision AS "deathPrecision"
+  ${characterJoin}
+  JOIN locations l ON l.loc_id=c.loc_id AND l.camp_id=n.camp_id
+  LEFT JOIN fantasy_dates birth_fd ON birth_fd.project_id=n.camp_id AND birth_fd.entity_type='person' AND birth_fd.entity_id=n.n_id AND birth_fd.field_key='birth'
+  LEFT JOIN fantasy_dates death_fd ON death_fd.project_id=n.camp_id AND death_fd.entity_type='person' AND death_fd.entity_id=n.n_id AND death_fd.field_key='death'`;
+
 export async function listNpcFilterOptions(projectId:number):Promise<NpcFilterOptions>{
   const [races,classes]=await Promise.all([
     pool.query<{id:number;name:string;parentName:string|null;isUnknown:boolean}>(`SELECT r.race_id::int AS id,r.name,p.name AS "parentName",r.is_unknown AS "isUnknown" FROM races r LEFT JOIN races p ON p.project_id=r.project_id AND p.race_id=r.parent_race_id AND p.archived_at IS NULL WHERE r.project_id=$1 AND r.archived_at IS NULL ORDER BY r.is_unknown DESC,COALESCE(p.name,r.name),CASE WHEN r.parent_race_id IS NULL THEN 0 ELSE 1 END,r.name,r.race_id LIMIT 500`,[projectId]),
@@ -106,7 +121,7 @@ export async function listNpcsPaginated(projectId:number,filters:NpcListFilters,
   const total=count.rows[0]?.total??0;
   const page=clampPagination(total,pagination);
   const pageValues=[...values,page.limit,page.offset];
-  const rows=await pool.query<NpcRow>(`${npcSelect} WHERE ${where.join(" AND ")} ORDER BY n.name,n.n_id LIMIT $${pageValues.length-1} OFFSET $${pageValues.length}`,pageValues);
+  const rows=await pool.query<NpcRow>(`${npcListSelect} WHERE ${where.join(" AND ")} ORDER BY n.name,n.n_id LIMIT $${pageValues.length-1} OFFSET $${pageValues.length}`,pageValues);
   return paginatedResult(rows.rows,total,page);
 }
 
