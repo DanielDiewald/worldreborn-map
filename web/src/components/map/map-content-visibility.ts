@@ -31,7 +31,6 @@ export const MAP_CONTENT_FILTERS: Array<{ id: keyof MapContentVisibility; label:
   { id: "rivers", label: "Flüsse", hint: "Flussläufe", icon: "≈" },
   { id: "roads", label: "Straßen", hint: "Straßen und Routen", icon: "━" },
   { id: "other", label: "Sonstige", hint: "Weitere Kartenobjekte", icon: "•" },
-  { id: "species", label: "Spezies & Ursprünge", hint: "Ursprungspunkte mit Vorschaubildern", icon: "◉" },
   { id: "markers", label: "Marker", hint: "Manuell gesetzte Kartenmarker", icon: "◎" },
   { id: "labels", label: "Beschriftungen", hint: "Namen auf der Karte", icon: "Aa" },
 ];
