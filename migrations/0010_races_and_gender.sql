@@ -99,7 +99,7 @@ BEGIN
 END $$;
 
 CREATE TRIGGER races_validate_origin_map
-BEFORE INSERT OR UPDATE OF project_id,origin_map_id,origin_coordinate_mode,origin_x,origin_y,origin_lat,origin_lng ON public.races
+BEFORE INSERT OR UPDATE ON public.races
 FOR EACH ROW EXECUTE FUNCTION public.worldreborn_validate_race_origin_map();
 
 ALTER TABLE public.charakters
