@@ -25,6 +25,17 @@ test("race migration creates first-class project races and backfills legacy char
   assert.match(migration, /worldreborn_validate_person_gender/);
 });
 
+test("subspecies migration adds a protected unknown race and a two-level hierarchy", () => {
+  const migration = repoSource("migrations/0011_subspecies_and_unknown_gender.sql");
+  assert.match(migration, /ADD COLUMN parent_race_id/);
+  assert.match(migration, /ADD COLUMN is_unknown/);
+  assert.match(migration, /races_one_unknown_per_project_uidx/);
+  assert.match(migration, /worldreborn_validate_race_hierarchy/);
+  assert.match(migration, /A subspecies cannot be the parent of another subspecies/);
+  assert.match(migration, /Unknown species cannot contain subspecies/);
+  assert.match(migration, /'male','female','hermaphrodite','unknown'/);
+});
+
 test("race origin UI stores a map plus the correct coordinate representation", () => {
   const picker = webSource("src/components/race-origin-picker.tsx");
   assert.match(picker, /name="originMapId"/);
@@ -37,6 +48,18 @@ test("race origin UI stores a map plus the correct coordinate representation", (
   assert.match(picker, /ol\.proj\.toLonLat/);
 });
 
+test("species UI can assign a parent species and presents subspecies hierarchy", () => {
+  const page = webSource("src/app/admin/projects/[projectId]/races/page.tsx");
+  const detail = webSource("src/app/admin/projects/[projectId]/races/[raceId]/page.tsx");
+  const entity = webSource("src/lib/entities/races.ts");
+  assert.match(page, /name="parentRaceId"/);
+  assert.match(detail, /name="parentRaceId"/);
+  assert.match(entity, /parentRaceId/);
+  assert.match(entity, /parentName/);
+  assert.match(entity, /isUnknown/);
+  assert.match(entity, /raceHierarchyLabel/);
+});
+
 test("NPC and player-character forms select race records instead of accepting free race text", () => {
   const npcPage = webSource("src/app/admin/projects/[projectId]/npcs/page.tsx");
   const npcDetail = webSource("src/app/admin/projects/[projectId]/npcs/[npcId]/page.tsx");
@@ -44,6 +67,8 @@ test("NPC and player-character forms select race records instead of accepting fr
   assert.match(npcPage, /select name="raceId"/);
   assert.match(npcDetail, /select name="raceId"/);
   assert.match(characterDetail, /select name="raceId"/);
+  assert.match(npcPage, /isUnknown/);
+  assert.match(npcPage, /→/);
   assert.doesNotMatch(npcPage, /input name="race"/);
   assert.doesNotMatch(npcDetail, /input name="race"/);
   assert.doesNotMatch(characterDetail, /input name="race"/);
@@ -62,6 +87,7 @@ test("all person editors use the shared gender dropdown", () => {
     assert.match(source, /PersonGenderSelect/, file);
     assert.doesNotMatch(source, /<input name="gender"/, file);
   }
+  assert.match(webSource("src/lib/person-gender.ts"), /value: "unknown", label: "Unbekannt"/);
 });
 
 test("character queries derive the displayed species term from gender with a base-name fallback", () => {
@@ -72,5 +98,6 @@ test("character queries derive the displayed species term from gender with a bas
     assert.match(source, /feminine_name/);
     assert.match(source, /hermaphrodite_name/);
     assert.match(source, /race_id/);
+    assert.match(source, /parent_race_id/);
   }
 });
