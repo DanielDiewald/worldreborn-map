@@ -26,7 +26,20 @@ const PRESETS = [
   { id: "topography", label: "Topografie" },
 ] as const;
 
+const EMPTY_MARKERS: WorldMapMarker[] = [];
+
 type Selection = { label: string; subtitle: string | null; href: string | null; featureId: number | null; markerId: number | null };
+
+function sameSelection(current: Selection | null, next: Selection) {
+  return Boolean(
+    current
+    && current.label === next.label
+    && current.subtitle === next.subtitle
+    && current.href === next.href
+    && current.featureId === next.featureId
+    && current.markerId === next.markerId
+  );
+}
 
 function localSearch(features: WorldMapFeature[], markers: WorldMapMarker[], query: string, visibility: MapContentVisibility): MapSearchItem[] {
   const term = query.trim().toLocaleLowerCase();
@@ -67,7 +80,7 @@ function layerGroup(layer: WorldMapLayer) {
 }
 
 export function WorldMapViewer({
-  mapConfig, layers, features, markers = [], searchEndpoint = null, focusFeatureId = null, focusMarkerId = null,
+  mapConfig, layers, features, markers = EMPTY_MARKERS, searchEndpoint = null, focusFeatureId = null, focusMarkerId = null,
   height = "calc(100vh - 110px)", showSearch = true,
 }: {
   mapConfig: WorldMapConfig; layers: WorldMapLayer[]; features: WorldMapFeature[]; markers?: WorldMapMarker[];
@@ -118,7 +131,8 @@ export function WorldMapViewer({
     const extent = feature.getGeometry()?.getExtent();
     if (!extent) return false;
     map.getView().fit(extent, { padding: [90, 90, 90, 90], maxZoom: Math.min(mapConfig.maxZoom, 5), duration: 280 });
-    setSelection({ label: String(feature.get("label") ?? "Kartenobjekt"), subtitle: feature.get("subtitle") ? String(feature.get("subtitle")) : null, href: null, featureId: id, markerId: null });
+    const nextSelection: Selection = { label: String(feature.get("label") ?? "Kartenobjekt"), subtitle: feature.get("subtitle") ? String(feature.get("subtitle")) : null, href: null, featureId: id, markerId: null };
+    setSelection((current) => sameSelection(current, nextSelection) ? current : nextSelection);
     return true;
   }
 
@@ -129,7 +143,8 @@ export function WorldMapViewer({
     const coordinates = feature.getGeometry()?.getCoordinates();
     if (!coordinates) return false;
     map.getView().animate({ center: coordinates, zoom: Math.min(mapConfig.maxZoom, Math.max(map.getView().getZoom() ?? 0, 3)), duration: 280 });
-    setSelection({ label: String(feature.get("label") ?? "Marker"), subtitle: feature.get("subtitle") ? String(feature.get("subtitle")) : null, href: null, featureId: null, markerId: id });
+    const nextSelection: Selection = { label: String(feature.get("label") ?? "Marker"), subtitle: feature.get("subtitle") ? String(feature.get("subtitle")) : null, href: null, featureId: null, markerId: id };
+    setSelection((current) => sameSelection(current, nextSelection) ? current : nextSelection);
     return true;
   }
 
