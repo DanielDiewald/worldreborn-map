@@ -29,6 +29,9 @@ const PRESETS = [
 
 const EMPTY_MARKERS: WorldMapMarker[] = [];
 const SPECIES_VISIBILITY_STORAGE_PREFIX = "worldreborn:map-species-visibility:";
+const SPECIES_MARKER_HEIGHT = 56;
+const SPECIES_STACK_GAP = 82;
+const SPECIES_COLLISION_RADIUS_PX = 104;
 
 type Selection = { label: string; subtitle: string | null; href: string | null; image: string | null; featureId: number | null; markerId: number | null };
 
@@ -269,12 +272,15 @@ export function WorldMapViewer({
 
       if (markers.length) {
         const markerSource = new ol.source.Vector();
+        const speciesFeatures: any[] = [];
+        let speciesOrder = 0;
         for (const marker of markers) {
           let coordinates: [number, number] | null = null;
           if (simple && marker.coordinate_mode === "xy" && marker.x != null && marker.y != null) coordinates = [marker.x, marker.y];
           if (!simple && marker.lat != null && marker.lng != null) coordinates = ol.proj.fromLonLat([marker.lng, marker.lat]);
           if (!coordinates) continue;
-          const markerId = Number(marker.marker_id), feature = new ol.Feature({ geometry: new ol.geom.Point(coordinates) });
+          const markerId = Number(marker.marker_id), isSpecies = marker.marker_type === "species";
+          const feature = new ol.Feature({ geometry: new ol.geom.Point(coordinates) });
           feature.setProperties({
             markerId,
             label: marker.entity_label || marker.label,
@@ -284,39 +290,107 @@ export function WorldMapViewer({
             entityId: marker.entity_id,
             previewImage: marker.icon || null,
             href: marker.href || null,
+            speciesOrder: isSpecies ? speciesOrder : null,
           });
           markerSource.addFeature(feature); markerRefs.current.set(markerId, feature);
+          if (isSpecies) { speciesFeatures.push(feature); speciesOrder += 1; }
         }
+
+        // OpenLayers decluttering is useful for ordinary marker glyphs, but it used to make species
+        // disappear as the map was zoomed out. Species use their own collision lanes instead: any
+        // origins that come within a readable screen radius are moved into vertical lanes. The
+        // lanes are derived from map resolution, so they collapse back to their real positions as
+        // soon as the user zooms in far enough to distinguish them again.
+        const speciesLaneCache = new Map<number, Map<number, number>>();
+        const speciesStackLane = (feature: any, resolution: number) => {
+          const safeResolution = Number.isFinite(resolution) && resolution > 0 ? resolution : 1;
+          const cacheKey = Number(safeResolution.toPrecision(5));
+          let lanes = speciesLaneCache.get(cacheKey);
+          if (!lanes) {
+            lanes = new Map<number, number>();
+            const placed: Array<{ x: number; y: number; lane: number }> = [];
+            const ordered = [...speciesFeatures].sort((a, b) => Number(a.get("speciesOrder") ?? 0) - Number(b.get("speciesOrder") ?? 0));
+            for (const candidate of ordered) {
+              const coordinate = candidate.getGeometry()?.getCoordinates();
+              if (!Array.isArray(coordinate) || coordinate.length < 2) continue;
+              const x = Number(coordinate[0]), y = Number(coordinate[1]);
+              if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+              const used = new Set<number>();
+              for (const previous of placed) {
+                const dxPixels = (x - previous.x) / safeResolution;
+                const dyPixels = (y - previous.y) / safeResolution;
+                if (Math.hypot(dxPixels, dyPixels) < SPECIES_COLLISION_RADIUS_PX) used.add(previous.lane);
+              }
+              let lane = 0;
+              while (used.has(lane)) lane += 1;
+              lanes.set(Number(candidate.get("markerId")), lane);
+              placed.push({ x, y, lane });
+            }
+            if (speciesLaneCache.size > 8) speciesLaneCache.clear();
+            speciesLaneCache.set(cacheKey, lanes);
+          }
+          return lanes.get(Number(feature.get("markerId"))) ?? 0;
+        };
+
         const markerLayer = new ol.layer.Vector({
           source: markerSource,
           zIndex: 10000,
           visible: contentVisibilityRef.current.markers || contentVisibilityRef.current.species,
           declutter: true,
-          style: (feature: any) => {
+          renderBuffer: Math.max(200, Math.min(1400, speciesMarkerCount * SPECIES_STACK_GAP + 120)),
+          style: (feature: any, resolution: number) => {
             const markerType = String(feature.get("markerType") ?? "custom");
             if (!markerIsVisible(markerType, contentVisibilityRef.current)) return null;
             if (markerType === "species") {
               const label = contentVisibilityRef.current.labels ? String(feature.get("label") ?? "") : "";
               const image = feature.get("previewImage") ? String(feature.get("previewImage")) : null;
+              const stackIndex = speciesStackLane(feature, resolution);
+              const stackOffset = stackIndex * SPECIES_STACK_GAP;
               const labelStyle = new ol.style.Text({
                 text: label,
-                offsetY: image ? 39 : 29,
+                offsetY: (image ? 42 : 30) + stackOffset,
                 font: "600 11px system-ui, sans-serif",
                 fill: new ol.style.Fill({ color: "#fff8e6" }),
                 stroke: new ol.style.Stroke({ color: "rgba(8,11,15,.96)", width: 4 }),
-                backgroundFill: new ol.style.Fill({ color: "rgba(12,16,22,.82)" }),
+                backgroundFill: new ol.style.Fill({ color: "rgba(12,16,22,.88)" }),
                 padding: [3, 5, 3, 5],
+                declutterMode: "none",
               });
               if (image) {
                 return new ol.style.Style({
-                  image: new ol.style.Icon({ src: image, width: 52, height: 52, anchor: [0.5, 0.5] }),
+                  // Only height is fixed. OpenLayers derives the width from the source image and
+                  // therefore preserves portrait/landscape aspect ratios instead of squeezing to 1:1.
+                  image: new ol.style.Icon({
+                    src: image,
+                    height: SPECIES_MARKER_HEIGHT,
+                    anchor: [0.5, 0.5],
+                    displacement: [0, -stackOffset],
+                    declutterMode: "none",
+                  }),
                   text: labelStyle,
+                  zIndex: 20000 + stackIndex,
                 });
               }
-              return new ol.style.Style({
-                image: new ol.style.Circle({ radius: 15, fill: new ol.style.Fill({ color: "rgba(37,31,19,.96)" }), stroke: new ol.style.Stroke({ color: "#d4b76e", width: 3 }) }),
-                text: new ol.style.Text({ text: MARKER_GLYPHS.species, fill: new ol.style.Fill({ color: "#f4d58d" }), stroke: new ol.style.Stroke({ color: "#17130b", width: 2 }), offsetY: 1 }),
-              });
+              return [
+                new ol.style.Style({
+                  image: new ol.style.Circle({
+                    radius: 15,
+                    fill: new ol.style.Fill({ color: "rgba(37,31,19,.96)" }),
+                    stroke: new ol.style.Stroke({ color: "#d4b76e", width: 3 }),
+                    displacement: [0, -stackOffset],
+                    declutterMode: "none",
+                  }),
+                  text: new ol.style.Text({
+                    text: MARKER_GLYPHS.species,
+                    fill: new ol.style.Fill({ color: "#f4d58d" }),
+                    stroke: new ol.style.Stroke({ color: "#17130b", width: 2 }),
+                    offsetY: stackOffset,
+                    declutterMode: "none",
+                  }),
+                  zIndex: 20000 + stackIndex,
+                }),
+                new ol.style.Style({ text: labelStyle, zIndex: 20001 + stackIndex }),
+              ];
             }
             return new ol.style.Style({ image: new ol.style.Circle({ radius: 10, fill: new ol.style.Fill({ color: "rgba(20,24,31,.9)" }), stroke: new ol.style.Stroke({ color: "#fff", width: 2 }) }), text: new ol.style.Text({ text: MARKER_GLYPHS[markerType] ?? "•", fill: new ol.style.Fill({ color: "#fff" }), offsetY: 1 }) });
           },
