@@ -37,10 +37,21 @@ test("species origins are projected into the admin map without duplicating map_m
   assert.match(mapPage, /const markers = \[\.\.\.regularMarkers, \.\.\.speciesMarkers\]/);
 });
 
-test("world map uses species preview images and links back to the species codex", () => {
+test("species origins are opt-in and old automatic map visibility does not silently re-enable them", () => {
+  const visibility = read("src/components/map/map-content-visibility.ts");
+  const viewer = read("src/components/map/world-map-viewer.tsx");
+  assert.match(visibility, /species: false/);
+  assert.match(viewer, /SPECIES_VISIBILITY_STORAGE_PREFIX/);
+  assert.match(viewer, /speciesWasExplicitlyEnabled/);
+  assert.match(viewer, /Spezies & Ursprünge/);
+});
+
+test("world map renders the species preview itself and the inspector keeps a square preview", () => {
   const viewer = read("src/components/map/world-map-viewer.tsx");
   assert.match(viewer, /markerType === "species"/);
-  assert.match(viewer, /new ol\.style\.Icon\(\{ src: image, width: 42, height: 42 \}\)/);
+  assert.match(viewer, /new ol\.style\.Icon\(\{ src: image, width: 52, height: 52, anchor: \[0\.5, 0\.5\] \}\)/);
+  assert.doesNotMatch(viewer, /new ol\.style\.Circle\(\{ radius: 26/);
+  assert.match(viewer, /aspectRatio: "1 \/ 1"/);
   assert.match(viewer, /previewImage/);
   assert.match(viewer, /Details öffnen/);
 });
