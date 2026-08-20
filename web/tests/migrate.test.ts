@@ -32,6 +32,16 @@ test("race migration preserves legacy view_npc around typmod changes",()=>{
   assert.match(sql,/REFRESH MATERIALIZED VIEW public\.view_npc/);
 });
 
+test("race migration flushes deferred person triggers before charakters ddl",()=>{
+  const sql=readFileSync(path.join(repoRoot,"migrations/0010_races_and_gender.sql"),"utf8");
+  const flush=sql.indexOf("SET CONSTRAINTS ALL IMMEDIATE;");
+  const backfill=sql.indexOf("UPDATE public.charakters c");
+  const notNull=sql.indexOf("ALTER COLUMN race_id SET NOT NULL");
+  assert.ok(flush>=0,"migration must flush deferred constraint triggers");
+  assert.ok(backfill>flush,"race backfill must run after constraints become immediate");
+  assert.ok(notNull>backfill,"SET NOT NULL must run only after the backfill completed");
+});
+
 test("migration errors include the exact migration filename",()=>{
   assert.equal(
     migrationErrorMessage("0010_races_and_gender.sql",new Error('syntax error at or near "DATA"')),
