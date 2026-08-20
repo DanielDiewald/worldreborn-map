@@ -14,7 +14,7 @@ function wantsExistingCountryFit(body:unknown){
   return metadata.adaptToExistingCountries===true&&createLocation.kind==="country"&&Boolean(raw.geometry);
 }
 
-function countryCandidate(raw:Record<string,unknown>,geometry:JsonMapGeometry,passes:number){
+function countryCandidate(raw:Record<string,unknown>,geometry:JsonMapGeometry,passes:number,clearancePixels=0){
   return{
     ...raw,
     geometry,
@@ -22,6 +22,7 @@ function countryCandidate(raw:Record<string,unknown>,geometry:JsonMapGeometry,pa
       ...record(raw.metadata),
       serverAdaptedToExistingCountries:passes>0,
       serverAutoFitPasses:passes,
+      serverAutoFitClearancePixels:clearancePixels,
     },
   };
 }
@@ -29,21 +30,20 @@ function countryCandidate(raw:Record<string,unknown>,geometry:JsonMapGeometry,pa
 async function prepareCountryCreate(projectId:number,mapId:number,body:unknown){
   if(!wantsExistingCountryFit(body)){
     await assertNoPoliticalOverlapForCreate(projectId,mapId,body);
-    return{input:body,geometry:null as JsonMapGeometry|null,adjusted:false,passes:0,removedPixels:0};
+    return{input:body,geometry:null as JsonMapGeometry|null,adjusted:false,passes:0,removedPixels:0,clearancePixels:0};
   }
 
   const raw=record(body);
   let geometry=raw.geometry as JsonMapGeometry;
 
-  // Fast path: the browser preview is already fitted around existing countries. The server
-  // only needs to verify it. This avoids re-rasterizing a large country on every save.
-  const initialCandidate=countryCandidate(raw,geometry,0);
+  // Fast path: the browser preview may already be conflict-free.
+  const initialCandidate=countryCandidate(raw,geometry,0,0);
   try{
     await assertNoPoliticalOverlapForCreate(projectId,mapId,initialCandidate);
-    return{input:initialCandidate,geometry,adjusted:false,passes:0,removedPixels:0};
+    return{input:initialCandidate,geometry,adjusted:false,passes:0,removedPixels:0,clearancePixels:0};
   }catch{
-    // A very thin raster sliver can remain at a shared edge. Only then do the more expensive
-    // authoritative recovery passes below.
+    // Raster previews can leave a very thin vector sliver on an existing border. The recovery
+    // path below expands the blocker mask by a tiny local clearance before tracing the new edge.
   }
 
   const existing=await listMapFeatures(projectId,mapId);
@@ -53,19 +53,23 @@ async function prepareCountryCreate(projectId:number,mapId:number,body:unknown){
 
   let removedPixels=0;
   let lastOverlapError:unknown=null;
-  // Two local recovery passes replace the former four 3600px passes. The second, coarser pass
-  // intentionally moves a stubborn sub-pixel contour farther away from the occupied neighbour.
-  const recoverySizes=[1600,800] as const;
-  for(let index=0;index<recoverySizes.length;index+=1){
+  const recoveryPasses=[
+    {maxSide:1800,clearancePixels:1},
+    {maxSide:1400,clearancePixels:2},
+    {maxSide:1000,clearancePixels:3},
+  ] as const;
+
+  for(let index=0;index<recoveryPasses.length;index+=1){
     const pass=index+1;
-    const fit=fitCountryAroundExistingCountries(geometry,blockers,recoverySizes[index]);
+    const recovery=recoveryPasses[index];
+    const fit=fitCountryAroundExistingCountries(geometry,blockers,recovery.maxSide,recovery.clearancePixels);
     if(!fit||fit.keptPixels<12)throw new Error("Nach dem Anpassen an vorhandene Länder bleibt keine ausreichende freie Fläche übrig. Zeichne weiter in die noch freie Landfläche.");
     geometry=fit.geometry;
     removedPixels+=fit.removedPixels;
-    const candidate=countryCandidate(raw,geometry,pass);
+    const candidate=countryCandidate(raw,geometry,pass,recovery.clearancePixels);
     try{
       await assertNoPoliticalOverlapForCreate(projectId,mapId,candidate);
-      return{input:candidate,geometry,adjusted:true,passes:pass,removedPixels};
+      return{input:candidate,geometry,adjusted:true,passes:pass,removedPixels,clearancePixels:recovery.clearancePixels};
     }catch(error){
       lastOverlapError=error;
     }
@@ -90,7 +94,7 @@ export async function POST(request:Request,{params}:{params:Promise<{projectId:s
     const body=await request.json();
     const prepared=await prepareCountryCreate(projectId,mapId,body);
     const created=await createMapFeature(projectId,mapId,prepared.input);
-    return NextResponse.json({...created,geometry:prepared.geometry,autoFitted:prepared.adjusted,autoFitPasses:prepared.passes,removedOverlapPixels:prepared.removedPixels},{status:201});
+    return NextResponse.json({...created,geometry:prepared.geometry,autoFitted:prepared.adjusted,autoFitPasses:prepared.passes,autoFitClearancePixels:prepared.clearancePixels,removedOverlapPixels:prepared.removedPixels},{status:201});
   }
   catch(error){return NextResponse.json({error:error instanceof Error?error.message:"Feature could not be created"},{status:400});}
 }
