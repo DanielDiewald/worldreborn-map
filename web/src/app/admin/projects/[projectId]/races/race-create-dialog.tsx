@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ImageSourceInput } from "@/components/image-source-input";
 import { RaceOriginPicker } from "@/components/race-origin-picker";
 import { SubmitButton } from "@/components/submit-button";
@@ -23,22 +23,22 @@ type OriginMap = {
 
 export function RaceCreateDialog({ projectId, rootSpecies, maps }: { projectId: number; rootSpecies: RootSpeciesOption[]; maps: OriginMap[] }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
+  const [open, setOpen] = useState(false);
 
-  function openDialog() {
-    dialogRef.current?.showModal();
-  }
-
-  function closeDialog() {
-    dialogRef.current?.close();
-  }
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    if (open && !dialog.open) dialog.showModal();
+    if (!open && dialog.open) dialog.close();
+  }, [open]);
 
   return <>
-    <button type="button" className="button primary" onClick={openDialog}>＋ Spezies / Subspezies anlegen</button>
-    <dialog ref={dialogRef} className={styles.createDialog} onCancel={closeDialog} onClick={(event) => { if (event.target === event.currentTarget) closeDialog(); }}>
-      <div className={styles.dialogPanel}>
+    <button type="button" className="button primary" onClick={() => setOpen(true)}>＋ Spezies / Subspezies anlegen</button>
+    <dialog ref={dialogRef} className={styles.createDialog} onClose={() => setOpen(false)} onCancel={() => setOpen(false)} onClick={(event) => { if (event.target === event.currentTarget) setOpen(false); }}>
+      {open ? <div className={styles.dialogPanel}>
         <div className={styles.dialogHeader}>
           <div><span className="panel-kicker">NEUER WELTDATENSATZ</span><h2>Spezies oder Subspezies anlegen</h2><p>Lege zuerst die Taxonomie fest. Biologie, Merkmale, Verbreitung und Kulturen kannst du anschließend auf der Detailseite ausbauen.</p></div>
-          <button type="button" className={styles.dialogClose} onClick={closeDialog} aria-label="Dialog schließen">×</button>
+          <button type="button" className={styles.dialogClose} onClick={() => setOpen(false)} aria-label="Dialog schließen">×</button>
         </div>
         <form action={createRaceAction.bind(null, projectId)} className="stack">
           <section className={styles.formSection}>
@@ -62,9 +62,9 @@ export function RaceCreateDialog({ projectId, rootSpecies, maps }: { projectId: 
             <ImageSourceInput label="Vorschaubild der Spezies / Subspezies"/>
             <RaceOriginPicker maps={maps}/>
           </section>
-          <div className={styles.dialogActions}><button type="button" className="button ghost" onClick={closeDialog}>Abbrechen</button><SubmitButton className="primary" pendingLabel="Datensatz wird angelegt …">Spezies anlegen</SubmitButton></div>
+          <div className={styles.dialogActions}><button type="button" className="button ghost" onClick={() => setOpen(false)}>Abbrechen</button><SubmitButton className="primary" pendingLabel="Datensatz wird angelegt …">Spezies anlegen</SubmitButton></div>
         </form>
-      </div>
+      </div> : null}
     </dialog>
   </>;
 }
