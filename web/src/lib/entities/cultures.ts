@@ -20,12 +20,18 @@ export type CultureRow = {
 export type CultureRaceRow = { raceId: number; name: string; parentName: string | null; isPrimary: boolean; notes: string | null };
 
 const cultureSelect = `SELECT c.culture_id::int AS "cultureId",c.project_id AS "projectId",c.name,c.description,c.image,c.image_media_id::int AS "imageMediaId",c.primary_location_id::int AS "primaryLocationId",l.name AS "primaryLocationName",c.visibility_mode AS "visibilityMode",(SELECT count(*)::int FROM culture_races cr WHERE cr.culture_id=c.culture_id) AS "raceCount" FROM cultures c LEFT JOIN locations l ON l.camp_id=c.project_id AND l.loc_id=c.primary_location_id`;
+const cultureListSelect = `SELECT c.culture_id::int AS "cultureId",c.project_id AS "projectId",c.name,LEFT(c.description,240) AS description,
+  CASE WHEN c.image ~ '^/api/media/[0-9]+$' THEN '/api/admin/projects/'||c.project_id||'/entity-images/culture/'||c.culture_id||'/avatar' ELSE c.image END AS image,
+  c.image_media_id::int AS "imageMediaId",c.primary_location_id::int AS "primaryLocationId",l.name AS "primaryLocationName",c.visibility_mode AS "visibilityMode",COALESCE(rc.race_count,0)::int AS "raceCount"
+  FROM cultures c
+  LEFT JOIN locations l ON l.camp_id=c.project_id AND l.loc_id=c.primary_location_id
+  LEFT JOIN (SELECT project_id,culture_id,count(*)::int AS race_count FROM culture_races GROUP BY project_id,culture_id) rc ON rc.project_id=c.project_id AND rc.culture_id=c.culture_id`;
 
 function clean(value: string | null | undefined) { return value?.trim() || null; }
 async function assertMedia(projectId: number, mediaId: number | null | undefined) { if (!mediaId) return; const row = await pool.query("SELECT 1 FROM media WHERE project_id=$1 AND media_id=$2", [projectId, mediaId]); if (row.rowCount !== 1) throw new Error("Das Vorschaubild gehört nicht zu dieser Welt."); }
 async function assertLocation(projectId: number, locationId: number | null | undefined) { if (!locationId) return; const row = await pool.query("SELECT 1 FROM locations WHERE camp_id=$1 AND loc_id=$2 AND archived_at IS NULL", [projectId, locationId]); if (row.rowCount !== 1) throw new Error("Der Kultur-Ort gehört nicht zu dieser Welt."); }
 
-export async function listCultures(projectId: number) { const result = await pool.query<CultureRow>(`${cultureSelect} WHERE c.project_id=$1 AND c.archived_at IS NULL ORDER BY c.name,c.culture_id`, [projectId]); return result.rows; }
+export async function listCultures(projectId: number) { const result = await pool.query<CultureRow>(`${cultureListSelect} WHERE c.project_id=$1 AND c.archived_at IS NULL ORDER BY c.name,c.culture_id`, [projectId]); return result.rows; }
 export async function getCulture(projectId: number, cultureId: number) { const result = await pool.query<CultureRow>(`${cultureSelect} WHERE c.project_id=$1 AND c.culture_id=$2 AND c.archived_at IS NULL`, [projectId, cultureId]); return result.rows[0] ?? null; }
 export async function listCultureRaces(projectId: number, cultureId: number) { const result = await pool.query<CultureRaceRow>(`SELECT r.race_id::int AS "raceId",r.name,p.name AS "parentName",cr.is_primary AS "isPrimary",cr.notes FROM culture_races cr JOIN races r ON r.project_id=cr.project_id AND r.race_id=cr.race_id AND r.archived_at IS NULL LEFT JOIN races p ON p.project_id=r.project_id AND p.race_id=r.parent_race_id AND p.archived_at IS NULL WHERE cr.project_id=$1 AND cr.culture_id=$2 ORDER BY cr.is_primary DESC,COALESCE(p.name,r.name),r.name`, [projectId, cultureId]); return result.rows; }
 
