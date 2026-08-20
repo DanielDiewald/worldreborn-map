@@ -7,10 +7,16 @@ import { requireAdminSession } from "@/lib/auth/session";
 import { listMapFeatures, listMapLayers } from "@/lib/map-features";
 import { listMapMarkers, listProjectMaps } from "@/lib/maps";
 import { getProject } from "@/lib/projects";
+import { listRaceOriginMarkers } from "@/lib/race-map-markers";
 
 function positive(value: string | undefined) {
   const parsed = Number.parseInt(value ?? "", 10);
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function markerReference(value: string | undefined) {
+  const parsed = Number.parseInt(value ?? "", 10);
+  return Number.isSafeInteger(parsed) && parsed !== 0 ? parsed : null;
 }
 
 export default async function AdminMapPage({ params, searchParams }: {
@@ -34,7 +40,13 @@ export default async function AdminMapPage({ params, searchParams }: {
   }
 
   const mapId = Number(selected.map_id);
-  const [markers, layers, features] = await Promise.all([listMapMarkers(projectId, mapId), listMapLayers(projectId, mapId), listMapFeatures(projectId, mapId)]);
+  const [regularMarkers, speciesMarkers, layers, features] = await Promise.all([
+    listMapMarkers(projectId, mapId),
+    listRaceOriginMarkers(projectId, mapId),
+    listMapLayers(projectId, mapId),
+    listMapFeatures(projectId, mapId),
+  ]);
+  const markers = [...regularMarkers, ...speciesMarkers];
   const config = { mapId, mapType: selected.map_type as "tile" | "image", tileUrl: selected.tile_url, imagePath: selected.image_path, minZoom: selected.min_zoom, maxZoom: selected.max_zoom, centerLat: selected.center_lat, centerLng: selected.center_lng, bounds: selected.bounds, config: selected.config };
 
   return <AdminShell immersive projectId={projectId} projectName={project.name} section="map" eyebrow={`${project.name} / Karte`} title={selected.name}>
@@ -46,13 +58,13 @@ export default async function AdminMapPage({ params, searchParams }: {
         </div>
         <div className={mapStyles.routeActions}>
           {maps.length > 1 ? <form method="get" className="row" style={{ gap: 5 }}><select className={mapStyles.mapSelect} name="mapId" defaultValue={String(mapId)} aria-label="Karte auswählen">{maps.map((map) => <option key={map.map_id} value={map.map_id}>{map.name}{map.is_primary ? " · Hauptkarte" : ""}</option>)}</select><button className={`${mapStyles.toolbarButton} button ghost`} aria-label="Gewählte Karte öffnen">Öffnen</button></form> : null}
-          <div className={mapStyles.toolbarStats}><span className={mapStyles.statChip}><strong>{features.length}</strong> Objekte</span><span className={mapStyles.statChip}><strong>{markers.length}</strong> Marker</span></div>
+          <div className={mapStyles.toolbarStats}><span className={mapStyles.statChip}><strong>{features.length}</strong> Objekte</span><span className={mapStyles.statChip}><strong>{regularMarkers.length}</strong> Marker</span>{speciesMarkers.length ? <span className={mapStyles.statChip}><strong>{speciesMarkers.length}</strong> Spezies</span> : null}</div>
           <Link className={`button ${mapStyles.toolbarButton} ${mapStyles.toolbarPrimary}`} href={`/admin/projects/${projectId}/map/studio?mapId=${mapId}`}>✎ Bearbeiten</Link>
           <Link className={`button ghost ${mapStyles.toolbarButton} ${mapStyles.secondaryMobileHide}`} href={`/admin/projects/${projectId}/map/marker-editor?mapId=${mapId}`}>⌖ Marker</Link>
           <Link className={`button ghost ${mapStyles.toolbarButton} ${mapStyles.secondaryMobileHide}`} href={`/admin/projects/${projectId}/map/maps`}>Alle Karten</Link>
         </div>
       </header>
-      <WorldMapViewer mapConfig={config} layers={layers} features={features} markers={markers} searchEndpoint={`/api/admin/projects/${projectId}/maps/${mapId}/search`} focusFeatureId={positive(search.featureId)} focusMarkerId={positive(search.markerId)} height="100%"/>
+      <WorldMapViewer mapConfig={config} layers={layers} features={features} markers={markers} searchEndpoint={`/api/admin/projects/${projectId}/maps/${mapId}/search`} focusFeatureId={positive(search.featureId)} focusMarkerId={markerReference(search.markerId)} height="100%"/>
     </div>
   </AdminShell>;
 }
