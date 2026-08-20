@@ -10,7 +10,7 @@ import { resolveEntityImageSource, setEntityImageReference } from "@/lib/media";
 
 function input(formData: FormData,image:string) {
   return {
-    name: formData.get("name"), gender: formData.get("gender") || "unknown", image,
+    name: formData.get("name"), gender: formData.get("gender"), image,
     publicDescription: formData.get("publicDescription") || undefined, adminNotes: formData.get("adminNotes") || undefined,
     species: formData.get("species") || undefined, profession: formData.get("profession") || undefined, personTitle: formData.get("personTitle") || undefined,
     godTitle: formData.get("godTitle") || undefined, faction: formData.get("faction") || undefined, domain: formData.get("domain") || undefined,
