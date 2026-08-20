@@ -100,7 +100,6 @@ async function renderAvatar(source: Buffer, crop: EntityImageCrop | null) {
     .resize(ENTITY_AVATAR_SIZE, ENTITY_AVATAR_SIZE, {
       fit: "contain",
       background: { r: 20, g: 23, b: 29, alpha: 1 },
-      withoutEnlargement: true,
     })
     .webp({ quality: 78, effort: 4 })
     .toBuffer();
@@ -127,20 +126,39 @@ function publicDerivative(row: DerivativeRow): EntityImageDerivative {
   };
 }
 
+export async function deleteEntityAvatarDerivative(projectId: number, entityType: DerivableEntityType, entityId: number) {
+  const result = await pool.query<{ storage_path: string }>(
+    "DELETE FROM entity_image_derivatives WHERE project_id=$1 AND entity_type=$2 AND entity_id=$3 AND variant='avatar' RETURNING storage_path",
+    [projectId, entityType, entityId],
+  );
+  if (result.rows[0]?.storage_path) await localStorage.delete(result.rows[0].storage_path).catch(() => undefined);
+}
+
 export async function ensureEntityAvatarDerivative(projectId: number, entityType: DerivableEntityType, entityId: number): Promise<EntityImageDerivative | null> {
   if (!Number.isSafeInteger(projectId) || projectId <= 0 || !Number.isSafeInteger(entityId) || entityId <= 0) return null;
-  const sourceImage = await getEntitySource(projectId, entityType, entityId);
-  if (!sourceImage) return null;
-  const sourceMediaId = managedMediaId(sourceImage);
-  if (!sourceMediaId) return null;
-  const [crop, current, media] = await Promise.all([
-    getCrop(projectId, entityType, entityId, sourceImage),
+  const [sourceImage, current] = await Promise.all([
+    getEntitySource(projectId, entityType, entityId),
     existingDerivative(projectId, entityType, entityId),
+  ]);
+  if (!sourceImage) {
+    if (current) await deleteEntityAvatarDerivative(projectId, entityType, entityId);
+    return null;
+  }
+  const sourceMediaId = managedMediaId(sourceImage);
+  if (!sourceMediaId) {
+    if (current) await deleteEntityAvatarDerivative(projectId, entityType, entityId);
+    return null;
+  }
+  const [crop, media] = await Promise.all([
+    getCrop(projectId, entityType, entityId, sourceImage),
     pool.query<{ storage_path: string | null; external_url: string | null }>("SELECT storage_path,external_url FROM media WHERE project_id=$1 AND media_id=$2", [projectId, sourceMediaId]),
   ]);
   if (current && current.source_image === sourceImage && Number(current.source_media_id) === sourceMediaId && sameCrop(current.crop, crop)) return publicDerivative(current);
   const mediaRow = media.rows[0];
-  if (!mediaRow?.storage_path || mediaRow.external_url) return null;
+  if (!mediaRow?.storage_path || mediaRow.external_url) {
+    if (current) await deleteEntityAvatarDerivative(projectId, entityType, entityId);
+    return null;
+  }
 
   const source = await localStorage.read(mediaRow.storage_path);
   const output = await renderAvatar(source, crop);
@@ -162,14 +180,6 @@ export async function ensureEntityAvatarDerivative(projectId: number, entityType
   }
 }
 
-export async function deleteEntityAvatarDerivative(projectId: number, entityType: DerivableEntityType, entityId: number) {
-  const result = await pool.query<{ storage_path: string }>(
-    "DELETE FROM entity_image_derivatives WHERE project_id=$1 AND entity_type=$2 AND entity_id=$3 AND variant='avatar' RETURNING storage_path",
-    [projectId, entityType, entityId],
-  );
-  if (result.rows[0]?.storage_path) await localStorage.delete(result.rows[0].storage_path).catch(() => undefined);
-}
-
 export function entityAvatarDerivativeUrl(projectId: number, entityType: DerivableEntityType, entityId: number, sourceImage?: string | null) {
-  return managedMediaId(sourceImage) ? `/api/entity-images/${projectId}/${entityType}/${entityId}/avatar` : (usableImage(sourceImage) ?? null);
+  return managedMediaId(sourceImage) ? `/api/admin/projects/${projectId}/entity-images/${entityType}/${entityId}/avatar` : (usableImage(sourceImage) ?? null);
 }
