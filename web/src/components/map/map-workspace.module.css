@@ -93,6 +93,7 @@
 
 .inspector{position:absolute;z-index:17;top:74px;right:14px;width:min(350px,calc(100% - 100px));max-height:calc(100% - 105px);overflow:auto;padding:14px;border-radius:14px}
 .inspectorBadge{display:inline-flex;align-items:center;height:22px;padding:0 7px;border-radius:999px;background:#232a35;color:#aeb7c4;font-size:9px;font-weight:750}
+.inspectorPreview{display:block;width:100%;max-height:190px;margin:4px 0 10px;object-fit:cover;border:1px solid rgba(199,164,93,.28);border-radius:11px;background:#0d1218}
 .inspectorActions{display:grid;gap:7px;margin-top:12px}
 .inspectorText{margin:10px 0 0;color:#929cab;font-size:11px;line-height:1.5}
 .dangerAction{width:100%!important;margin-top:3px!important}
