@@ -3,6 +3,7 @@ import "server-only";
 import { z } from "zod";
 import { pool } from "@/lib/db";
 import { assertNoOverlapWithinBatch, assertNoPoliticalOverlapForFeature } from "@/lib/map-political-overlap-guard";
+import { mapFeaturePresentationPatchSchema } from "@/lib/map-presentation-schema";
 
 const geometrySchema = z.object({
   type: z.enum(["Point", "LineString", "Polygon", "MultiPoint", "MultiLineString", "MultiPolygon"]),
@@ -18,6 +19,7 @@ const topologyPeerSchema = z.object({
 
 type LockRow = { feature_id: string; label: string; metadata: Record<string, unknown> | null };
 type TopologyRow = LockRow & { location_kind: string | null; parent_loc_id: number | null };
+type PresentationRow = { feature_id: string; label: string; style: Record<string, unknown> | null; entity_type: string | null; entity_id: string | null };
 function rowLocked(row: LockRow) { return row.metadata?.editorLocked === true; }
 function topologyGroup(row: TopologyRow) {
   if (row.location_kind === "country") return "country";
@@ -135,6 +137,58 @@ export async function patchMapFeatureStyle(projectId: number, mapId: number, fea
     [projectId, mapId, featureId, JSON.stringify(parsed)],
   );
   if (result.rowCount !== 1) throw new Error("Feature not found in this map.");
+}
+
+export async function patchMapFeaturePresentation(projectId: number, mapId: number, featureId: number, input: unknown) {
+  const parsed = mapFeaturePresentationPatchSchema.parse(input);
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const existing = await client.query<PresentationRow>(
+      `SELECT feature_id,label,style,entity_type,entity_id
+         FROM map_features
+        WHERE project_id=$1 AND map_id=$2 AND feature_id=$3
+        FOR UPDATE`,
+      [projectId, mapId, featureId],
+    );
+    if (existing.rowCount !== 1) throw new Error("Feature not found in this map.");
+    const current = existing.rows[0];
+    const nextLabel = parsed.label ?? current.label;
+    const nextStyle = { ...(current.style ?? {}), ...parsed.style };
+    await client.query(
+      `UPDATE map_features
+          SET label=$4,style=$5::jsonb,updated_at=now()
+        WHERE project_id=$1 AND map_id=$2 AND feature_id=$3`,
+      [projectId, mapId, featureId, nextLabel, JSON.stringify(nextStyle)],
+    );
+
+    let loreNameUpdated = false;
+    if (parsed.syncLoreName && parsed.label !== undefined && current.entity_type === "location" && current.entity_id) {
+      const locationId = Number(current.entity_id);
+      if (!Number.isSafeInteger(locationId) || locationId <= 0) throw new Error("Die verknüpfte Location ist ungültig.");
+      const location = await client.query(
+        `UPDATE locations
+            SET name=$3,updated_at=now()
+          WHERE camp_id=$1 AND loc_id=$2 AND archived_at IS NULL`,
+        [projectId, locationId, nextLabel],
+      );
+      if (location.rowCount !== 1) throw new Error("Die verknüpfte Location konnte nicht umbenannt werden.");
+      loreNameUpdated = true;
+    }
+
+    await client.query(
+      `INSERT INTO audit_log(project_id,actor_type,action,entity_type,entity_id,metadata)
+       VALUES($1,'admin','map.presentation.updated','map_feature',$2,$3::jsonb)`,
+      [projectId, featureId, JSON.stringify({ map_id: mapId, label_changed: parsed.label !== undefined, lore_name_updated: loreNameUpdated, style_keys: Object.keys(parsed.style) })],
+    );
+    await client.query("COMMIT");
+    return { label: nextLabel, style: nextStyle, loreNameUpdated };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export async function patchMapFeatureMetadata(projectId: number, mapId: number, featureId: number, metadata: unknown) {
