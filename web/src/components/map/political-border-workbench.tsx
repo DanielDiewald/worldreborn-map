@@ -22,6 +22,11 @@ type MaskState = "missing" | "loading" | "ready" | "error";
 function isCountry(row: WorldMapFeature) {
   return row.location_kind === "country" && ["Polygon", "MultiPolygon"].includes(row.geometry.type);
 }
+function isPolygonGeometry(value: unknown): value is JsonMapGeometry {
+  if (!value || typeof value !== "object") return false;
+  const type = (value as { type?: unknown }).type;
+  return type === "Polygon" || type === "MultiPolygon";
+}
 
 function colorFor(index: number) {
   const colors = ["#d6ad63", "#7bc7a4", "#8878e5", "#e07b70", "#75aee6", "#d889d2"];
@@ -292,10 +297,10 @@ export function PoliticalBorderWorkbench({ projectId, mapConfig, layers, feature
         const format = new ol.format.GeoJSON();
         let geometry = format.writeGeometryObject(event.feature.getGeometry()) as JsonMapGeometry;
         if (landMaskRef.current) geometry = clipPolygonToLandMask(geometry, landMaskRef.current);
-        const fit = fitCountryAroundExistingCountries(geometry, rows.map((row) => row.geometry as JsonMapGeometry), 3200);
+        const fit = fitCountryAroundExistingCountries(geometry, rows.map((row) => row.geometry as JsonMapGeometry), 3200, 1);
         if (!fit || fit.keptPixels < 12) throw new Error("Nach dem Anpassen an vorhandene Länder bleibt keine ausreichende freie Fläche übrig. Zeichne weiter in die noch freie Landfläche.");
         setCountryPreview(fit.geometry); setRemovedOverlapPixels(fit.removedPixels); await showCountryPreview(fit.geometry);
-        setStatus(fit.removedPixels > 0 ? `Vorschau angepasst: bereits belegte Länderfläche wurde automatisch ausgespart.` : "Vorschau bereit. Es gab keine Überschneidung mit bestehenden Ländern.");
+        setStatus(fit.removedPixels > 0 ? `Vorschau angepasst: bereits belegte Länderfläche und ein sehr kleiner Sicherheitsrand wurden automatisch ausgespart.` : "Vorschau bereit. Es gab keine Überschneidung mit bestehenden Ländern.");
       } catch (cause) {
         previewSourceRef.current?.clear(); setCountryPreview(null); setError(cause instanceof Error ? cause.message : "Neues Land konnte nicht angepasst werden.");
       }
@@ -326,8 +331,9 @@ export function PoliticalBorderWorkbench({ projectId, mapConfig, layers, feature
       if (!response.ok) throw new Error(body.error || "Land konnte nicht gespeichert werden.");
       const featureId = Number(body.featureId), locationId = body.locationId ? Number(body.locationId) : null;
       if (!Number.isSafeInteger(featureId) || featureId <= 0) throw new Error("Server hat keine gültige Feature-ID zurückgegeben.");
+      const savedGeometry = isPolygonGeometry(body.geometry) ? body.geometry : countryPreview;
       const row: WorldMapFeature = {
-        feature_id: String(featureId), layer_id: String(politicalLayer.layer_id), geometry: countryPreview,
+        feature_id: String(featureId), layer_id: String(politicalLayer.layer_id), geometry: savedGeometry,
         entity_type: locationId ? "location" : null, entity_id: locationId ? String(locationId) : null,
         label: newName.trim(), short_description: null, visibility_mode: "admin_only",
         style: { fill: newColor, stroke: "#ffffff", strokeWidth: 2 },
@@ -336,10 +342,11 @@ export function PoliticalBorderWorkbench({ projectId, mapConfig, layers, feature
       };
       const nextRows = [...rows, row]; setRows(nextRows);
       const ol = await ensureOpenLayers(); const format = new ol.format.GeoJSON();
-      const feature = new ol.Feature({ geometry: format.readGeometry(countryPreview), featureId, label: row.label, index: nextRows.length - 1, fill: newColor });
+      const feature = new ol.Feature({ geometry: format.readGeometry(savedGeometry), featureId, label: row.label, index: nextRows.length - 1, fill: newColor });
       sourceRef.current?.addFeature(feature); featureRefs.current.set(featureId, feature); layerRef.current?.changed();
       previewSourceRef.current?.clear(); setCountryPreview(null); setRemovedOverlapPixels(0); setNewName("");
-      setStatus(`Land „${row.label}“ wurde erstellt und an die bereits belegten Länderflächen angepasst.`);
+      const clearance = Number(body.autoFitClearancePixels ?? 0);
+      setStatus(clearance > 0 ? `Land „${row.label}“ wurde erstellt. Der Server hat die Nachbargrenze mit einem kleinen Sicherheitsabstand konfliktfrei angepasst.` : `Land „${row.label}“ wurde erstellt und an die bereits belegten Länderflächen angepasst.`);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Land konnte nicht gespeichert werden.");
     } finally { setSaving(false); }
@@ -389,7 +396,7 @@ export function PoliticalBorderWorkbench({ projectId, mapConfig, layers, feature
         <div className={styles.drawHint}><strong>Automatische Anpassung aktiv.</strong><br/>Du darfst beim Zeichnen über bestehende Länder fahren. Deren Fläche wird aus dem neuen Land ausgespart. {landMaskState === "ready" ? "Die Rock-3-Landmaske begrenzt zusätzlich die Küste." : landMaskState === "loading" ? "Die Landmaske wird noch geladen …" : "Ohne Landmaske wird nur an bestehende Länder angepasst."}</div>
         <button type="button" className={`button primary ${styles.primaryAction}`} disabled={!newName.trim() || saving || drawingCountry || !politicalLayer} onClick={() => void startCountryDrawing()}>{drawingCountry ? "Gebiet zeichnen …" : countryPreview ? "Gebiet neu zeichnen" : "Gebiet grob zeichnen"}</button>
         <small className={styles.panelText}>{drawingCountry ? "Klicke grob um die gewünschte Fläche. Du musst vorhandene Grenzen nicht exakt nachzeichnen. Am Startpunkt schließen." : "Tipp: Zeichne absichtlich einige Pixel/Fläche in das Nachbarland hinein. WorldReborn übernimmt dadurch die bereits belegte Kante automatisch."}</small>
-        {countryPreview ? <div className={styles.drawHint}><strong>Angepasste Vorschau bereit.</strong><br/>{removedOverlapPixels > 0 ? "Überlappende bereits belegte Fläche wurde entfernt. " : "Keine bestehende Länderfläche musste entfernt werden. "}Vor dem Speichern prüft der Server zusätzlich auf verbleibende Überschneidungen.</div> : null}
+        {countryPreview ? <div className={styles.drawHint}><strong>Angepasste Vorschau bereit.</strong><br/>{removedOverlapPixels > 0 ? "Überlappende bereits belegte Fläche plus ein winziger Sicherheitsrand wurden entfernt. " : "Keine bestehende Länderfläche musste entfernt werden. "}Vor dem Speichern prüft der Server zusätzlich auf verbleibende Überschneidungen.</div> : null}
         <button type="button" className={`button primary ${styles.primaryAction}`} disabled={!countryPreview || saving || !newName.trim()} onClick={() => void saveCountry()}>{saving ? "Land wird gespeichert …" : "Angepasstes Land speichern"}</button>
         {countryPreview ? <button type="button" className="button ghost" disabled={saving} onClick={() => { previewSourceRef.current?.clear(); setCountryPreview(null); setRemovedOverlapPixels(0); }}>Vorschau verwerfen</button> : null}
       </div>}
