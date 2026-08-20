@@ -9,6 +9,7 @@ import { listRaces } from "@/lib/entities/races";
 import { listProjectMaps } from "@/lib/maps";
 import { getProject } from "@/lib/projects";
 import { createRaceAction } from "./actions";
+import styles from "./races.module.css";
 
 function mapOptions(rows: Awaited<ReturnType<typeof listProjectMaps>>) {
   return rows.map((row: any) => ({
@@ -39,10 +40,10 @@ export default async function RacesPage({ params }: { params: Promise<{ projectI
 
     <section className="panel-card">
       <div className="panel-heading"><div><span className="panel-kicker">WELTREGISTER</span><h2>{races.length} Spezies</h2></div></div>
-      {races.length === 0 ? <div className="empty-state large"><strong>Noch keine Spezies</strong><span>Lege oben den ersten Race-/Spezies-Datensatz an.</span></div> : <div className="entity-card-grid">{races.map((race) => <Link key={race.raceId} href={`/admin/projects/${projectId}/races/${race.raceId}`} className="entity-card">
-        <div className="entity-card-top"><span className="entity-avatar">{race.image && race.image !== "noimage" ? <img src={race.image} alt="" loading="lazy"/> : race.name.slice(0, 1).toUpperCase()}</span><div><strong>{race.name}</strong><small>{race.characterCount} Character{race.characterCount === 1 ? "" : "s"}</small></div></div>
+      {races.length === 0 ? <div className="empty-state large"><strong>Noch keine Spezies</strong><span>Lege oben den ersten Race-/Spezies-Datensatz an.</span></div> : <div className={styles.grid}>{races.map((race) => <Link key={race.raceId} href={`/admin/projects/${projectId}/races/${race.raceId}`} className={styles.card}>
+        <div className={styles.top}><span className={styles.avatar}>{race.image && race.image !== "noimage" ? <img src={race.image} alt="" loading="lazy"/> : race.name.slice(0, 1).toUpperCase()}</span><div><strong>{race.name}</strong><small>{race.characterCount} Character{race.characterCount === 1 ? "" : "s"}</small></div></div>
         <p>{race.description?.trim() ? race.description.slice(0, 180) : "Noch keine Beschreibung."}</p>
-        <div className="hero-tags">{race.masculineName ? <span className="soft-label">♂ {race.masculineName}</span> : null}{race.feminineName ? <span className="soft-label">♀ {race.feminineName}</span> : null}{race.hermaphroditeName ? <span className="soft-label">⚥ {race.hermaphroditeName}</span> : null}{race.originMapName ? <span className="soft-label">⌖ {race.originMapName}</span> : null}</div>
+        <div className={styles.tags}>{race.masculineName ? <span className="soft-label">♂ {race.masculineName}</span> : null}{race.feminineName ? <span className="soft-label">♀ {race.feminineName}</span> : null}{race.hermaphroditeName ? <span className="soft-label">⚥ {race.hermaphroditeName}</span> : null}{race.originMapName ? <span className="soft-label">⌖ {race.originMapName}</span> : null}</div>
       </Link>)}</div>}
     </section>
   </AdminShell>;
