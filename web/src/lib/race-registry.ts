@@ -18,6 +18,7 @@ export type RaceRegistryRow = {
   originMapName: string | null;
   characterCount: number;
   childCount: number;
+  hasCrop: boolean;
 };
 
 export async function listRaceRegistry(projectId: number) {
@@ -43,12 +44,14 @@ export async function listRaceRegistry(projectId: number) {
              ELSE r.image END AS image,
            r.origin_map_id::int AS "originMapId",pm.name AS "originMapName",
            COALESCE(cc.character_count,0)::int AS "characterCount",
-           COALESCE(ch.child_count,0)::int AS "childCount"
+           COALESCE(ch.child_count,0)::int AS "childCount",
+           (pic.entity_id IS NOT NULL AND pic.source_image=r.image) AS "hasCrop"
       FROM races r
       LEFT JOIN races p ON p.project_id=r.project_id AND p.race_id=r.parent_race_id AND p.archived_at IS NULL
       LEFT JOIN project_maps pm ON pm.project_id=r.project_id AND pm.map_id=r.origin_map_id
       LEFT JOIN character_counts cc ON cc.project_id=r.project_id AND cc.race_id=r.race_id
       LEFT JOIN child_counts ch ON ch.project_id=r.project_id AND ch.parent_race_id=r.race_id
+      LEFT JOIN entity_image_crops pic ON pic.project_id=r.project_id AND pic.entity_type='race' AND pic.entity_id=r.race_id
      WHERE r.project_id=$1 AND r.archived_at IS NULL
      ORDER BY r.is_unknown DESC,COALESCE(p.name,r.name),CASE WHEN r.parent_race_id IS NULL THEN 0 ELSE 1 END,r.name,r.race_id
   `,[projectId]);
