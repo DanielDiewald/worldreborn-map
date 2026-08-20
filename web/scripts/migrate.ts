@@ -31,6 +31,11 @@ export function normalizeHistoricalMigrationSql(migration: string, sql: string) 
   return sql;
 }
 
+export function migrationErrorMessage(migration: string, error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return `Migration ${migration} failed: ${message}`;
+}
+
 async function ensureMigrationLedger(client: Client) {
   await client.query(`
     CREATE TABLE IF NOT EXISTS public.worldreborn_schema_migrations (
@@ -179,11 +184,15 @@ async function migrateUp(client: Client, migrationsDir: string) {
 
     const rawSql = await readFile(path.join(migrationsDir, migration), "utf8");
     const sql = normalizeHistoricalMigrationSql(migration, rawSql);
-    await client.query(sql);
-    await client.query(
-      "INSERT INTO public.worldreborn_schema_migrations (migration_name) VALUES ($1)",
-      [migration],
-    );
+    try {
+      await client.query(sql);
+      await client.query(
+        "INSERT INTO public.worldreborn_schema_migrations (migration_name) VALUES ($1)",
+        [migration],
+      );
+    } catch (error) {
+      throw new Error(migrationErrorMessage(migration, error), { cause: error });
+    }
     console.log(`Applied ${migration}`);
     count += 1;
   }
@@ -217,7 +226,7 @@ async function migrateDown(client: Client, migrationsDir: string) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       throw new Error(`Rollback file is missing for ${latest}: ${downFile}`);
     }
-    throw error;
+    throw new Error(migrationErrorMessage(downFile, error), { cause: error });
   }
 
   await client.query(
