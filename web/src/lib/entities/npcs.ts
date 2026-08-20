@@ -7,7 +7,7 @@ import type { PersonGender } from "@/lib/person-gender";
 
 const npcInputSchema = z.object({
   name: z.string().trim().min(1).max(100),
-  gender: z.enum(["male", "female", "hermaphrodite"]),
+  gender: z.enum(["unknown", "male", "female", "hermaphrodite"]),
   image: z.string().trim().max(4000).optional(),
   publicDescription: z.string().max(100_000).optional(),
   adminNotes: z.string().max(100_000).optional(),
@@ -33,17 +33,18 @@ export type NpcListFilters = {
 };
 
 export type NpcFilterOptions = {
-  races: Array<{ id: number; name: string }>;
+  races: Array<{ id: number; name: string; parentName: string | null; isUnknown: boolean }>;
   classes: string[];
 };
 
 type NpcRow={
-  nId:number;charId:number;campId:number;name:string;gender:string;image:string;imageMediaId:number|null;notes:string;publicDescription:string|null;adminNotes:string|null;title:string|null;species:string|null;profession:string|null;visibilityMode:string;locId:number;location:string;raceId:number|null;race:string;raceBaseName:string;alive:boolean;birthday:string;follower:boolean;className:string;age:number;birthEra:"before"|"after"|null;birthYear:number|null;birthMonth:number|null;birthDay:number|null;birthPrecision:string|null;deathEra:"before"|"after"|null;deathYear:number|null;deathMonth:number|null;deathDay:number|null;deathPrecision:string|null;deathCauseCode:string|null;deathCauseDetail:string|null;
+  nId:number;charId:number;campId:number;name:string;gender:string;image:string;imageMediaId:number|null;notes:string;publicDescription:string|null;adminNotes:string|null;title:string|null;species:string|null;profession:string|null;visibilityMode:string;locId:number;location:string;raceId:number|null;race:string;raceBaseName:string;raceParentName:string|null;alive:boolean;birthday:string;follower:boolean;className:string;age:number;birthEra:"before"|"after"|null;birthYear:number|null;birthMonth:number|null;birthDay:number|null;birthPrecision:string|null;deathEra:"before"|"after"|null;deathYear:number|null;deathMonth:number|null;deathDay:number|null;deathPrecision:string|null;deathCauseCode:string|null;deathCauseDetail:string|null;
 };
 
 const characterJoin=`FROM npcs n
   JOIN charakters c ON c.n_id=n.n_id
-  LEFT JOIN races r ON r.race_id=c.race_id AND r.project_id=n.camp_id`;
+  LEFT JOIN races r ON r.race_id=c.race_id AND r.project_id=n.camp_id
+  LEFT JOIN races rp ON rp.race_id=r.parent_race_id AND rp.project_id=n.camp_id AND rp.archived_at IS NULL`;
 
 function npcFilter(projectId:number,filters:NpcListFilters){
   const values:unknown[]=[projectId];
@@ -51,7 +52,7 @@ function npcFilter(projectId:number,filters:NpcListFilters){
   if(filters.query?.trim()){
     values.push(`%${filters.query.trim()}%`);
     const p=`$${values.length}`;
-    where.push(`(n.name ILIKE ${p} OR COALESCE(n.title,'') ILIKE ${p} OR COALESCE(n.species,'') ILIKE ${p} OR COALESCE(n.profession,'') ILIKE ${p} OR COALESCE(c.race,'') ILIKE ${p} OR COALESCE(r.name,'') ILIKE ${p} OR COALESCE(r.masculine_name,'') ILIKE ${p} OR COALESCE(r.feminine_name,'') ILIKE ${p} OR COALESCE(r.hermaphrodite_name,'') ILIKE ${p} OR COALESCE(c.class,'') ILIKE ${p})`);
+    where.push(`(n.name ILIKE ${p} OR COALESCE(n.title,'') ILIKE ${p} OR COALESCE(n.species,'') ILIKE ${p} OR COALESCE(n.profession,'') ILIKE ${p} OR COALESCE(c.race,'') ILIKE ${p} OR COALESCE(r.name,'') ILIKE ${p} OR COALESCE(rp.name,'') ILIKE ${p} OR COALESCE(r.masculine_name,'') ILIKE ${p} OR COALESCE(r.feminine_name,'') ILIKE ${p} OR COALESCE(r.hermaphrodite_name,'') ILIKE ${p} OR COALESCE(c.class,'') ILIKE ${p})`);
   }
   if(filters.visibility){values.push(filters.visibility);where.push(`n.visibility_mode=$${values.length}`);}
   if(typeof filters.alive==="boolean"){values.push(filters.alive);where.push(`c.alive=$${values.length}`);}
@@ -70,13 +71,13 @@ async function assertLocation(projectId:number,locationId:number){
 
 async function canonicalRace(projectId:number,raceId:number){
   const result=await pool.query<{name:string}>("SELECT name FROM races WHERE project_id=$1 AND race_id=$2 AND archived_at IS NULL",[projectId,raceId]);
-  if(result.rowCount!==1)throw new Error("Die gewählte Spezies gehört nicht zu dieser Welt oder ist archiviert.");
+  if(result.rowCount!==1)throw new Error("Die gewählte Spezies oder Subspezies gehört nicht zu dieser Welt oder ist archiviert.");
   return result.rows[0].name;
 }
 
 const npcSelect=`SELECT n.n_id AS "nId",c.char_id AS "charId",n.camp_id AS "campId",n.name,n.gender,n.image,n.image_media_id AS "imageMediaId",n.notes,n.public_description AS "publicDescription",n.admin_notes AS "adminNotes",n.title,n.species,n.profession,n.visibility_mode AS "visibilityMode",c.loc_id AS "locId",l.name AS location,c.race_id::int AS "raceId",
   COALESCE(CASE n.gender WHEN 'male' THEN NULLIF(r.masculine_name,'') WHEN 'female' THEN NULLIF(r.feminine_name,'') WHEN 'hermaphrodite' THEN NULLIF(r.hermaphrodite_name,'') ELSE NULL END,NULLIF(r.name,''),NULLIF(c.race,''),'Unbekannt') AS race,
-  COALESCE(NULLIF(r.name,''),NULLIF(c.race,''),'Unbekannt') AS "raceBaseName",c.alive,c.birthday::text,c.follower,c.class AS "className",c.age,
+  COALESCE(NULLIF(r.name,''),NULLIF(c.race,''),'Unbekannt') AS "raceBaseName",rp.name AS "raceParentName",c.alive,c.birthday::text,c.follower,c.class AS "className",c.age,
   birth_fd.era AS "birthEra",birth_fd.year AS "birthYear",birth_fd.month AS "birthMonth",birth_fd.day AS "birthDay",birth_fd.precision AS "birthPrecision",
   death_fd.era AS "deathEra",death_fd.year AS "deathYear",death_fd.month AS "deathMonth",death_fd.day AS "deathDay",death_fd.precision AS "deathPrecision",
   n.metadata->>'death_cause_code' AS "deathCauseCode",n.metadata->>'death_cause_detail' AS "deathCauseDetail"
@@ -87,7 +88,7 @@ const npcSelect=`SELECT n.n_id AS "nId",c.char_id AS "charId",n.camp_id AS "camp
 
 export async function listNpcFilterOptions(projectId:number):Promise<NpcFilterOptions>{
   const [races,classes]=await Promise.all([
-    pool.query<{id:number;name:string}>(`SELECT race_id::int AS id,name FROM races WHERE project_id=$1 AND archived_at IS NULL ORDER BY name,race_id LIMIT 500`,[projectId]),
+    pool.query<{id:number;name:string;parentName:string|null;isUnknown:boolean}>(`SELECT r.race_id::int AS id,r.name,p.name AS "parentName",r.is_unknown AS "isUnknown" FROM races r LEFT JOIN races p ON p.project_id=r.project_id AND p.race_id=r.parent_race_id AND p.archived_at IS NULL WHERE r.project_id=$1 AND r.archived_at IS NULL ORDER BY r.is_unknown DESC,COALESCE(p.name,r.name),CASE WHEN r.parent_race_id IS NULL THEN 0 ELSE 1 END,r.name,r.race_id LIMIT 500`,[projectId]),
     pool.query<{value:string}>(`SELECT DISTINCT BTRIM(c.class) AS value FROM npcs n JOIN charakters c ON c.n_id=n.n_id WHERE n.camp_id=$1 AND n.archived_at IS NULL AND NULLIF(BTRIM(c.class),'') IS NOT NULL ORDER BY value LIMIT 200`,[projectId]),
   ]);
   return {races:races.rows,classes:classes.rows.map((row)=>row.value)};
