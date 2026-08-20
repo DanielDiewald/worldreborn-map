@@ -1,6 +1,7 @@
 import "server-only";
 
 import { z } from "zod";
+import { defaultFeaturePresentationStyle } from "@/components/map/map-feature-presentation";
 import { pool } from "@/lib/db";
 
 const polygonGeometrySchema = z.object({
@@ -56,18 +57,19 @@ async function createProvince(client: import("pg").PoolClient, options: {
   );
   const locationId = location.rows[0].loc_id;
   const metadata = {
-    createdIn: "province-divider-v1",
+    createdIn: "province-divider-v2",
     tool: "province",
     parentLocationId: options.parentLocationId,
     sourceParentFeatureId: options.parentFeatureId,
     geometryConformance: "parent-divider",
     editorLocked: false,
   };
+  const style = defaultFeaturePresentationStyle("province", options.color, options.geometry.type);
   const feature = await client.query<{ feature_id: string }>(
     `INSERT INTO map_features(project_id,map_id,layer_id,geometry_type,geometry,entity_type,entity_id,label,short_description,visibility_mode,style,metadata)
      VALUES($1,$2,$3,$4,$5::jsonb,'location',$6,$7,NULL,$8,$9::jsonb,$10::jsonb)
      RETURNING feature_id`,
-    [options.projectId, options.mapId, options.layerId, options.geometry.type, JSON.stringify(options.geometry), locationId, options.name, options.visibilityMode, JSON.stringify({ fill: options.color, stroke: "#ffffff", strokeWidth: 2 }), JSON.stringify(metadata)],
+    [options.projectId, options.mapId, options.layerId, options.geometry.type, JSON.stringify(options.geometry), locationId, options.name, options.visibilityMode, JSON.stringify(style), JSON.stringify(metadata)],
   );
   const featureId = Number(feature.rows[0].feature_id);
   await client.query("UPDATE locations SET map_id=$3,map_feature_id=$4,updated_at=now() WHERE camp_id=$1 AND loc_id=$2", [options.projectId, locationId, options.mapId, featureId]);
