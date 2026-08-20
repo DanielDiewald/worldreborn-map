@@ -11,6 +11,7 @@ import {
   type MapContentVisibility,
 } from "./map-content-visibility";
 import { rankSelectionCandidates, selectionCandidateFromRow } from "./map-selection";
+import { createCircularSpeciesAvatar, SPECIES_AVATAR_SIZE } from "./species-marker-avatar";
 import type { MapSearchItem, WorldMapConfig, WorldMapFeature, WorldMapLayer, WorldMapMarker } from "./map-types";
 import styles from "./map-workspace.module.css";
 
@@ -29,9 +30,8 @@ const PRESETS = [
 
 const EMPTY_MARKERS: WorldMapMarker[] = [];
 const SPECIES_VISIBILITY_STORAGE_PREFIX = "worldreborn:map-species-visibility:";
-const SPECIES_MARKER_HEIGHT = 56;
-const SPECIES_STACK_GAP = 82;
-const SPECIES_COLLISION_RADIUS_PX = 104;
+const SPECIES_STACK_GAP = 66;
+const SPECIES_COLLISION_RADIUS_PX = 82;
 
 type Selection = { label: string; subtitle: string | null; href: string | null; image: string | null; featureId: number | null; markerId: number | null };
 
@@ -289,11 +289,25 @@ export function WorldMapViewer({
             entityType: marker.entity_type,
             entityId: marker.entity_id,
             previewImage: marker.icon || null,
+            previewImageCrop: marker.image_crop ?? null,
+            speciesAvatar: null,
             href: marker.href || null,
             speciesOrder: isSpecies ? speciesOrder : null,
           });
           markerSource.addFeature(feature); markerRefs.current.set(markerId, feature);
-          if (isSpecies) { speciesFeatures.push(feature); speciesOrder += 1; }
+          if (isSpecies) {
+            speciesFeatures.push(feature);
+            speciesOrder += 1;
+            if (marker.icon) {
+              createCircularSpeciesAvatar(marker.icon, marker.image_crop ?? null)
+                .then((avatar) => {
+                  if (!active) return;
+                  feature.set("speciesAvatar", avatar);
+                  feature.changed();
+                })
+                .catch(() => { /* unreadable external images fall back to the neutral circle */ });
+            }
+          }
         }
 
         // OpenLayers decluttering is useful for ordinary marker glyphs, but it used to make species
@@ -342,55 +356,32 @@ export function WorldMapViewer({
             const markerType = String(feature.get("markerType") ?? "custom");
             if (!markerIsVisible(markerType, contentVisibilityRef.current)) return null;
             if (markerType === "species") {
-              const label = contentVisibilityRef.current.labels ? String(feature.get("label") ?? "") : "";
-              const image = feature.get("previewImage") ? String(feature.get("previewImage")) : null;
+              const avatar = feature.get("speciesAvatar") ? String(feature.get("speciesAvatar")) : null;
               const stackIndex = speciesStackLane(feature, resolution);
               const stackOffset = stackIndex * SPECIES_STACK_GAP;
-              const labelStyle = new ol.style.Text({
-                text: label,
-                offsetY: (image ? 42 : 30) + stackOffset,
-                font: "600 11px system-ui, sans-serif",
-                fill: new ol.style.Fill({ color: "#fff8e6" }),
-                stroke: new ol.style.Stroke({ color: "rgba(8,11,15,.96)", width: 4 }),
-                backgroundFill: new ol.style.Fill({ color: "rgba(12,16,22,.88)" }),
-                padding: [3, 5, 3, 5],
-                declutterMode: "none",
-              });
-              if (image) {
+              if (avatar) {
                 return new ol.style.Style({
-                  // Only height is fixed. OpenLayers derives the width from the source image and
-                  // therefore preserves portrait/landscape aspect ratios instead of squeezing to 1:1.
                   image: new ol.style.Icon({
-                    src: image,
-                    height: SPECIES_MARKER_HEIGHT,
+                    src: avatar,
+                    width: SPECIES_AVATAR_SIZE,
+                    height: SPECIES_AVATAR_SIZE,
                     anchor: [0.5, 0.5],
                     displacement: [0, -stackOffset],
                     declutterMode: "none",
                   }),
-                  text: labelStyle,
                   zIndex: 20000 + stackIndex,
                 });
               }
-              return [
-                new ol.style.Style({
-                  image: new ol.style.Circle({
-                    radius: 15,
-                    fill: new ol.style.Fill({ color: "rgba(37,31,19,.96)" }),
-                    stroke: new ol.style.Stroke({ color: "#d4b76e", width: 3 }),
-                    displacement: [0, -stackOffset],
-                    declutterMode: "none",
-                  }),
-                  text: new ol.style.Text({
-                    text: MARKER_GLYPHS.species,
-                    fill: new ol.style.Fill({ color: "#f4d58d" }),
-                    stroke: new ol.style.Stroke({ color: "#17130b", width: 2 }),
-                    offsetY: stackOffset,
-                    declutterMode: "none",
-                  }),
-                  zIndex: 20000 + stackIndex,
+              return new ol.style.Style({
+                image: new ol.style.Circle({
+                  radius: SPECIES_AVATAR_SIZE / 2,
+                  fill: new ol.style.Fill({ color: "rgba(37,31,19,.96)" }),
+                  stroke: new ol.style.Stroke({ color: "#d4b76e", width: 2.5 }),
+                  displacement: [0, -stackOffset],
+                  declutterMode: "none",
                 }),
-                new ol.style.Style({ text: labelStyle, zIndex: 20001 + stackIndex }),
-              ];
+                zIndex: 20000 + stackIndex,
+              });
             }
             return new ol.style.Style({ image: new ol.style.Circle({ radius: 10, fill: new ol.style.Fill({ color: "rgba(20,24,31,.9)" }), stroke: new ol.style.Stroke({ color: "#fff", width: 2 }) }), text: new ol.style.Text({ text: MARKER_GLYPHS[markerType] ?? "•", fill: new ol.style.Fill({ color: "#fff" }), offsetY: 1 }) });
           },
