@@ -27,7 +27,7 @@ export default async function RacesPage({ params }: { params: Promise<{ projectI
   return <AdminShell projectId={projectId} projectName={project.name} section="races" eyebrow={`${project.name} / Welt`} title="Spezies & Völker">
     <div className="page-heading"><div><div className="breadcrumb"><Link href={`/admin/projects/${projectId}`}>{project.name}</Link><span>/</span><strong>Spezies</strong></div><h1>Spezies & Völker</h1><p>Race/Spezies ist jetzt ein eigener Weltdatensatz. Geschlechtsspezifische Bezeichnungen, Beschreibung, Bild und ungefährer Kartenursprung werden hier zentral gepflegt.</p></div><Link className="button" href={`/admin/projects/${projectId}/npcs`}>NPCs öffnen</Link></div>
 
-    <section className="panel-card stack">
+    <section className={`panel-card stack ${styles.panel}`}>
       <div className="panel-heading"><div><span className="panel-kicker">NEUER WELTDATENSATZ</span><h2>Spezies anlegen</h2></div></div>
       <form action={createRaceAction.bind(null, projectId)} className="stack">
         <div className="field-grid two"><label>Grundbegriff / Name<input name="name" maxLength={120} required placeholder="z. B. Elfen"/></label><label>Männliche Bezeichnung <span className="muted">optional</span><input name="masculineName" maxLength={120} placeholder="z. B. Elf"/></label><label>Weibliche Bezeichnung <span className="muted">optional</span><input name="feminineName" maxLength={120} placeholder="z. B. Elfin"/></label><label>Bezeichnung für Hermaphroditen <span className="muted">optional</span><input name="hermaphroditeName" maxLength={120}/></label></div>
@@ -38,7 +38,7 @@ export default async function RacesPage({ params }: { params: Promise<{ projectI
       </form>
     </section>
 
-    <section className="panel-card">
+    <section className={`panel-card ${styles.panel}`}>
       <div className="panel-heading"><div><span className="panel-kicker">WELTREGISTER</span><h2>{races.length} Spezies</h2></div></div>
       {races.length === 0 ? <div className="empty-state large"><strong>Noch keine Spezies</strong><span>Lege oben den ersten Race-/Spezies-Datensatz an.</span></div> : <div className={styles.grid}>{races.map((race) => <Link key={race.raceId} href={`/admin/projects/${projectId}/races/${race.raceId}`} className={styles.card}>
         <div className={styles.top}><span className={styles.avatar}>{race.image && race.image !== "noimage" ? <img src={race.image} alt="" loading="lazy"/> : race.name.slice(0, 1).toUpperCase()}</span><div><strong>{race.name}</strong><small>{race.characterCount} Character{race.characterCount === 1 ? "" : "s"}</small></div></div>
