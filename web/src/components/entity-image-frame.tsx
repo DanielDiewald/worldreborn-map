@@ -10,6 +10,7 @@ type EntityImageFrameProps = {
   decoding?: "sync" | "async" | "auto";
   style?: CSSProperties;
   crop?: EntityImageCrop | null;
+  mode?: "profile" | "thumbnail";
 };
 
 export function hasEntityImage(src?: string | null) {
@@ -20,9 +21,9 @@ export function hasEntityImage(src?: string | null) {
 /**
  * Square entity image frame with an optional non-destructive crop.
  *
- * A saved crop positions and zooms the original source inside the square. Without a crop, the
- * complete image stays visible via object-fit: contain and the blurred backdrop fills remaining
- * space. The source asset itself is never modified or discarded.
+ * profile: full-quality presentation; an uncropped source gets the blurred backdrop.
+ * thumbnail: one image element only. Use this in dense lists/cards to avoid doubling image decode
+ * and GPU blur/compositing work for every row.
  */
 export function EntityImageFrame({
   src,
@@ -33,9 +34,10 @@ export function EntityImageFrame({
   decoding = "async",
   style,
   crop = null,
+  mode = "profile",
 }: EntityImageFrameProps) {
   const image = hasEntityImage(src) ? src!.trim() : null;
-  const classes = ["entity-image-frame", crop ? "entity-image-frame-cropped" : "", className].filter(Boolean).join(" ");
+  const classes = ["entity-image-frame", crop ? "entity-image-frame-cropped" : "", mode === "thumbnail" ? "entity-image-frame-thumbnail" : "", className].filter(Boolean).join(" ");
   const rootStyle: CSSProperties = {
     position: "relative",
     display: "grid",
@@ -51,6 +53,27 @@ export function EntityImageFrame({
     transform: `scale(${crop.zoom})`,
     transformOrigin: `${crop.x}% ${crop.y}%`,
   } : undefined;
+
+  if (mode === "thumbnail") {
+    return <span className={classes} style={rootStyle} data-has-image={image ? "true" : "false"} data-has-crop={crop ? "true" : "false"}>
+      {image ? <img
+        className={crop ? "entity-image-crop-content" : "entity-image-content"}
+        src={image}
+        alt={alt}
+        loading={loading}
+        decoding={decoding}
+        style={{
+          position: "absolute",
+          inset: 0,
+          width: "100%",
+          height: "100%",
+          objectFit: crop ? "cover" : "contain",
+          objectPosition: crop ? undefined : "center",
+          ...cropStyle,
+        }}
+      /> : <span className="entity-image-fallback" aria-hidden="true" style={{position:"relative",zIndex:1}}>{fallback}</span>}
+    </span>;
+  }
 
   return <span className={classes} style={rootStyle} data-has-image={image ? "true" : "false"} data-has-crop={crop ? "true" : "false"}>
     {image ? crop ? <>
