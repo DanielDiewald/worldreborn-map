@@ -43,10 +43,14 @@ export async function listVisibleGroups(projectId:number,playerId:number){const 
  WHERE g.camp_id=$1 AND g.archived_at IS NULL AND COALESCE(ev.visible,g.visibility_mode='all_players') AND (l.loc_id IS NULL OR COALESCE(lv.visible,l.visibility_mode='all_players')) ORDER BY g.name`,[projectId,playerId]);return r.rows;}
 
 export async function getMyCharacter(projectId:number,playerId:number){const r=await pool.query<{char_id:number;n_id:number;name:string;image:string;race:string;class:string;age:number;alive:boolean;public_description:string|null;location_name:string}>(
-`SELECT c.char_id,n.n_id,n.name,n.image,c.race,c.class,c.age,c.alive,n.public_description,l.name AS location_name
+`SELECT c.char_id,n.n_id,n.name,n.image,
+ COALESCE(CASE n.gender WHEN 'male' THEN NULLIF(race.masculine_name,'') WHEN 'female' THEN NULLIF(race.feminine_name,'') WHEN 'hermaphrodite' THEN NULLIF(race.hermaphrodite_name,'') ELSE NULL END,NULLIF(race.name,''),c.race,'Unbekannt') AS race,
+ c.class,c.age,c.alive,n.public_description,l.name AS location_name
  FROM chars a JOIN users u ON u.user_id=a.user_id AND u.camp_id=$1
  JOIN npcs n ON n.n_id=a.n_id AND n.camp_id=u.camp_id
- JOIN charakters c ON c.n_id=n.n_id JOIN locations l ON l.loc_id=c.loc_id AND l.camp_id=n.camp_id
+ JOIN charakters c ON c.n_id=n.n_id
+ JOIN races race ON race.race_id=c.race_id AND race.project_id=n.camp_id AND race.archived_at IS NULL
+ JOIN locations l ON l.loc_id=c.loc_id AND l.camp_id=n.camp_id
  WHERE a.user_id=$2 AND n.archived_at IS NULL`,[projectId,playerId]);if((r.rowCount??0)>1)throw new Error("Player character uniqueness invariant violated.");return r.rows[0]??null;}
 
 export async function listVisibleMaps(projectId:number){const r=await pool.query<{map_id:string;name:string;map_type:string;tile_url:string|null;image_path:string|null;min_zoom:number;max_zoom:number;center_lat:number|null;center_lng:number|null;bounds:unknown;config:Record<string,unknown>;is_primary:boolean}>("SELECT map_id,name,map_type,tile_url,image_path,min_zoom,max_zoom,center_lat,center_lng,bounds,config,is_primary FROM project_maps WHERE project_id=$1 ORDER BY is_primary DESC,map_id",[projectId]);return r.rows;}
