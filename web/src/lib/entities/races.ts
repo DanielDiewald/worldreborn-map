@@ -64,7 +64,7 @@ const raceSelect = `SELECT r.race_id::int AS "raceId",r.project_id AS "projectId
   r.description,r.image,r.image_media_id::int AS "imageMediaId",r.origin_map_id::int AS "originMapId",
   r.origin_coordinate_mode AS "originCoordinateMode",r.origin_x AS "originX",r.origin_y AS "originY",r.origin_lat AS "originLat",r.origin_lng AS "originLng",
   pm.name AS "originMapName",pm.map_type AS "originMapType",
-  (SELECT count(*)::int FROM charakters c WHERE c.race_id=r.race_id) AS "characterCount"
+  (SELECT count(*)::int FROM charakters c JOIN npcs n2 ON n2.n_id=c.n_id WHERE c.race_id=r.race_id AND n2.camp_id=r.project_id AND n2.archived_at IS NULL) AS "characterCount"
   FROM races r LEFT JOIN project_maps pm ON pm.project_id=r.project_id AND pm.map_id=r.origin_map_id`;
 
 function clean(value: string | null | undefined) { return value?.trim() || null; }
@@ -125,7 +125,6 @@ export async function updateRace(projectId: number, raceId: number, input: RaceI
       data.originMapId ?? null, data.originCoordinateMode ?? null, data.originX ?? null, data.originY ?? null, data.originLat ?? null, data.originLng ?? null,
     ]);
     if (updated.rowCount !== 1) throw new Error("Spezies wurde nicht gefunden.");
-    // Keep the legacy readable shadow in sync while older views are migrated incrementally.
     await client.query(`UPDATE charakters c SET race=$3 FROM npcs n WHERE c.n_id=n.n_id AND n.camp_id=$1 AND c.race_id=$2`, [projectId, raceId, data.name]);
     await client.query(`INSERT INTO audit_log(project_id,actor_type,action,entity_type,entity_id,metadata) VALUES($1,'admin','race.updated','race',$2,$3::jsonb)`, [projectId, raceId, JSON.stringify({ name: data.name })]);
     await client.query("COMMIT");
