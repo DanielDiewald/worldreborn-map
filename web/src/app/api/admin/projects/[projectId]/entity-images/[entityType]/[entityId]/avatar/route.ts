@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { hasValidAdminSession } from "@/lib/auth/session";
+import { getExistingEntityAvatarDerivative } from "@/lib/entity-image-derivative-fast";
 import { ensureEntityAvatarDerivative, type DerivableEntityType } from "@/lib/entity-image-derivatives";
 import { localStorage } from "@/lib/storage";
 
@@ -15,7 +16,10 @@ export async function GET(request: Request, { params }: { params: Promise<{ proj
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
   try {
-    const derivative = await ensureEntityAvatarDerivative(projectId, entityType, entityId);
+    // Normal image/crop writes refresh this row eagerly. Existing avatars therefore need only one
+    // indexed derivative lookup; legacy rows without a derivative fall back to one-time generation.
+    const derivative = await getExistingEntityAvatarDerivative(projectId, entityType, entityId)
+      ?? await ensureEntityAvatarDerivative(projectId, entityType, entityId);
     if (!derivative) return NextResponse.json({ error: "No managed image" }, { status: 404 });
     const etag = `"wr-avatar-${derivative.derivativeId}"`;
     if (request.headers.get("if-none-match") === etag) {
