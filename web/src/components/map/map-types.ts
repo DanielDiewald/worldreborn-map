@@ -56,6 +56,7 @@ export type WorldMapMarker = {
   x: number | null;
   y: number | null;
   icon?: string | null;
+  image_crop?: { x: number; y: number; zoom: number } | null;
   label: string;
   short_description?: string | null;
   layer: string;
