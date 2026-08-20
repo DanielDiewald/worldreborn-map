@@ -11,48 +11,14 @@ import { getProject } from "@/lib/projects";
 import { createRaceAction } from "./actions";
 import styles from "./races.module.css";
 
-function mapOptions(rows: Awaited<ReturnType<typeof listProjectMaps>>) {
-  return rows.map((row: any) => ({
-    mapId: Number(row.map_id), name: String(row.name), mapType: row.map_type as "image" | "tile",
-    tileUrl: row.tile_url ? String(row.tile_url) : null, imagePath: row.image_path ? String(row.image_path) : null,
-    minZoom: Number(row.min_zoom ?? 0), maxZoom: Number(row.max_zoom ?? 6), centerLat: row.center_lat == null ? null : Number(row.center_lat), centerLng: row.center_lng == null ? null : Number(row.center_lng), bounds: row.bounds,
-  }));
-}
+function mapOptions(rows: Awaited<ReturnType<typeof listProjectMaps>>) { return rows.map((row: any) => ({ mapId: Number(row.map_id), name: String(row.name), mapType: row.map_type as "image" | "tile", tileUrl: row.tile_url ? String(row.tile_url) : null, imagePath: row.image_path ? String(row.image_path) : null, minZoom: Number(row.min_zoom ?? 0), maxZoom: Number(row.max_zoom ?? 6), centerLat: row.center_lat == null ? null : Number(row.center_lat), centerLng: row.center_lng == null ? null : Number(row.center_lng), bounds: row.bounds })); }
 
 export default async function RacesPage({ params }: { params: Promise<{ projectId: string }> }) {
-  await requireAdminSession();
-  const projectId = Number.parseInt((await params).projectId, 10); if (!Number.isSafeInteger(projectId) || projectId <= 0) notFound();
-  const [project, races, mapsRaw] = await Promise.all([getProject(projectId), listRaces(projectId), listProjectMaps(projectId)]); if (!project) notFound();
-  const maps = mapOptions(mapsRaw);
-  const rootSpecies = races.filter((race) => race.parentRaceId == null && !race.isUnknown);
-  const subspeciesCount = races.filter((race) => race.parentRaceId != null).length;
+  await requireAdminSession(); const projectId = Number.parseInt((await params).projectId, 10); if (!Number.isSafeInteger(projectId) || projectId <= 0) notFound();
+  const [project, races, mapsRaw] = await Promise.all([getProject(projectId), listRaces(projectId), listProjectMaps(projectId)]); if (!project) notFound(); const maps = mapOptions(mapsRaw); const rootSpecies = races.filter((race) => race.parentRaceId == null && !race.isUnknown); const subspeciesCount = races.filter((race) => race.parentRaceId != null).length;
   return <AdminShell projectId={projectId} projectName={project.name} section="races" eyebrow={`${project.name} / Welt`} title="Spezies & Subspezies">
-    <div className="page-heading"><div><div className="breadcrumb"><Link href={`/admin/projects/${projectId}`}>{project.name}</Link><span>/</span><strong>Spezies</strong></div><h1>Spezies & Subspezies</h1><p>Eine Haupt-Spezies kann mehrere Subspezies besitzen. Jeder Datensatz kann eigene Bezeichnungen, Beschreibung, Bild und einen ungefähren Kartenursprung haben. „Unbekannt“ steht in jeder Welt als geschützter Fallback bereit.</p></div><Link className="button" href={`/admin/projects/${projectId}/npcs`}>NPCs öffnen</Link></div>
-
-    <section className={`panel-card stack ${styles.panel}`}>
-      <div className="panel-heading"><div><span className="panel-kicker">NEUER WELTDATENSATZ</span><h2>Spezies oder Subspezies anlegen</h2></div></div>
-      <form action={createRaceAction.bind(null, projectId)} className="stack">
-        <div className="field-grid two">
-          <label>Grundbegriff / Name<input name="name" maxLength={120} required placeholder="z. B. Elfen oder Hochelfen"/></label>
-          <label>Übergeordnete Spezies <span className="muted">optional</span><select name="parentRaceId" defaultValue=""><option value="">Keine – als Haupt-Spezies anlegen</option>{rootSpecies.map((race) => <option key={race.raceId} value={race.raceId}>{race.name}</option>)}</select><small className="muted">Wenn hier eine Spezies gewählt wird, entsteht darunter eine Subspezies.</small></label>
-          <label>Männliche Bezeichnung <span className="muted">optional</span><input name="masculineName" maxLength={120} placeholder="z. B. Elf"/></label>
-          <label>Weibliche Bezeichnung <span className="muted">optional</span><input name="feminineName" maxLength={120} placeholder="z. B. Elfin"/></label>
-          <label>Bezeichnung für Hermaphroditen <span className="muted">optional</span><input name="hermaphroditeName" maxLength={120}/></label>
-        </div>
-        <label>Beschreibung<textarea name="description" className="large-textarea" maxLength={100000} placeholder="Aussehen, Kultur, Biologie, Geschichte …"/></label>
-        <ImageSourceInput label="Vorschaubild der Spezies / Subspezies"/>
-        <RaceOriginPicker maps={maps}/>
-        <SubmitButton className="primary" pendingLabel="Datensatz wird angelegt …">Spezies anlegen</SubmitButton>
-      </form>
-    </section>
-
-    <section className={`panel-card ${styles.panel}`}>
-      <div className="panel-heading"><div><span className="panel-kicker">WELTREGISTER</span><h2>{races.length} Einträge · {subspeciesCount} Subspezies</h2></div></div>
-      {races.length === 0 ? <div className="empty-state large"><strong>Noch keine Spezies</strong><span>Lege oben den ersten Spezies-Datensatz an.</span></div> : <div className={styles.grid}>{races.map((race) => <Link key={race.raceId} href={`/admin/projects/${projectId}/races/${race.raceId}`} className={styles.card}>
-        <div className={styles.top}><span className={styles.avatar}>{race.image && race.image !== "noimage" ? <img src={race.image} alt="" loading="lazy"/> : race.name.slice(0, 1).toUpperCase()}</span><div><strong>{race.name}</strong><small>{race.isUnknown ? "Fallback-Spezies" : race.parentName ? `Subspezies von ${race.parentName}` : `${race.childCount} Subspezies`} · {race.characterCount} Character{race.characterCount === 1 ? "" : "s"}</small></div></div>
-        <p>{race.description?.trim() ? race.description.slice(0, 180) : "Noch keine Beschreibung."}</p>
-        <div className={styles.tags}>{race.isUnknown ? <span className="soft-label">? Unbekannt</span> : race.parentName ? <span className="soft-label">↳ {race.parentName}</span> : <span className="soft-label">Spezies</span>}{race.masculineName ? <span className="soft-label">♂ {race.masculineName}</span> : null}{race.feminineName ? <span className="soft-label">♀ {race.feminineName}</span> : null}{race.hermaphroditeName ? <span className="soft-label">⚥ {race.hermaphroditeName}</span> : null}{race.originMapName ? <span className="soft-label">⌖ {race.originMapName}</span> : null}</div>
-      </Link>)}</div>}
-    </section>
+    <div className="page-heading"><div><div className="breadcrumb"><Link href={`/admin/projects/${projectId}`}>{project.name}</Link><span>/</span><strong>Spezies</strong></div><h1>Spezies & Subspezies</h1><p>Biologie, vererbbare Merkmale, Ursprung und Verbreitung werden hier gepflegt. Kulturen/Völker sind bewusst eigene Weltdatensätze und können mehrere Spezies umfassen.</p></div><div className="row wrap-row"><Link className="button" href={`/admin/projects/${projectId}/cultures`}>Kulturen & Völker</Link><Link className="button primary" href={`/admin/projects/${projectId}/npcs`}>NPCs öffnen</Link></div></div>
+    <section className={`panel-card stack ${styles.panel}`}><div className="panel-heading"><div><span className="panel-kicker">NEUER WELTDATENSATZ</span><h2>Spezies oder Subspezies anlegen</h2></div></div><form action={createRaceAction.bind(null, projectId)} className="stack"><div className="field-grid two"><label>Grundbegriff / Name<input name="name" maxLength={120} required placeholder="z. B. Elfen oder Hochelfen"/></label><label>Übergeordnete Spezies <span className="muted">optional</span><select name="parentRaceId" defaultValue=""><option value="">Keine – als Haupt-Spezies anlegen</option>{rootSpecies.map((race) => <option key={race.raceId} value={race.raceId}>{race.name}</option>)}</select><small className="muted">Mit Parent entsteht eine Subspezies, die fehlende Biologie und Merkmale erben kann.</small></label><label>Männliche Bezeichnung <span className="muted">optional</span><input name="masculineName" maxLength={120} placeholder="z. B. Elf"/></label><label>Weibliche Bezeichnung <span className="muted">optional</span><input name="feminineName" maxLength={120} placeholder="z. B. Elfin"/></label><label>Bezeichnung für Hermaphroditen <span className="muted">optional</span><input name="hermaphroditeName" maxLength={120}/></label></div><label>Biologische / taxonomische Beschreibung<textarea name="description" className="large-textarea" maxLength={100000} placeholder="Aussehen, Anatomie, Evolution, Herkunft, besondere körperliche Merkmale …"/></label><ImageSourceInput label="Vorschaubild der Spezies / Subspezies"/><RaceOriginPicker maps={maps}/><SubmitButton className="primary" pendingLabel="Datensatz wird angelegt …">Spezies anlegen</SubmitButton></form></section>
+    <section className={`panel-card ${styles.panel}`}><div className="panel-heading"><div><span className="panel-kicker">WELTREGISTER</span><h2>{races.length} Einträge · {subspeciesCount} Subspezies</h2></div></div>{races.length === 0 ? <div className="empty-state large"><strong>Noch keine Spezies</strong><span>Lege oben den ersten Spezies-Datensatz an.</span></div> : <div className={styles.grid}>{races.map((race) => <Link key={race.raceId} href={`/admin/projects/${projectId}/races/${race.raceId}`} className={styles.card}><div className={styles.top}><span className={styles.avatar}>{race.image && race.image !== "noimage" ? <img src={race.image} alt="" loading="lazy"/> : race.name.slice(0, 1).toUpperCase()}</span><div><strong>{race.name}</strong><small>{race.isUnknown ? "Fallback-Spezies" : race.parentName ? `Subspezies von ${race.parentName}` : `${race.childCount} Subspezies`} · {race.characterCount} Character{race.characterCount === 1 ? "" : "s"}</small></div></div><p>{race.description?.trim() ? race.description.slice(0, 180) : "Noch keine Beschreibung."}</p><div className={styles.tags}>{race.isUnknown ? <span className="soft-label">? Unbekannt</span> : race.parentName ? <span className="soft-label">↳ {race.parentName}</span> : <span className="soft-label">Spezies</span>}{race.masculineName ? <span className="soft-label">♂ {race.masculineName}</span> : null}{race.feminineName ? <span className="soft-label">♀ {race.feminineName}</span> : null}{race.hermaphroditeName ? <span className="soft-label">⚥ {race.hermaphroditeName}</span> : null}{race.originMapName ? <span className="soft-label">⌖ {race.originMapName}</span> : null}</div></Link>)}</div>}</section>
   </AdminShell>;
 }
