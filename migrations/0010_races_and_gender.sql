@@ -93,7 +93,7 @@ SET race_id = r.race_id,
 FROM public.npcs n
 JOIN public.races r ON r.project_id=n.camp_id AND r.archived_at IS NULL
 WHERE n.n_id=c.n_id
-  AND lower(btrim(r.name)) = lower(btrim(COALESCE(NULLIF(c.race,''),'Unbekannt')));
+  AND lower(btrim(r.name)) = lower(COALESCE(NULLIF(btrim(c.race),''),'Unbekannt'));
 
 CREATE INDEX charakters_race_id_idx ON public.charakters(race_id);
 
