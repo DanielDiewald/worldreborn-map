@@ -3,17 +3,18 @@ import "server-only";
 import { z } from "zod";
 import { pool } from "@/lib/db";
 import { clampPagination, paginatedResult, type Pagination } from "@/lib/pagination";
+import type { PersonGender } from "@/lib/person-gender";
 
 const npcInputSchema = z.object({
   name: z.string().trim().min(1).max(100),
-  gender: z.string().trim().max(10).default("unknown"),
+  gender: z.enum(["male", "female", "hermaphrodite"]),
   image: z.string().trim().max(4000).optional(),
   publicDescription: z.string().max(100_000).optional(),
   adminNotes: z.string().max(100_000).optional(),
   title: z.string().trim().max(120).optional(),
   profession: z.string().trim().max(120).optional(),
   locationId: z.coerce.number().int().positive(),
-  race: z.string().trim().max(80).default("unknown"),
+  raceId: z.coerce.number().int().positive(),
   alive: z.coerce.boolean().default(true),
   follower: z.coerce.boolean().default(false),
   className: z.string().trim().max(50).default("unknown"),
@@ -25,21 +26,24 @@ export type NpcListFilters = {
   visibility?: "admin_only" | "all_players" | "selected_players";
   alive?: boolean;
   follower?: boolean;
-  gender?: string;
+  gender?: PersonGender;
   locationId?: number;
-  race?: string;
+  raceId?: number;
   className?: string;
 };
 
 export type NpcFilterOptions = {
-  genders: string[];
-  races: string[];
+  races: Array<{ id: number; name: string }>;
   classes: string[];
 };
 
 type NpcRow={
-  nId:number;charId:number;campId:number;name:string;gender:string;image:string;imageMediaId:number|null;notes:string;publicDescription:string|null;adminNotes:string|null;title:string|null;species:string|null;profession:string|null;visibilityMode:string;locId:number;location:string;race:string;alive:boolean;birthday:string;follower:boolean;className:string;age:number;birthEra:"before"|"after"|null;birthYear:number|null;birthMonth:number|null;birthDay:number|null;birthPrecision:string|null;deathEra:"before"|"after"|null;deathYear:number|null;deathMonth:number|null;deathDay:number|null;deathPrecision:string|null;deathCauseCode:string|null;deathCauseDetail:string|null;
+  nId:number;charId:number;campId:number;name:string;gender:string;image:string;imageMediaId:number|null;notes:string;publicDescription:string|null;adminNotes:string|null;title:string|null;species:string|null;profession:string|null;visibilityMode:string;locId:number;location:string;raceId:number|null;race:string;raceBaseName:string;alive:boolean;birthday:string;follower:boolean;className:string;age:number;birthEra:"before"|"after"|null;birthYear:number|null;birthMonth:number|null;birthDay:number|null;birthPrecision:string|null;deathEra:"before"|"after"|null;deathYear:number|null;deathMonth:number|null;deathDay:number|null;deathPrecision:string|null;deathCauseCode:string|null;deathCauseDetail:string|null;
 };
+
+const characterJoin=`FROM npcs n
+  JOIN charakters c ON c.n_id=n.n_id
+  LEFT JOIN races r ON r.race_id=c.race_id AND r.project_id=n.camp_id`;
 
 function npcFilter(projectId:number,filters:NpcListFilters){
   const values:unknown[]=[projectId];
@@ -47,14 +51,14 @@ function npcFilter(projectId:number,filters:NpcListFilters){
   if(filters.query?.trim()){
     values.push(`%${filters.query.trim()}%`);
     const p=`$${values.length}`;
-    where.push(`(n.name ILIKE ${p} OR COALESCE(n.title,'') ILIKE ${p} OR COALESCE(n.species,'') ILIKE ${p} OR COALESCE(n.profession,'') ILIKE ${p} OR COALESCE(c.race,'') ILIKE ${p} OR COALESCE(c.class,'') ILIKE ${p})`);
+    where.push(`(n.name ILIKE ${p} OR COALESCE(n.title,'') ILIKE ${p} OR COALESCE(n.species,'') ILIKE ${p} OR COALESCE(n.profession,'') ILIKE ${p} OR COALESCE(c.race,'') ILIKE ${p} OR COALESCE(r.name,'') ILIKE ${p} OR COALESCE(r.masculine_name,'') ILIKE ${p} OR COALESCE(r.feminine_name,'') ILIKE ${p} OR COALESCE(r.hermaphrodite_name,'') ILIKE ${p} OR COALESCE(c.class,'') ILIKE ${p})`);
   }
   if(filters.visibility){values.push(filters.visibility);where.push(`n.visibility_mode=$${values.length}`);}
   if(typeof filters.alive==="boolean"){values.push(filters.alive);where.push(`c.alive=$${values.length}`);}
   if(typeof filters.follower==="boolean"){values.push(filters.follower);where.push(`c.follower=$${values.length}`);}
-  if(filters.gender?.trim()){values.push(filters.gender.trim());where.push(`LOWER(COALESCE(n.gender,''))=LOWER($${values.length})`);}
+  if(filters.gender){values.push(filters.gender);where.push(`n.gender=$${values.length}`);}
   if(Number.isSafeInteger(filters.locationId)&&Number(filters.locationId)>0){values.push(filters.locationId);where.push(`c.loc_id=$${values.length}`);}
-  if(filters.race?.trim()){values.push(filters.race.trim());where.push(`LOWER(COALESCE(c.race,''))=LOWER($${values.length})`);}
+  if(Number.isSafeInteger(filters.raceId)&&Number(filters.raceId)>0){values.push(filters.raceId);where.push(`c.race_id=$${values.length}`);}
   if(filters.className?.trim()){values.push(filters.className.trim());where.push(`LOWER(COALESCE(c.class,''))=LOWER($${values.length})`);}
   return {values,where};
 }
@@ -64,23 +68,29 @@ async function assertLocation(projectId:number,locationId:number){
   if(result.rowCount!==1)throw new Error("Location does not belong to this project.");
 }
 
-const npcSelect=`SELECT n.n_id AS "nId",c.char_id AS "charId",n.camp_id AS "campId",n.name,n.gender,n.image,n.image_media_id AS "imageMediaId",n.notes,n.public_description AS "publicDescription",n.admin_notes AS "adminNotes",n.title,n.species,n.profession,n.visibility_mode AS "visibilityMode",c.loc_id AS "locId",l.name AS location,c.race,c.alive,c.birthday::text,c.follower,c.class AS "className",c.age,
+async function canonicalRace(projectId:number,raceId:number){
+  const result=await pool.query<{name:string}>("SELECT name FROM races WHERE project_id=$1 AND race_id=$2 AND archived_at IS NULL",[projectId,raceId]);
+  if(result.rowCount!==1)throw new Error("Die gewählte Spezies gehört nicht zu dieser Welt oder ist archiviert.");
+  return result.rows[0].name;
+}
+
+const npcSelect=`SELECT n.n_id AS "nId",c.char_id AS "charId",n.camp_id AS "campId",n.name,n.gender,n.image,n.image_media_id AS "imageMediaId",n.notes,n.public_description AS "publicDescription",n.admin_notes AS "adminNotes",n.title,n.species,n.profession,n.visibility_mode AS "visibilityMode",c.loc_id AS "locId",l.name AS location,c.race_id::int AS "raceId",
+  COALESCE(CASE n.gender WHEN 'male' THEN NULLIF(r.masculine_name,'') WHEN 'female' THEN NULLIF(r.feminine_name,'') WHEN 'hermaphrodite' THEN NULLIF(r.hermaphrodite_name,'') ELSE NULL END,NULLIF(r.name,''),NULLIF(c.race,''),'Unbekannt') AS race,
+  COALESCE(NULLIF(r.name,''),NULLIF(c.race,''),'Unbekannt') AS "raceBaseName",c.alive,c.birthday::text,c.follower,c.class AS "className",c.age,
   birth_fd.era AS "birthEra",birth_fd.year AS "birthYear",birth_fd.month AS "birthMonth",birth_fd.day AS "birthDay",birth_fd.precision AS "birthPrecision",
   death_fd.era AS "deathEra",death_fd.year AS "deathYear",death_fd.month AS "deathMonth",death_fd.day AS "deathDay",death_fd.precision AS "deathPrecision",
   n.metadata->>'death_cause_code' AS "deathCauseCode",n.metadata->>'death_cause_detail' AS "deathCauseDetail"
-  FROM npcs n
-  JOIN charakters c ON c.n_id=n.n_id
+  ${characterJoin}
   JOIN locations l ON l.loc_id=c.loc_id AND l.camp_id=n.camp_id
   LEFT JOIN fantasy_dates birth_fd ON birth_fd.project_id=n.camp_id AND birth_fd.entity_type='person' AND birth_fd.entity_id=n.n_id AND birth_fd.field_key='birth'
   LEFT JOIN fantasy_dates death_fd ON death_fd.project_id=n.camp_id AND death_fd.entity_type='person' AND death_fd.entity_id=n.n_id AND death_fd.field_key='death'`;
 
 export async function listNpcFilterOptions(projectId:number):Promise<NpcFilterOptions>{
-  const [genders,races,classes]=await Promise.all([
-    pool.query<{value:string}>(`SELECT DISTINCT BTRIM(n.gender) AS value FROM npcs n JOIN charakters c ON c.n_id=n.n_id WHERE n.camp_id=$1 AND n.archived_at IS NULL AND NULLIF(BTRIM(n.gender),'') IS NOT NULL ORDER BY value LIMIT 100`,[projectId]),
-    pool.query<{value:string}>(`SELECT DISTINCT BTRIM(c.race) AS value FROM npcs n JOIN charakters c ON c.n_id=n.n_id WHERE n.camp_id=$1 AND n.archived_at IS NULL AND NULLIF(BTRIM(c.race),'') IS NOT NULL ORDER BY value LIMIT 200`,[projectId]),
+  const [races,classes]=await Promise.all([
+    pool.query<{id:number;name:string}>(`SELECT race_id::int AS id,name FROM races WHERE project_id=$1 AND archived_at IS NULL ORDER BY name,race_id LIMIT 500`,[projectId]),
     pool.query<{value:string}>(`SELECT DISTINCT BTRIM(c.class) AS value FROM npcs n JOIN charakters c ON c.n_id=n.n_id WHERE n.camp_id=$1 AND n.archived_at IS NULL AND NULLIF(BTRIM(c.class),'') IS NOT NULL ORDER BY value LIMIT 200`,[projectId]),
   ]);
-  return {genders:genders.rows.map((row)=>row.value),races:races.rows.map((row)=>row.value),classes:classes.rows.map((row)=>row.value)};
+  return {races:races.rows,classes:classes.rows.map((row)=>row.value)};
 }
 
 export async function listNpcs(projectId:number,filters:NpcListFilters={}){
@@ -91,7 +101,7 @@ export async function listNpcs(projectId:number,filters:NpcListFilters={}){
 
 export async function listNpcsPaginated(projectId:number,filters:NpcListFilters,pagination:Pagination){
   const {values,where}=npcFilter(projectId,filters);
-  const count=await pool.query<{total:number}>(`SELECT count(*)::int AS total FROM npcs n JOIN charakters c ON c.n_id=n.n_id WHERE ${where.join(" AND ")}`,values);
+  const count=await pool.query<{total:number}>(`SELECT count(*)::int AS total ${characterJoin} WHERE ${where.join(" AND ")}`,values);
   const total=count.rows[0]?.total??0;
   const page=clampPagination(total,pagination);
   const pageValues=[...values,page.limit,page.offset];
@@ -105,7 +115,7 @@ export async function getNpc(projectId:number,npcId:number){
 }
 
 export async function createNpc(projectId:number,input:NpcInput){
-  const data=npcInputSchema.parse(input);await assertLocation(projectId,data.locationId);
+  const data=npcInputSchema.parse(input);const [raceName]=await Promise.all([canonicalRace(projectId,data.raceId),assertLocation(projectId,data.locationId)]);
   const client=await pool.connect();
   try{
     await client.query("BEGIN");
@@ -114,26 +124,23 @@ export async function createNpc(projectId:number,input:NpcInput){
         FROM campaigns c WHERE c.camp_id=$1 AND c.status<>'archived' RETURNING n_id`,[projectId,data.name,data.adminNotes?.trim()||"no notes yet",data.gender,data.image?.trim()||"noimage",data.publicDescription?.trim()||null,data.adminNotes?.trim()||null,data.title?.trim()||null,data.profession?.trim()||null]);
     if(base.rowCount!==1)throw new Error("Project not found or archived.");
     const personId=base.rows[0].n_id;
-    // Legacy birthday/age remain present for compatibility, but are no longer authored by the UI.
-    await client.query(`INSERT INTO charakters(n_id,loc_id,race,alive,birthday,follower,class,age) VALUES($1,$2,$3,$4,'2000-01-01',$5,$6,0)`,[personId,data.locationId,data.race,data.alive,data.follower,data.className]);
-    await client.query(`INSERT INTO audit_log(project_id,actor_type,action,entity_type,entity_id,metadata) VALUES($1,'admin','person.created','person',$2,$3::jsonb)`,[projectId,personId,JSON.stringify({kind:"character",race_source:"charakters.race",chronology:"fantasy_dates"})]);
+    await client.query(`INSERT INTO charakters(n_id,loc_id,race,race_id,alive,birthday,follower,class,age) VALUES($1,$2,$3,$4,$5,'2000-01-01',$6,$7,0)`,[personId,data.locationId,raceName,data.raceId,data.alive,data.follower,data.className]);
+    await client.query(`INSERT INTO audit_log(project_id,actor_type,action,entity_type,entity_id,metadata) VALUES($1,'admin','person.created','person',$2,$3::jsonb)`,[projectId,personId,JSON.stringify({kind:"character",race_id:data.raceId,chronology:"fantasy_dates"})]);
     await client.query("COMMIT");
     return {nId:personId};
   }catch(error){await client.query("ROLLBACK");throw error;}finally{client.release();}
 }
 
 export async function updateNpc(projectId:number,npcId:number,input:NpcInput){
-  const data=npcInputSchema.parse(input);await assertLocation(projectId,data.locationId);
+  const data=npcInputSchema.parse(input);const [raceName]=await Promise.all([canonicalRace(projectId,data.raceId),assertLocation(projectId,data.locationId)]);
   const client=await pool.connect();
   try{
     await client.query("BEGIN");
     const locked=await client.query("SELECT 1 FROM npcs n JOIN charakters c ON c.n_id=n.n_id WHERE n.camp_id=$1 AND n.n_id=$2 AND n.archived_at IS NULL FOR UPDATE",[projectId,npcId]);
     if(locked.rowCount!==1){await client.query("ROLLBACK");return null;}
-    // species is deliberately not updated: charakters.race is the canonical visible Character species/race field.
     await client.query(`UPDATE npcs SET name=$3,notes=$4,gender=$5,image=$6,public_description=$7,admin_notes=$8,title=$9,profession=$10,updated_at=now() WHERE camp_id=$1 AND n_id=$2`,[projectId,npcId,data.name,data.adminNotes?.trim()||"no notes yet",data.gender,data.image?.trim()||"noimage",data.publicDescription?.trim()||null,data.adminNotes?.trim()||null,data.title?.trim()||null,data.profession?.trim()||null]);
-    // Legacy age/birthday stay untouched until the explicit calendar migration has reconciled them.
-    await client.query(`UPDATE charakters SET loc_id=$2,race=$3,alive=$4,follower=$5,class=$6 WHERE n_id=$1`,[npcId,data.locationId,data.race,data.alive,data.follower,data.className]);
-    await client.query(`INSERT INTO audit_log(project_id,actor_type,action,entity_type,entity_id,metadata) VALUES($1,'admin','person.updated','person',$2,$3::jsonb)`,[projectId,npcId,JSON.stringify({race_source:"charakters.race",legacy_age_preserved:true,legacy_birthday_preserved:true})]);
+    await client.query(`UPDATE charakters SET loc_id=$2,race=$3,race_id=$4,alive=$5,follower=$6,class=$7 WHERE n_id=$1`,[npcId,data.locationId,raceName,data.raceId,data.alive,data.follower,data.className]);
+    await client.query(`INSERT INTO audit_log(project_id,actor_type,action,entity_type,entity_id,metadata) VALUES($1,'admin','person.updated','person',$2,$3::jsonb)`,[projectId,npcId,JSON.stringify({race_id:data.raceId,legacy_race_shadow:raceName,legacy_age_preserved:true,legacy_birthday_preserved:true})]);
     await client.query("COMMIT");return {nId:npcId};
   }catch(error){await client.query("ROLLBACK");throw error;}finally{client.release();}
 }
