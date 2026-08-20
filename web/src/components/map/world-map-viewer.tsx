@@ -29,10 +29,6 @@ const PRESETS = [
 
 const EMPTY_MARKERS: WorldMapMarker[] = [];
 const SPECIES_VISIBILITY_STORAGE_PREFIX = "worldreborn:map-species-visibility:";
-const VIEWER_CONTENT_FILTERS: Array<{ id: keyof MapContentVisibility; label: string; hint: string; icon: string }> = [
-  ...MAP_CONTENT_FILTERS,
-  { id: "species", label: "Spezies & Ursprünge", hint: "Ursprungspunkte mit Vorschaubildern", icon: "◉" },
-];
 
 type Selection = { label: string; subtitle: string | null; href: string | null; image: string | null; featureId: number | null; markerId: number | null };
 
@@ -391,7 +387,20 @@ export function WorldMapViewer({
         if (element) element.style.cursor = markerHit || mapCandidates.length ? "pointer" : "";
       });
 
-      if (focusFeatureId) focusFeature(focusFeatureId); else if (focusMarkerId) focusMarker(focusMarkerId);
+      if (focusFeatureId) {
+        focusFeature(focusFeatureId);
+      } else if (focusMarkerId) {
+        const focusMarker = markerRefs.current.get(focusMarkerId);
+        const focusIsSpecies = String(focusMarker?.get("markerType") ?? "") === "species";
+        if (focusIsSpecies && !contentVisibilityRef.current.species) {
+          const next = { ...contentVisibilityRef.current, species: true };
+          contentVisibilityRef.current = next;
+          setContentVisibility(next);
+          markerLayerRef.current?.setVisible(true);
+          markerLayerRef.current?.changed();
+        }
+        focusMarker(focusMarkerId);
+      }
     }).catch((cause) => setError(cause instanceof Error ? cause.message : "Karte konnte nicht geladen werden."));
     return () => { active = false; mapRef.current?.setTarget(undefined); mapRef.current = null; markerLayerRef.current = null; layerRefs.current.clear(); featureRefs.current.clear(); markerRefs.current.clear(); };
   }, [mapConfig, rasterLayers, vectorLayers, features, featureRows, markers, focusFeatureId, focusMarkerId]);
@@ -476,12 +485,16 @@ export function WorldMapViewer({
         <div className={styles.layerList}>
           <div>
             <div className={styles.layerSection}>Karteninhalte</div>
+            {speciesMarkerCount > 0 ? <div className={styles.layerRow} style={{ margin: "5px 5px 8px", border: "1px solid rgba(199,164,93,.32)", background: "rgba(199,164,93,.08)" }}>
+              <div className={styles.layerInfo}><strong>◉ Spezies & Ursprünge</strong><small>{speciesMarkerCount} Ursprung{speciesMarkerCount === 1 ? "" : "spunkte"} · standardmäßig ausgeblendet</small></div>
+              <div className={styles.layerControl}><input type="checkbox" checked={contentVisibility.species} onChange={(event) => toggleContent("species", event.target.checked)} aria-label="Spezies und Ursprünge ein- oder ausblenden"/></div>
+            </div> : null}
             <div className="row" style={{ gap: 6, padding: "4px 8px 7px" }}>
               <button type="button" className="button ghost" style={{ minHeight: 28, height: 28, padding: "0 8px", fontSize: 9 }} onClick={() => refreshContentVisibility(allContentVisibility(true), true)}>Alle an</button>
               <button type="button" className="button ghost" style={{ minHeight: 28, height: 28, padding: "0 8px", fontSize: 9 }} onClick={() => refreshContentVisibility(allContentVisibility(false), true)}>Alle aus</button>
             </div>
-            {VIEWER_CONTENT_FILTERS.map((filter) => {
-              const disabled = filter.id === "markers" ? regularMarkerCount === 0 : filter.id === "species" ? speciesMarkerCount === 0 : false;
+            {MAP_CONTENT_FILTERS.map((filter) => {
+              const disabled = filter.id === "markers" ? regularMarkerCount === 0 : false;
               return <div className={styles.layerRow} key={filter.id}>
                 <div className={styles.layerInfo}><strong>{filter.icon} {filter.label}</strong><small>{filter.hint}</small></div>
                 <div className={styles.layerControl}><input type="checkbox" checked={contentVisibility[filter.id]} disabled={disabled} onChange={(event) => toggleContent(filter.id, event.target.checked)} aria-label={`${filter.label} ein- oder ausblenden`}/></div>
