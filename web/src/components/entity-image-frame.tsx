@@ -20,10 +20,8 @@ export function hasEntityImage(src?: string | null) {
 
 /**
  * Square entity image frame with an optional non-destructive crop.
- *
- * profile: full-quality presentation; an uncropped source gets the blurred backdrop.
- * thumbnail: one image element only. Use this in dense lists/cards to avoid doubling image decode
- * and GPU blur/compositing work for every row.
+ * Generated avatar-derivative URLs automatically use the one-image thumbnail path even when the
+ * caller does not explicitly opt in, so older list components benefit without extra hydration.
  */
 export function EntityImageFrame({
   src,
@@ -37,7 +35,8 @@ export function EntityImageFrame({
   mode = "profile",
 }: EntityImageFrameProps) {
   const image = hasEntityImage(src) ? src!.trim() : null;
-  const classes = ["entity-image-frame", crop ? "entity-image-frame-cropped" : "", mode === "thumbnail" ? "entity-image-frame-thumbnail" : "", className].filter(Boolean).join(" ");
+  const effectiveMode = mode === "profile" && image?.includes("/entity-images/") ? "thumbnail" : mode;
+  const classes = ["entity-image-frame", crop ? "entity-image-frame-cropped" : "", effectiveMode === "thumbnail" ? "entity-image-frame-thumbnail" : "", className].filter(Boolean).join(" ");
   const rootStyle: CSSProperties = {
     position: "relative",
     display: "grid",
@@ -54,7 +53,7 @@ export function EntityImageFrame({
     transformOrigin: `${crop.x}% ${crop.y}%`,
   } : undefined;
 
-  if (mode === "thumbnail") {
+  if (effectiveMode === "thumbnail") {
     return <span className={classes} style={rootStyle} data-has-image={image ? "true" : "false"} data-has-crop={crop ? "true" : "false"}>
       {image ? <img
         className={crop ? "entity-image-crop-content" : "entity-image-content"}
