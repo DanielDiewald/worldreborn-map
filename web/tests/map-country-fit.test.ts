@@ -48,6 +48,14 @@ test("authoritative repeated fit keeps thin overlap remnants out while preservin
   assert.equal(contains(authoritative.geometry, [90, 40]), true);
 });
 
+test("clearance pixels leave a small safety margin outside an existing country", () => {
+  const result = fitCountryAroundExistingCountries(subject, [existing], 900, 2);
+  assert.ok(result);
+  assert.ok(result.removedPixels > 0);
+  assert.equal(contains(result.geometry, [55.05, 40]), false);
+  assert.equal(contains(result.geometry, [60, 40]), true);
+});
+
 test("country fit leaves geometry untouched when no existing country intersects", () => {
   const farAway = { type: "Polygon", coordinates: [[[300, 0], [340, 0], [340, 40], [300, 40], [300, 0]]] };
   const result = fitCountryAroundExistingCountries(subject, [farAway], 900);
