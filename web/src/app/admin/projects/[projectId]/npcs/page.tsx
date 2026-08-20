@@ -6,6 +6,7 @@ import { EntityPicker } from "@/components/entity-picker";
 import { FantasyDateInput } from "@/components/fantasy-date-input";
 import { ImageSourceInput } from "@/components/image-source-input";
 import { Pagination } from "@/components/pagination";
+import { PersonGenderSelect } from "@/components/person-gender-select";
 import { SubmitButton } from "@/components/submit-button";
 import { requireAdminSession } from "@/lib/auth/session";
 import { calendarStatus, getProjectCalendar } from "@/lib/calendar";
@@ -13,6 +14,7 @@ import { listNpcFilterOptions, listNpcsPaginated, type NpcListFilters } from "@/
 import { getProjectEntityOption } from "@/lib/entity-search";
 import { calculateFantasyAge, type FantasyDate } from "@/lib/fantasy-calendar";
 import { parsePagination } from "@/lib/pagination";
+import { PERSON_GENDER_OPTIONS, isPersonGender, personGenderLabel } from "@/lib/person-gender";
 import { getProject } from "@/lib/projects";
 import { createNpcAction } from "./actions";
 
@@ -23,7 +25,7 @@ type Search = Promise<{
   follower?: string;
   gender?: string;
   locationId?: string;
-  race?: string;
+  raceId?: string;
   className?: string;
   page?: string;
   pageSize?: string;
@@ -39,8 +41,9 @@ export default async function NpcListPage({params,searchParams}:{params:Promise<
   const visibility=["admin_only","all_players","selected_players"].includes(search.visibility??"")?search.visibility as NpcListFilters["visibility"]:undefined;
   const alive=booleanFilter(search.alive);const follower=booleanFilter(search.follower);
   const parsedLocationId=Number.parseInt(search.locationId??"",10);const locationId=Number.isSafeInteger(parsedLocationId)&&parsedLocationId>0?parsedLocationId:undefined;
-  const gender=search.gender?.trim()||undefined;const race=search.race?.trim()||undefined;const className=search.className?.trim()||undefined;
-  const filters:NpcListFilters={query:search.q,visibility,alive,follower,gender,locationId,race,className};
+  const parsedRaceId=Number.parseInt(search.raceId??"",10);const raceId=Number.isSafeInteger(parsedRaceId)&&parsedRaceId>0?parsedRaceId:undefined;
+  const gender=isPersonGender(search.gender)?search.gender:undefined;const className=search.className?.trim()||undefined;
+  const filters:NpcListFilters={query:search.q,visibility,alive,follower,gender,locationId,raceId,className};
   const pagination=parsePagination(search);
   const locationPromise=locationId?getProjectEntityOption(projectId,"location",locationId):Promise.resolve(null);
   const [project,calendar,filterOptions,locationOption,result]=await Promise.all([
@@ -52,30 +55,30 @@ export default async function NpcListPage({params,searchParams}:{params:Promise<
   ]);
   if(!project)notFound();
   const path=`/admin/projects/${projectId}/npcs`;const calendarReady=calendar?calendarStatus(calendar).ready:false;
-  const hasFilters=Boolean(search.q||search.visibility||search.alive||search.follower||search.gender||search.locationId||search.race||search.className);
+  const hasFilters=Boolean(search.q||search.visibility||search.alive||search.follower||search.gender||search.locationId||search.raceId||search.className);
   return <AdminShell projectId={projectId} projectName={project.name} section="npcs" eyebrow={`${project.name} / World`} title="NPCs">
-    <div className="page-heading compact-heading"><div><div className="breadcrumb"><Link href={`/admin/projects/${projectId}`}>{project.name}</Link><span>/</span><strong>NPCs</strong></div><h1>NPCs & Characters</h1><p>Race/Spezies kommt kanonisch aus <code>charakters.race</code>. Alter wird aus dem konfigurierten Fantasy-Geburtsdatum und bei Verstorbenen bis zum Todesdatum berechnet.</p></div>
+    <div className="page-heading compact-heading"><div><div className="breadcrumb"><Link href={`/admin/projects/${projectId}`}>{project.name}</Link><span>/</span><strong>NPCs</strong></div><h1>NPCs & Characters</h1><p>Spezies sind eigene Weltdatensätze. Der NPC verweist auf eine Spezies; deren männliche, weibliche oder hermaphroditische Bezeichnung kann automatisch passend zum Geschlecht angezeigt werden.</p></div><div className="row wrap-row"><Link className="button ghost" href={`/admin/projects/${projectId}/races`}>Spezies verwalten</Link>
       <details className="create-dropdown"><summary className="button primary">＋ Neuer NPC</summary><div className="create-popover" style={{minWidth:680}}><div className="popover-heading"><strong>NPC erstellen</strong><span>Person, Character-Subtype und Weltzeit bleiben getrennt.</span></div><form action={createNpcAction.bind(null,projectId)} className="stack">
-        <section><span className="panel-kicker">GEMEINSAME PERSON · NPCS</span><div className="field-grid two"><label>Name<input name="name" maxLength={100} required/></label><label>Personen-Titel<input name="title" maxLength={120}/></label><label>Beruf / Profession<input name="profession" maxLength={120}/></label><label>Geschlecht<input name="gender" maxLength={10} placeholder="unknown"/></label></div><ImageSourceInput/></section>
-        <section><span className="panel-kicker">CHARACTER SUBTYPE · CHARAKTERS</span><div className="field-grid two"><EntityPicker projectId={projectId} name="locationId" types={["location"]} label="Ort" placeholder="Location suchen …" required allowClear={false} hint="Serverseitige Suche; es werden nie alle Orte in den Browser geladen."/><label>Race / Spezies<input name="race" maxLength={80} required/></label><label>Klasse<input name="className" maxLength={50}/></label><label><input name="follower" type="checkbox"/> Follower</label></div></section>
+        <section><span className="panel-kicker">GEMEINSAME PERSON · NPCS</span><div className="field-grid two"><label>Name<input name="name" maxLength={100} required/></label><label>Personen-Titel<input name="title" maxLength={120}/></label><label>Beruf / Profession<input name="profession" maxLength={120}/></label><label>Geschlecht<PersonGenderSelect/></label></div><ImageSourceInput/></section>
+        <section><span className="panel-kicker">CHARACTER SUBTYPE · CHARAKTERS</span><div className="field-grid two"><EntityPicker projectId={projectId} name="locationId" types={["location"]} label="Ort" placeholder="Location suchen …" required allowClear={false} hint="Serverseitige Suche; es werden nie alle Orte in den Browser geladen."/><label>Spezies<select name="raceId" required defaultValue=""><option value="" disabled>Spezies wählen</option>{filterOptions.races.map((race)=><option key={race.id} value={race.id}>{race.name}</option>)}</select><small className="muted"><Link href={`/admin/projects/${projectId}/races`}>Neue Spezies anlegen</Link></small></label><label>Klasse<input name="className" maxLength={50}/></label><label><input name="follower" type="checkbox"/> Follower</label></div></section>
         <section><span className="panel-kicker">WELTZEIT & LEBENSSTATUS</span>{calendar&&calendarReady?<FantasyDateInput prefix="birth" label="Geburtsdatum" months={calendar.months} beforeEraLabel={calendar.beforeEraLabel} afterEraLabel={calendar.afterEraLabel} hasYearZero={calendar.hasYearZero}/>:<div className="notice warning">Geburts- und Todesdatum können gepflegt werden, sobald der <Link href={`/admin/projects/${projectId}/settings/calendar`}>Weltkalender</Link> gültig konfiguriert ist.</div>}<CharacterLifeStatusInput defaultAlive calendar={calendar&&calendarReady?calendar:null}/></section>
         <section><span className="panel-kicker">BESCHREIBUNG & WISSEN · NPCS</span><label>Öffentliche Beschreibung<textarea name="publicDescription" maxLength={100000}/></label><label>Admin-Notizen<textarea name="adminNotes" maxLength={100000}/></label></section><SubmitButton className="primary" pendingLabel="NPC wird angelegt …">NPC anlegen</SubmitButton>
-      </form></div></details>
+      </form></div></details></div>
     </div>
     <section className="panel-card npc-browser"><form className="stack" method="get">
-      <div className="filter-bar"><label className="search-box"><span aria-hidden="true">⌕</span><input name="q" defaultValue={search.q??""} placeholder="NPC, Race, Klasse oder Beruf suchen …"/></label>
+      <div className="filter-bar"><label className="search-box"><span aria-hidden="true">⌕</span><input name="q" defaultValue={search.q??""} placeholder="NPC, Spezies, Klasse oder Beruf suchen …"/></label>
         <select name="alive" defaultValue={search.alive??""}><option value="">Lebendig & verstorben</option><option value="true">Nur lebendig</option><option value="false">Nur verstorben</option></select>
-        <select name="gender" defaultValue={gender??""}><option value="">Alle Geschlechter</option>{filterOptions.genders.map((value)=><option key={value} value={value}>{value}</option>)}</select>
-        <select name="race" defaultValue={race??""}><option value="">Alle Spezies / Races</option>{filterOptions.races.map((value)=><option key={value} value={value}>{value}</option>)}</select>
+        <select name="gender" defaultValue={gender??""}><option value="">Alle Geschlechter</option>{PERSON_GENDER_OPTIONS.map((option)=><option key={option.value} value={option.value}>{option.label}</option>)}</select>
+        <select name="raceId" defaultValue={raceId??""}><option value="">Alle Spezies</option>{filterOptions.races.map((race)=><option key={race.id} value={race.id}>{race.name}</option>)}</select>
         <select name="className" defaultValue={className??""}><option value="">Alle Klassen</option>{filterOptions.classes.map((value)=><option key={value} value={value}>{value}</option>)}</select>
         <select name="follower" defaultValue={search.follower??""}><option value="">Follower & Nicht-Follower</option><option value="true">Nur Follower</option><option value="false">Keine Follower</option></select>
         <select name="visibility" defaultValue={visibility??""}><option value="">Alle Sichtbarkeiten</option><option value="admin_only">Nur Admin</option><option value="all_players">Alle Spieler</option><option value="selected_players">Ausgewählte</option></select>
       </div>
       <div className="field-grid two"><EntityPicker projectId={projectId} name="locationId" types={["location"]} label="Location" placeholder="Location filtern …" initialValue={locationId?String(locationId):""} initialLabel={locationOption?.name??""} initialKind={locationOption?.kind??""} hint="Optional; serverseitige Suche."/><div className="row wrap-row" style={{alignItems:"end"}}><button type="submit">Filter anwenden</button>{hasFilters?<Link className="button ghost" href={path}>Alle Filter zurücksetzen</Link>:null}</div></div>
     </form>
-      <div className="table-meta"><span><strong>{result.total}</strong> NPCs / Characters</span><span>{hasFilters?"Mehrere Filter werden gleichzeitig angewendet":"Kanonische Personen-ID: n_id"}</span></div>
-      {result.items.length===0?<div className="empty-state large"><strong>Keine NPCs gefunden</strong><span>{hasFilters?"Filter ändern oder zurücksetzen.":"Lege den ersten NPC an."}</span></div>:<div className="table-scroll"><table className="entity-table"><thead><tr><th>Person</th><th>Character</th><th>Status</th><th>Ort</th><th>Profession</th><th>Sichtbarkeit</th><th/></tr></thead><tbody>{result.items.map((npc)=>{const birth=chronologyDate(npc,"birth");const death=!npc.alive?chronologyDate(npc,"death"):null;const age=calendar&&calendarReady?calculateFantasyAge(birth,calendar,death??undefined):null;const ageText=age?.label||(npc.age>0?`${npc.age} Jahre (Legacy)`:"Alter unbekannt");return <tr key={npc.nId}><td><Link className="entity-cell" href={`/admin/projects/${projectId}/npcs/${npc.nId}`}><span className="entity-avatar">{npc.image&&npc.image!=="noimage"?<img src={npc.image} alt="" loading="lazy" width={42} height={42}/>:npc.name.slice(0,1).toUpperCase()}</span><span><strong>{npc.name}</strong><small>{[npc.gender,npc.title||`Person #${npc.nId}`].filter(Boolean).join(" · ")}</small></span></Link></td><td><strong>{npc.race||"—"}</strong><br/><small className="muted">{npc.className||"—"} · {ageText}</small></td><td><strong>{npc.alive?"Lebendig":"Verstorben"}</strong>{npc.follower?<><br/><small className="muted">Follower</small></>:null}</td><td>{npc.location}</td><td>{npc.profession||"—"}</td><td><span className={`visibility-pill ${npc.visibilityMode}`}>{visibilityLabel(npc.visibilityMode)}</span></td><td><Link className="table-action" href={`/admin/projects/${projectId}/npcs/${npc.nId}`}>→</Link></td></tr>;})}</tbody></table></div>}
-      <Pagination pathname={path} searchParams={{q:search.q,visibility:search.visibility,alive:search.alive,follower:search.follower,gender:search.gender,locationId:search.locationId,race:search.race,className:search.className}} page={result.page} pageSize={result.pageSize} total={result.total} totalPages={result.totalPages}/>
+      <div className="table-meta"><span><strong>{result.total}</strong> NPCs / Characters</span><span>{hasFilters?"Mehrere Filter werden gleichzeitig angewendet":"Spezies werden relational über race_id verknüpft"}</span></div>
+      {result.items.length===0?<div className="empty-state large"><strong>Keine NPCs gefunden</strong><span>{hasFilters?"Filter ändern oder zurücksetzen.":"Lege den ersten NPC an."}</span></div>:<div className="table-scroll"><table className="entity-table"><thead><tr><th>Person</th><th>Character</th><th>Status</th><th>Ort</th><th>Profession</th><th>Sichtbarkeit</th><th/></tr></thead><tbody>{result.items.map((npc)=>{const birth=chronologyDate(npc,"birth");const death=!npc.alive?chronologyDate(npc,"death"):null;const age=calendar&&calendarReady?calculateFantasyAge(birth,calendar,death??undefined):null;const ageText=age?.label||(npc.age>0?`${npc.age} Jahre (Legacy)`:"Alter unbekannt");return <tr key={npc.nId}><td><Link className="entity-cell" href={`/admin/projects/${projectId}/npcs/${npc.nId}`}><span className="entity-avatar">{npc.image&&npc.image!=="noimage"?<img src={npc.image} alt="" loading="lazy" width={42} height={42}/>:npc.name.slice(0,1).toUpperCase()}</span><span><strong>{npc.name}</strong><small>{[personGenderLabel(npc.gender),npc.title||`Person #${npc.nId}`].filter(Boolean).join(" · ")}</small></span></Link></td><td><strong>{npc.race||"—"}</strong><br/><small className="muted">{npc.className||"—"} · {ageText}</small></td><td><strong>{npc.alive?"Lebendig":"Verstorben"}</strong>{npc.follower?<><br/><small className="muted">Follower</small></>:null}</td><td>{npc.location}</td><td>{npc.profession||"—"}</td><td><span className={`visibility-pill ${npc.visibilityMode}`}>{visibilityLabel(npc.visibilityMode)}</span></td><td><Link className="table-action" href={`/admin/projects/${projectId}/npcs/${npc.nId}`}>→</Link></td></tr>;})}</tbody></table></div>}
+      <Pagination pathname={path} searchParams={{q:search.q,visibility:search.visibility,alive:search.alive,follower:search.follower,gender:search.gender,locationId:search.locationId,raceId:search.raceId,className:search.className}} page={result.page} pageSize={result.pageSize} total={result.total} totalPages={result.totalPages}/>
     </section>
   </AdminShell>;
 }
