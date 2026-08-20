@@ -1,4 +1,5 @@
 import type { CSSProperties } from "react";
+import type { EntityImageCrop } from "@/lib/entity-image-crop";
 
 type EntityImageFrameProps = {
   src?: string | null;
@@ -8,6 +9,7 @@ type EntityImageFrameProps = {
   loading?: "eager" | "lazy";
   decoding?: "sync" | "async" | "auto";
   style?: CSSProperties;
+  crop?: EntityImageCrop | null;
 };
 
 export function hasEntityImage(src?: string | null) {
@@ -16,11 +18,11 @@ export function hasEntityImage(src?: string | null) {
 }
 
 /**
- * Square presentation frame that always preserves the complete source artwork.
+ * Square entity image frame with an optional non-destructive crop.
  *
- * The original image is rendered with object-fit: contain. A blurred, darkened duplicate fills
- * the square behind it, so portrait and landscape art can live inside a 1:1 UI without being
- * stretched, cropped or surrounded by a flat black box.
+ * A saved crop positions and zooms the original source inside the square. Without a crop, the
+ * complete image stays visible via object-fit: contain and the blurred backdrop fills remaining
+ * space. The source asset itself is never modified or discarded.
  */
 export function EntityImageFrame({
   src,
@@ -30,9 +32,10 @@ export function EntityImageFrame({
   loading = "lazy",
   decoding = "async",
   style,
+  crop = null,
 }: EntityImageFrameProps) {
   const image = hasEntityImage(src) ? src!.trim() : null;
-  const classes = ["entity-image-frame", className].filter(Boolean).join(" ");
+  const classes = ["entity-image-frame", crop ? "entity-image-frame-cropped" : "", className].filter(Boolean).join(" ");
   const rootStyle: CSSProperties = {
     position: "relative",
     display: "grid",
@@ -43,9 +46,32 @@ export function EntityImageFrame({
     background: "radial-gradient(circle at 50% 35%, rgba(199,164,93,.18), rgba(15,18,23,.98) 72%)",
     ...style,
   };
+  const cropStyle: CSSProperties | undefined = crop ? {
+    objectPosition: `${crop.x}% ${crop.y}%`,
+    transform: `scale(${crop.zoom})`,
+    transformOrigin: `${crop.x}% ${crop.y}%`,
+  } : undefined;
 
-  return <span className={classes} style={rootStyle} data-has-image={image ? "true" : "false"}>
-    {image ? <>
+  return <span className={classes} style={rootStyle} data-has-image={image ? "true" : "false"} data-has-crop={crop ? "true" : "false"}>
+    {image ? crop ? <>
+      <img
+        className="entity-image-crop-content"
+        src={image}
+        alt={alt}
+        loading={loading}
+        decoding={decoding}
+        style={{
+          position: "absolute",
+          inset: 0,
+          zIndex: 1,
+          width: "100%",
+          height: "100%",
+          objectFit: "cover",
+          ...cropStyle,
+        }}
+      />
+      <span aria-hidden="true" style={{position:"absolute",inset:0,zIndex:2,boxShadow:"inset 0 0 0 1px rgba(255,255,255,.08)",pointerEvents:"none"}}/>
+    </> : <>
       <img
         className="entity-image-backdrop"
         src={image}
