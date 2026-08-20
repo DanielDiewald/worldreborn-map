@@ -60,6 +60,7 @@ export type WorldMapMarker = {
   short_description?: string | null;
   layer: string;
   z_index: number;
+  href?: string | null;
 };
 
 export type MapSearchItem = {
