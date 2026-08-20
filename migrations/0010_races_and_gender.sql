@@ -3,9 +3,11 @@ BEGIN;
 SET LOCAL lock_timeout = '10s';
 SET LOCAL statement_timeout = '5min';
 
--- The legacy column was varchar(10); the canonical value "hermaphrodite" needs more room.
+-- The legacy columns were narrow free-text fields. Canonical gender/race values need stable room.
 ALTER TABLE public.npcs
   ALTER COLUMN gender TYPE character varying(20);
+ALTER TABLE public.charakters
+  ALTER COLUMN race TYPE character varying(120);
 
 -- Normalize values we can identify safely. Unknown legacy values are deliberately preserved
 -- instead of guessing a gender for an existing person.
