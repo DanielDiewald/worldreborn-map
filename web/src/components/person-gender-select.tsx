@@ -12,6 +12,6 @@ export function PersonGenderSelect({ name = "gender", defaultValue, required = t
       <option value="" disabled>{legacy ? `Bitte zuordnen (bisher: ${legacy})` : "Geschlecht wählen"}</option>
       {PERSON_GENDER_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
     </select>
-    {legacy ? <small className="muted">Der bisherige freie Wert „{legacy}“ muss einmalig einer der drei kanonischen Optionen zugeordnet werden.</small> : null}
+    {legacy ? <small className="muted">Der bisherige freie Wert „{legacy}“ muss einmalig einer kanonischen Option zugeordnet werden. Falls es noch nicht feststeht, kann „Unbekannt“ gewählt werden.</small> : null}
   </>;
 }
