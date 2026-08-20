@@ -4,6 +4,8 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireAdminSession } from "@/lib/auth/session";
 import { archiveCulture, createCulture, getCulture, linkCultureRace, unlinkCultureRace, updateCulture } from "@/lib/entities/cultures";
+import { entityImageCropFromForm } from "@/lib/entity-image-crop";
+import { saveEntityImageProfile } from "@/lib/entity-image-profiles";
 import { resolveEntityImageSource } from "@/lib/media";
 
 function text(formData: FormData, name: string) { return String(formData.get(name) ?? "").trim(); }
@@ -20,6 +22,7 @@ export async function createCultureAction(projectId: number, formData: FormData)
   await requireAdminSession(); const name = text(formData, "name");
   const source = await resolveEntityImageSource(projectId, formData, { title: name || "Kultur" });
   const created = await createCulture(projectId, input(formData, source.image, source.mediaId));
+  await saveEntityImageProfile(projectId, "culture", created.cultureId, source.image, entityImageCropFromForm(formData));
   redirect(`/admin/projects/${projectId}/cultures/${created.cultureId}`);
 }
 
@@ -28,6 +31,9 @@ export async function updateCultureAction(projectId: number, cultureId: number, 
   const source = await resolveEntityImageSource(projectId, formData, { current: current.image, title: current.name });
   const imageMediaId = source.uploaded ? source.mediaId : source.removed || source.image !== current.image ? null : current.imageMediaId;
   await updateCulture(projectId, cultureId, input(formData, source.image, imageMediaId));
+  if (formData.has("imageCrop") || source.uploaded || source.removed || source.image !== current.image) {
+    await saveEntityImageProfile(projectId, "culture", cultureId, source.image, entityImageCropFromForm(formData));
+  }
   revalidatePath(`/admin/projects/${projectId}/cultures`); revalidatePath(`/admin/projects/${projectId}/cultures/${cultureId}`);
 }
 
