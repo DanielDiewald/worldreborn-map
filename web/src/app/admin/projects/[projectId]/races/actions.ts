@@ -14,8 +14,10 @@ async function assertProject(projectId: number) { if (!Number.isSafeInteger(proj
 function raceInput(formData: FormData, image: string, imageMediaId: number | null) {
   const originMapId = nullableNumber(formData, "originMapId");
   const originCoordinateMode = text(formData, "originCoordinateMode");
+  const parentRaceId = nullableNumber(formData, "parentRaceId");
   return {
     name: text(formData, "name"),
+    parentRaceId: parentRaceId && parentRaceId > 0 ? Math.trunc(parentRaceId) : null,
     masculineName: text(formData, "masculineName") || null,
     feminineName: text(formData, "feminineName") || null,
     hermaphroditeName: text(formData, "hermaphroditeName") || null,
