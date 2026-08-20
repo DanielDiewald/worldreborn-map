@@ -45,3 +45,15 @@ test("cultures have their own navigation and admin pages instead of being stored
   assert.match(shell,/Kulturen & Völker/);
   assert.match(culturePage,/Kultur ist bewusst von Biologie getrennt/);
 });
+
+test("ancestry and person culture stay admin-only unless explicitly released to the player",()=>{
+  const sql=repo("migrations/0014_species_identity_player_visibility.sql");
+  assert.match(sql,/character_ancestry ADD COLUMN visible_to_player boolean NOT NULL DEFAULT false/);
+  assert.match(sql,/person_cultures ADD COLUMN visible_to_player boolean NOT NULL DEFAULT false/);
+  const playerWorld=web("src/lib/player-world.ts");
+  assert.match(playerWorld,/ca\.visible_to_player=true/);
+  assert.match(playerWorld,/pc\.visible_to_player=true/);
+  const characterPage=web("src/app/admin/projects/[projectId]/characters/[charId]/page.tsx");
+  assert.match(characterPage,/ancestryVisible/);
+  assert.match(characterPage,/cultureVisible/);
+});
