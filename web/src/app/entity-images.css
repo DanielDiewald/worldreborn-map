@@ -1,0 +1,21 @@
+/*
+ * Shared compatibility rules for entity artwork that has not yet moved to EntityImageFrame.
+ * A square UI must never require the source asset itself to be square: preserve the complete
+ * portrait/illustration and use the frame/background to provide the 1:1 presentation.
+ */
+.entity-avatar:not(.entity-image-frame) > img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain !important;
+  object-position: center;
+  background: radial-gradient(circle at 50% 35%, rgba(199,164,93,.16), rgba(15,18,23,.98) 72%);
+}
+
+.image-source-square-preview {
+  width: min(280px, 100%);
+  aspect-ratio: 1 / 1;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  background: #101318;
+}
