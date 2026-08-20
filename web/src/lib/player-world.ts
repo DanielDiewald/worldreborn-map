@@ -42,11 +42,26 @@ export async function listVisibleGroups(projectId:number,playerId:number){const 
  LEFT JOIN entity_visibility lv ON lv.project_id=g.camp_id AND lv.player_id=$2 AND lv.entity_type='location' AND lv.entity_id=l.loc_id
  WHERE g.camp_id=$1 AND g.archived_at IS NULL AND COALESCE(ev.visible,g.visibility_mode='all_players') AND (l.loc_id IS NULL OR COALESCE(lv.visible,l.visibility_mode='all_players')) ORDER BY g.name`,[projectId,playerId]);return r.rows;}
 
-export async function getMyCharacter(projectId:number,playerId:number){const r=await pool.query<{char_id:number;n_id:number;name:string;image:string;race:string;race_path:string;class:string;age:number;alive:boolean;public_description:string|null;location_name:string}>(
+export async function getMyCharacter(projectId:number,playerId:number){const r=await pool.query<{char_id:number;n_id:number;name:string;image:string;race:string;race_path:string;class:string;age:number;alive:boolean;public_description:string|null;location_name:string;ancestry:string[];cultures:string[]}>(
 `SELECT c.char_id,n.n_id,n.name,n.image,
  COALESCE(CASE n.gender WHEN 'male' THEN NULLIF(race.masculine_name,'') WHEN 'female' THEN NULLIF(race.feminine_name,'') WHEN 'hermaphrodite' THEN NULLIF(race.hermaphrodite_name,'') ELSE NULL END,NULLIF(race.name,''),c.race,'Unbekannt') AS race,
  CASE WHEN parent.race_id IS NOT NULL THEN parent.name||' → '||race.name ELSE race.name END AS race_path,
- c.class,c.age,c.alive,n.public_description,l.name AS location_name
+ c.class,c.age,c.alive,n.public_description,l.name AS location_name,
+ ARRAY(
+   SELECT CASE WHEN ancestry_parent.race_id IS NOT NULL THEN ancestry_parent.name||' → '||ancestry_race.name ELSE ancestry_race.name END
+   FROM character_ancestry ca
+   JOIN races ancestry_race ON ancestry_race.race_id=ca.race_id AND ancestry_race.project_id=n.camp_id AND ancestry_race.archived_at IS NULL
+   LEFT JOIN races ancestry_parent ON ancestry_parent.race_id=ancestry_race.parent_race_id AND ancestry_parent.project_id=n.camp_id AND ancestry_parent.archived_at IS NULL
+   WHERE ca.project_id=n.camp_id AND ca.char_id=c.char_id AND ca.visible_to_player=true
+   ORDER BY CASE ca.relation WHEN 'parental' THEN 0 WHEN 'ancestry' THEN 1 ELSE 2 END,COALESCE(ancestry_parent.name,ancestry_race.name),ancestry_race.name
+ ) AS ancestry,
+ ARRAY(
+   SELECT culture.name
+   FROM person_cultures pc
+   JOIN cultures culture ON culture.culture_id=pc.culture_id AND culture.project_id=n.camp_id AND culture.archived_at IS NULL
+   WHERE pc.project_id=n.camp_id AND pc.person_id=n.n_id AND pc.visible_to_player=true
+   ORDER BY pc.is_primary DESC,culture.name
+ ) AS cultures
  FROM chars a JOIN users u ON u.user_id=a.user_id AND u.camp_id=$1
  JOIN npcs n ON n.n_id=a.n_id AND n.camp_id=u.camp_id
  JOIN charakters c ON c.n_id=n.n_id
