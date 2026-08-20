@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { autoSubdividePolygon, type AutoSubdivisionResult } from "./map-auto-subdivide";
+import { generatePoliticalPalette, type PoliticalPaletteMode } from "./map-feature-presentation";
 import { ensureOpenLayers, mapColor } from "./openlayers-runtime";
 import { splitPolygonByDivider } from "./map-polygon-split";
 import { isMapFeatureEditorLocked } from "./map-topology";
@@ -15,6 +16,12 @@ type TargetKind = "region" | "province" | "district";
 type GeneratedSelectionScope = "regions" | "provinces" | "places";
 
 const TARGET_LABEL: Record<TargetKind, string> = { region: "Region", province: "Provinz", district: "Bezirk" };
+const PALETTE_LABEL: Record<PoliticalPaletteMode, string> = {
+  parent: "Vom Parent ableiten",
+  harmonious: "Harmonische Palette",
+  contrast: "Kontrastreiche Palette",
+  single: "Einfarbig",
+};
 
 function targetsForParent(kind: string | null): Array<{ id: TargetKind; label: string }> {
   if (kind === "country") return [{ id: "region", label: "Regionen" }, { id: "province", label: "Provinzen" }];
@@ -49,21 +56,14 @@ function rememberGeneratedSelection(mapId: number, kind: TargetKind) {
     window.localStorage.setItem(key, JSON.stringify({ ...parsed, [scope]: true }));
   } catch { /* local preferences are optional */ }
 }
-function hslToHex(hue: number, saturation: number, lightness: number) {
-  const s = saturation / 100, l = lightness / 100, c = (1 - Math.abs(2 * l - 1)) * s, h = ((hue % 360) + 360) % 360 / 60;
-  const x = c * (1 - Math.abs((h % 2) - 1)), m = l - c / 2;
-  let rgb: [number, number, number];
-  if (h < 1) rgb = [c, x, 0]; else if (h < 2) rgb = [x, c, 0]; else if (h < 3) rgb = [0, c, x]; else if (h < 4) rgb = [0, x, c]; else if (h < 5) rgb = [x, 0, c]; else rgb = [c, 0, x];
-  return `#${rgb.map((value) => Math.round((value + m) * 255).toString(16).padStart(2, "0")).join("")}`;
-}
-function subdivisionColors(count: number) {
-  return Array.from({ length: count }, (_, index) => hslToHex(248 + (index * 310) / Math.max(1, count), 54 + (index % 3) * 4, 52 + (index % 2) * 5));
-}
 function withAlpha(hex: string, alpha: number) {
   const normalized = hex.replace("#", "");
   if (!/^[0-9a-f]{6}$/i.test(normalized)) return `rgba(124,110,230,${alpha})`;
   const value = Number.parseInt(normalized, 16);
   return `rgba(${(value >> 16) & 255},${(value >> 8) & 255},${value & 255},${alpha})`;
+}
+function nextSeed(seed: number) {
+  return Math.max(1, (seed * 1664525 + 1013904223) % 2_147_483_647);
 }
 
 export function ProvinceDividerTool({ projectId, mapId, map, row, hasProvinceChildren, onClose }: {
@@ -82,6 +82,8 @@ export function ProvinceDividerTool({ projectId, mapId, map, row, hasProvinceChi
   const [targetKind, setTargetKind] = useState<TargetKind>(initialTarget);
   const [count, setCount] = useState(6);
   const [seed, setSeed] = useState(() => Math.max(1, Number(row.feature_id) % 100000 + 17));
+  const [colorSeed, setColorSeed] = useState(() => Math.max(1, Number(row.feature_id) % 100000 + 7919));
+  const [paletteMode, setPaletteMode] = useState<PoliticalPaletteMode>("parent");
   const [irregularity, setIrregularity] = useState(0.75);
   const [balance, setBalance] = useState(0.84);
   const [namePrefix, setNamePrefix] = useState(TARGET_LABEL[initialTarget]);
@@ -103,7 +105,7 @@ export function ProvinceDividerTool({ projectId, mapId, map, row, hasProvinceChi
   const dividerSupported = row.entity_type === "location" && Boolean(row.entity_id) && ["country", "region", "province"].includes(row.location_kind ?? "") && ["Polygon", "MultiPolygon"].includes(row.geometry.type);
   const autoSupported = dividerSupported && targetOptions.length > 0;
   const canDraw = useMemo(() => dividerSupported && !locked && !(mode === "parent_to_two" && hasProvinceChildren) && (mode === "province_to_sibling" ? newName.trim().length > 0 : leftName.trim().length > 0 && rightName.trim().length > 0 && leftName.trim().toLocaleLowerCase() !== rightName.trim().toLocaleLowerCase()), [dividerSupported, locked, mode, hasProvinceChildren, newName, leftName, rightName]);
-  const colors = useMemo(() => subdivisionColors(count), [count]);
+  const colors = useMemo(() => generatePoliticalPalette({ baseColor: currentColor, count, mode: paletteMode, seed: colorSeed }), [currentColor, count, paletteMode, colorSeed]);
 
   function cleanupInteraction() {
     if (drawRef.current && map) map.removeInteraction(drawRef.current);
@@ -154,7 +156,7 @@ export function ProvinceDividerTool({ projectId, mapId, map, row, hasProvinceChi
     map.addLayer(layer); sourceRef.current = source; layerRef.current = layer; return source;
   }
 
-  async function showAutoPreview(result: AutoSubdivisionResult) {
+  async function showAutoPreview(result: AutoSubdivisionResult, palette = colors) {
     const ol = await ensureOpenLayers();
     if (!previewSourceRef.current || !previewLayerRef.current) {
       const source = new ol.source.Vector();
@@ -171,19 +173,19 @@ export function ProvinceDividerTool({ projectId, mapId, map, row, hasProvinceChi
     const source = previewSourceRef.current; source.clear();
     const format = new ol.format.GeoJSON();
     result.parts.forEach((geometry, index) => {
-      const feature = new ol.Feature({ geometry: format.readGeometry(geometry), previewColor: subdivisionColors(result.parts.length)[index], label: `${namePrefix.trim() || TARGET_LABEL[targetKind]} ${index + 1}` });
+      const feature = new ol.Feature({ geometry: format.readGeometry(geometry), previewColor: palette[index], label: `${namePrefix.trim() || TARGET_LABEL[targetKind]} ${index + 1}` });
       source.addFeature(feature);
     });
   }
 
-  async function generateAutoPreview(nextSeed = seed) {
+  async function generateAutoPreview(nextGeometrySeed = seed) {
     if (!autoSupported || locked || saving) return;
     setPreviewing(true); setError("");
     await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
     try {
-      const result = autoSubdividePolygon(row.geometry, { count, seed: nextSeed, irregularity, balance, maxSide: 520 });
+      const result = autoSubdividePolygon(row.geometry, { count, seed: nextGeometrySeed, irregularity, balance, maxSide: 520 });
       if (!result || result.parts.length !== count) throw new Error("Für diese Form konnte keine stabile Aufteilung erzeugt werden. Verringere die Anzahl oder probiere eine andere Verteilung.");
-      setSeed(nextSeed); setPreview(result); await showAutoPreview(result);
+      setSeed(nextGeometrySeed); setPreview(result); await showAutoPreview(result, colors);
     } catch (cause) {
       clearPreview(); setError(cause instanceof Error ? cause.message : "Vorschau konnte nicht erzeugt werden.");
     } finally { setPreviewing(false); }
@@ -196,7 +198,7 @@ export function ProvinceDividerTool({ projectId, mapId, map, row, hasProvinceChi
       const response = await fetch(`/api/admin/projects/${projectId}/maps/${mapId}/features/${row.feature_id}/subdivide`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ targetKind, count, seed, irregularity, balance, namePrefix: namePrefix.trim() || TARGET_LABEL[targetKind], colors }),
+        body: JSON.stringify({ targetKind, count, seed, irregularity, balance, namePrefix: namePrefix.trim() || TARGET_LABEL[targetKind], paletteMode, colorSeed, colors }),
       });
       const body = await response.json().catch(() => ({}));
       if (!response.ok || body.ok !== true) throw new Error(body.error || "Automatische Unterteilung konnte nicht gespeichert werden.");
@@ -255,9 +257,19 @@ export function ProvinceDividerTool({ projectId, mapId, map, row, hasProvinceChi
   function changeTarget(next: TargetKind) {
     setTargetKind(next); setNamePrefix(TARGET_LABEL[next]); invalidatePreview();
   }
-  function randomize() {
-    const next = Math.max(1, (seed * 1664525 + 1013904223) % 2_147_483_647);
-    void generateAutoPreview(next);
+  function randomizeGeometry() {
+    void generateAutoPreview(nextSeed(seed));
+  }
+  function changePaletteMode(next: PoliticalPaletteMode) {
+    setPaletteMode(next);
+    const palette = generatePoliticalPalette({ baseColor: currentColor, count, mode: next, seed: colorSeed });
+    if (preview) void showAutoPreview(preview, palette);
+  }
+  function randomizePalette() {
+    const next = nextSeed(colorSeed);
+    setColorSeed(next);
+    const palette = generatePoliticalPalette({ baseColor: currentColor, count, mode: paletteMode, seed: next });
+    if (preview) void showAutoPreview(preview, palette);
   }
 
   const smallest = preview ? Math.min(...preview.shares) * 100 : 0;
@@ -282,6 +294,15 @@ export function ProvinceDividerTool({ projectId, mapId, map, row, hasProvinceChi
         <label className={styles.field}>Unterteilen in<select value={targetKind} disabled={saving} onChange={(event) => changeTarget(event.target.value as TargetKind)}>{targetOptions.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}</select></label>
         <label className={styles.field}>Anzahl<div className="row" style={{ gap: 8 }}><input type="range" min="2" max="24" step="1" value={count} disabled={saving} onChange={(event) => { setCount(Number(event.target.value)); invalidatePreview(); }}/><input type="number" min="2" max="24" value={count} disabled={saving} style={{ width: 72 }} onChange={(event) => { setCount(Math.max(2, Math.min(24, Number(event.target.value) || 2))); invalidatePreview(); }}/></div></label>
         <label className={styles.field}>Namenspräfix<input value={namePrefix} disabled={saving} maxLength={160} onChange={(event) => setNamePrefix(event.target.value)} placeholder={TARGET_LABEL[targetKind]}/></label>
+
+        <div className={styles.presentationSection}>
+          <div className={styles.presentationHeading}><strong>Farben</strong><span>Unabhängig von den Grenzen</span></div>
+          <label className={styles.field}>Palette<select value={paletteMode} disabled={saving} onChange={(event) => changePaletteMode(event.target.value as PoliticalPaletteMode)}>{(Object.keys(PALETTE_LABEL) as PoliticalPaletteMode[]).map((mode) => <option key={mode} value={mode}>{PALETTE_LABEL[mode]}</option>)}</select></label>
+          <div className={styles.palettePreview} aria-label="Vorschau der Untergebietsfarben">{colors.map((entry, index) => <span key={`${entry}-${index}`} style={{ background: entry }} title={`${TARGET_LABEL[targetKind]} ${index + 1}: ${entry}`}/>)}</div>
+          <button type="button" className="button ghost" disabled={saving} onClick={randomizePalette}>🎨 Andere Palette</button>
+          <small className={styles.panelText}>Farb-Seed {colorSeed}. „Andere Palette“ verändert nur die Darstellung – die bereits berechneten Grenzen bleiben exakt gleich.</small>
+        </div>
+
         <label className={styles.field}>Gleichmäßigkeit <span className={styles.colorValue}>{Math.round(balance * 100)}%</span><input type="range" min="0" max="1" step="0.05" value={balance} disabled={saving} onChange={(event) => { setBalance(Number(event.target.value)); invalidatePreview(); }}/></label>
         <label className={styles.field}>Grenzorganik <span className={styles.colorValue}>{organicityLabel} · {Math.round(irregularity * 100)}%</span><input type="range" min="0" max="1" step="0.025" value={irregularity} disabled={saving} onChange={(event) => { setIrregularity(Number(event.target.value)); invalidatePreview(); }}/></label>
         <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>
@@ -291,14 +312,14 @@ export function ProvinceDividerTool({ projectId, mapId, map, row, hasProvinceChi
           <button type="button" className="button ghost" disabled={saving} onClick={() => applyOrganicPreset(1)}>Extrem</button>
         </div>
         <small className={styles.panelText}>Ab hoher Grenzorganik werden die Innenkanten zusätzlich lokal verschoben. „Wild“ erzeugt deutlich geschwungene Grenzen; „Extrem“ fügt kleinere Buchten, Vorsprünge und ungleichmäßige Abschnitte hinzu, ohne Lücken zwischen den Teilgebieten zu erzeugen.</small>
-        <label className={styles.field}>Seed<input type="number" min="1" max="2147483647" value={seed} disabled={saving} onChange={(event) => { setSeed(Math.max(1, Number(event.target.value) || 1)); invalidatePreview(); }}/></label>
+        <label className={styles.field}>Geometrie-Seed<input type="number" min="1" max="2147483647" value={seed} disabled={saving} onChange={(event) => { setSeed(Math.max(1, Number(event.target.value) || 1)); invalidatePreview(); }}/></label>
         <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>
           <button type="button" className="button primary" disabled={previewing || saving || locked} onClick={() => void generateAutoPreview()}>{previewing ? "Berechnet …" : preview ? "Vorschau neu berechnen" : "Vorschau erzeugen"}</button>
-          <button type="button" className="button ghost" disabled={previewing || saving || locked} onClick={randomize}>↻ Andere Verteilung</button>
+          <button type="button" className="button ghost" disabled={previewing || saving || locked} onClick={randomizeGeometry}>↻ Andere Verteilung</button>
         </div>
-        {preview ? <div className={styles.drawHint}><strong>{preview.parts.length} Teilgebiete bereit.</strong><br/>Flächenanteile ca. {smallest.toFixed(1)}–{largest.toFixed(1)} %. Seed {preview.seed}. Grenzorganik: {organicityLabel}. Die farbige Vorschau wird noch nicht gespeichert.</div> : <div className={styles.drawHint}>Die Parent-Fläche wird vollständig und ohne absichtliche Lücken aufgeteilt. Inseln können als MultiPolygon einem Teilgebiet zugeordnet werden.</div>}
+        {preview ? <div className={styles.drawHint}><strong>{preview.parts.length} Teilgebiete bereit.</strong><br/>Flächenanteile ca. {smallest.toFixed(1)}–{largest.toFixed(1)} %. Geometrie-Seed {preview.seed}, Farb-Seed {colorSeed}. Grenzorganik: {organicityLabel}. Die Vorschau wird noch nicht gespeichert.</div> : <div className={styles.drawHint}>Die Parent-Fläche wird vollständig und ohne absichtliche Lücken aufgeteilt. Inseln können als MultiPolygon einem Teilgebiet zugeordnet werden.</div>}
         <button type="button" className={`button primary ${styles.primaryAction}`} disabled={!preview || saving || locked || !namePrefix.trim()} onClick={() => void saveAutoSubdivision()}>{saving ? `${count} Teilgebiete werden gespeichert …` : `${count} ${targetOptions.find((option) => option.id === targetKind)?.label ?? "Teilgebiete"} speichern`}</button>
-        <small className={styles.panelText}>Nach dem Speichern wechselt die Auswahl automatisch auf die erzeugten Untergebiete und fokussiert das erste neue Gebiet. Bereits gezeichnete polygonale Untergebiete blockieren die Automatik; vorhandene direkt zugeordnete Städte/Punkte werden räumlich neu zugeordnet.</small>
+        <small className={styles.panelText}>Nach dem Speichern wechselt die Auswahl automatisch auf die erzeugten Untergebiete und fokussiert das erste neue Gebiet. Label und Farbe lassen sich anschließend direkt im Karten-Inspector weiterbearbeiten.</small>
       </>}
     </div> : <div className={styles.fieldStack}>
       {mode === "parent_to_two" && hasProvinceChildren ? <div className={styles.drawHint}>Dieses Gebiet besitzt bereits Provinzen. Wähle eine vorhandene Provinz und teile diese weiter, damit keine Flächen überlappen.</div> : null}
