@@ -16,7 +16,7 @@ import styles from "./map-workspace.module.css";
 
 const MARKER_GLYPHS: Record<string, string> = {
   location: "⌂", person: "●", npc: "●", character: "●", god: "✦", group: "◆", event: "◷",
-  landmark: "▲", dungeon: "▣", portal: "◎", quest: "!", party_location: "●", player_origin: "◇", custom: "•",
+  landmark: "▲", dungeon: "▣", portal: "◎", quest: "!", party_location: "●", player_origin: "◇", species: "◉", custom: "•",
 };
 
 const PRESETS = [
@@ -29,7 +29,7 @@ const PRESETS = [
 
 const EMPTY_MARKERS: WorldMapMarker[] = [];
 
-type Selection = { label: string; subtitle: string | null; href: string | null; featureId: number | null; markerId: number | null };
+type Selection = { label: string; subtitle: string | null; href: string | null; image: string | null; featureId: number | null; markerId: number | null };
 
 function sameSelection(current: Selection | null, next: Selection) {
   return Boolean(
@@ -37,9 +37,14 @@ function sameSelection(current: Selection | null, next: Selection) {
     && current.label === next.label
     && current.subtitle === next.subtitle
     && current.href === next.href
+    && current.image === next.image
     && current.featureId === next.featureId
     && current.markerId === next.markerId
   );
+}
+
+function markerIsVisible(markerType: string | null | undefined, visibility: MapContentVisibility) {
+  return markerType === "species" ? visibility.species : visibility.markers;
 }
 
 function localSearch(features: WorldMapFeature[], markers: WorldMapMarker[], query: string, visibility: MapContentVisibility): MapSearchItem[] {
@@ -53,14 +58,15 @@ function localSearch(features: WorldMapFeature[], markers: WorldMapMarker[], que
       id: Number(item.entity_id ?? item.feature_id), name: item.label, subtitle: item.short_description,
       featureId: Number(item.feature_id), markerId: null, href: null,
     }));
-  const markerResults = visibility.markers ? markers
+  const markerResults = markers
+    .filter((item) => markerIsVisible(item.marker_type, visibility))
     .filter((item) => item.label.toLocaleLowerCase().includes(term) || item.entity_label?.toLocaleLowerCase().includes(term))
     .slice(0, 8)
     .map((item) => ({
       kind: item.entity_type === "person" ? "person" as const : "marker" as const,
       id: Number(item.entity_id ?? item.marker_id), name: item.entity_label || item.label,
-      subtitle: item.short_description ?? item.label, featureId: null, markerId: Number(item.marker_id), href: null,
-    })) : [];
+      subtitle: item.short_description ?? item.entity_kind ?? item.label, featureId: null, markerId: Number(item.marker_id), href: item.href ?? null,
+    }));
   return [...featureResults, ...markerResults].slice(0, 12);
 }
 
@@ -106,17 +112,23 @@ export function WorldMapViewer({
   const rasterLayers = useMemo(() => layers.filter((layer) => layer.layer_type === "raster"), [layers]);
   const vectorLayers = useMemo(() => layers.filter((layer) => layer.layer_type === "vector"), [layers]);
   const featureRows = useMemo(() => new Map(features.map((row) => [Number(row.feature_id), row] as const)), [features]);
+  const speciesMarkerCount = useMemo(() => markers.filter((marker) => marker.marker_type === "species").length, [markers]);
+  const regularMarkerCount = markers.length - speciesMarkerCount;
 
   function refreshContentVisibility(next: MapContentVisibility) {
     contentVisibilityRef.current = next;
     setContentVisibility(next);
     for (const layer of vectorLayers) layerRefs.current.get(Number(layer.layer_id))?.changed();
-    markerLayerRef.current?.setVisible(next.markers);
+    markerLayerRef.current?.setVisible(next.markers || next.species);
+    markerLayerRef.current?.changed();
     if (selection?.featureId) {
       const row = featureRows.get(selection.featureId);
       if (row && !next[featureContentCategory(row)]) setSelection(null);
     }
-    if (selection?.markerId && !next.markers) setSelection(null);
+    if (selection?.markerId) {
+      const marker = markerRefs.current.get(selection.markerId);
+      if (marker && !markerIsVisible(String(marker.get("markerType") ?? ""), next)) setSelection(null);
+    }
     setActivePreset("custom");
   }
 
@@ -132,19 +144,25 @@ export function WorldMapViewer({
     const extent = feature.getGeometry()?.getExtent();
     if (!extent) return false;
     map.getView().fit(extent, { padding: [90, 90, 90, 90], maxZoom: Math.min(mapConfig.maxZoom, 5), duration: 280 });
-    const nextSelection: Selection = { label: String(feature.get("label") ?? "Kartenobjekt"), subtitle: feature.get("subtitle") ? String(feature.get("subtitle")) : null, href: null, featureId: id, markerId: null };
+    const nextSelection: Selection = { label: String(feature.get("label") ?? "Kartenobjekt"), subtitle: feature.get("subtitle") ? String(feature.get("subtitle")) : null, href: null, image: null, featureId: id, markerId: null };
     setSelection((current) => sameSelection(current, nextSelection) ? current : nextSelection);
     return true;
   }
 
   function focusMarker(id: number) {
-    if (!contentVisibilityRef.current.markers) return false;
     const feature = markerRefs.current.get(id), map = mapRef.current;
-    if (!feature || !map) return false;
+    if (!feature || !map || !markerIsVisible(String(feature.get("markerType") ?? ""), contentVisibilityRef.current)) return false;
     const coordinates = feature.getGeometry()?.getCoordinates();
     if (!coordinates) return false;
     map.getView().animate({ center: coordinates, zoom: Math.min(mapConfig.maxZoom, Math.max(map.getView().getZoom() ?? 0, 3)), duration: 280 });
-    const nextSelection: Selection = { label: String(feature.get("label") ?? "Marker"), subtitle: feature.get("subtitle") ? String(feature.get("subtitle")) : null, href: null, featureId: null, markerId: id };
+    const nextSelection: Selection = {
+      label: String(feature.get("label") ?? "Marker"),
+      subtitle: feature.get("subtitle") ? String(feature.get("subtitle")) : null,
+      href: feature.get("href") ? String(feature.get("href")) : null,
+      image: feature.get("previewImage") ? String(feature.get("previewImage")) : null,
+      featureId: null,
+      markerId: id,
+    };
     setSelection((current) => sameSelection(current, nextSelection) ? current : nextSelection);
     return true;
   }
@@ -253,12 +271,51 @@ export function WorldMapViewer({
           if (!simple && marker.lat != null && marker.lng != null) coordinates = ol.proj.fromLonLat([marker.lng, marker.lat]);
           if (!coordinates) continue;
           const markerId = Number(marker.marker_id), feature = new ol.Feature({ geometry: new ol.geom.Point(coordinates) });
-          feature.setProperties({ markerId, label: marker.entity_label || marker.label, subtitle: marker.short_description || marker.label, markerType: marker.marker_type, entityType: marker.entity_type, entityId: marker.entity_id });
+          feature.setProperties({
+            markerId,
+            label: marker.entity_label || marker.label,
+            subtitle: marker.short_description || marker.entity_kind || marker.label,
+            markerType: marker.marker_type,
+            entityType: marker.entity_type,
+            entityId: marker.entity_id,
+            previewImage: marker.icon || null,
+            href: marker.href || null,
+          });
           markerSource.addFeature(feature); markerRefs.current.set(markerId, feature);
         }
         const markerLayer = new ol.layer.Vector({
-          source: markerSource, zIndex: 10000, visible: contentVisibilityRef.current.markers,
-          style: (feature: any) => new ol.style.Style({ image: new ol.style.Circle({ radius: 10, fill: new ol.style.Fill({ color: "rgba(20,24,31,.9)" }), stroke: new ol.style.Stroke({ color: "#fff", width: 2 }) }), text: new ol.style.Text({ text: MARKER_GLYPHS[String(feature.get("markerType"))] ?? "•", fill: new ol.style.Fill({ color: "#fff" }), offsetY: 1 }) }),
+          source: markerSource,
+          zIndex: 10000,
+          visible: contentVisibilityRef.current.markers || contentVisibilityRef.current.species,
+          declutter: true,
+          style: (feature: any) => {
+            const markerType = String(feature.get("markerType") ?? "custom");
+            if (!markerIsVisible(markerType, contentVisibilityRef.current)) return null;
+            if (markerType === "species") {
+              const label = contentVisibilityRef.current.labels ? String(feature.get("label") ?? "") : "";
+              const image = feature.get("previewImage") ? String(feature.get("previewImage")) : null;
+              const labelStyle = new ol.style.Text({
+                text: label,
+                offsetY: image ? 36 : 29,
+                font: "600 11px system-ui, sans-serif",
+                fill: new ol.style.Fill({ color: "#fff8e6" }),
+                stroke: new ol.style.Stroke({ color: "rgba(8,11,15,.96)", width: 4 }),
+                backgroundFill: new ol.style.Fill({ color: "rgba(12,16,22,.82)" }),
+                padding: [3, 5, 3, 5],
+              });
+              if (image) {
+                return [
+                  new ol.style.Style({ image: new ol.style.Circle({ radius: 26, fill: new ol.style.Fill({ color: "rgba(14,18,24,.96)" }), stroke: new ol.style.Stroke({ color: "#d4b76e", width: 3 }) }) }),
+                  new ol.style.Style({ image: new ol.style.Icon({ src: image, width: 42, height: 42 }), text: labelStyle }),
+                ];
+              }
+              return new ol.style.Style({
+                image: new ol.style.Circle({ radius: 15, fill: new ol.style.Fill({ color: "rgba(37,31,19,.96)" }), stroke: new ol.style.Stroke({ color: "#d4b76e", width: 3 }) }),
+                text: new ol.style.Text({ text: MARKER_GLYPHS.species, fill: new ol.style.Fill({ color: "#f4d58d" }), stroke: new ol.style.Stroke({ color: "#17130b", width: 2 }), offsetY: 1 }),
+              });
+            }
+            return new ol.style.Style({ image: new ol.style.Circle({ radius: 10, fill: new ol.style.Fill({ color: "rgba(20,24,31,.9)" }), stroke: new ol.style.Stroke({ color: "#fff", width: 2 }) }), text: new ol.style.Text({ text: MARKER_GLYPHS[markerType] ?? "•", fill: new ol.style.Fill({ color: "#fff" }), offsetY: 1 }) });
+          },
         });
         markerLayerRef.current = markerLayer;
         renderedLayers.push(markerLayer);
@@ -275,7 +332,8 @@ export function WorldMapViewer({
         map.forEachFeatureAtPixel(pixel, (feature: any) => {
           const markerId = Number(feature.get("markerId"));
           if (markerId) {
-            if (contentVisibilityRef.current.markers && !markerHit) markerHit = feature;
+            const markerType = String(feature.get("markerType") ?? "custom");
+            if (markerIsVisible(markerType, contentVisibilityRef.current) && !markerHit) markerHit = feature;
             return undefined;
           }
           const featureId = Number(feature.get("featureId"));
@@ -295,7 +353,14 @@ export function WorldMapViewer({
         const { markerHit, mapCandidates } = collectVisibleHits(event.pixel);
         if (markerHit) {
           const markerId = Number(markerHit.get("markerId")) || null;
-          setSelection({ label: String(markerHit.get("label") ?? "Marker"), subtitle: markerHit.get("subtitle") ? String(markerHit.get("subtitle")) : null, href: null, featureId: null, markerId });
+          setSelection({
+            label: String(markerHit.get("label") ?? "Marker"),
+            subtitle: markerHit.get("subtitle") ? String(markerHit.get("subtitle")) : null,
+            href: markerHit.get("href") ? String(markerHit.get("href")) : null,
+            image: markerHit.get("previewImage") ? String(markerHit.get("previewImage")) : null,
+            featureId: null,
+            markerId,
+          });
           return;
         }
         const candidate = mapCandidates[0];
@@ -306,6 +371,7 @@ export function WorldMapViewer({
           label: String(feature.get("label") ?? candidate.label ?? "Kartenobjekt"),
           subtitle: feature.get("subtitle") ? String(feature.get("subtitle")) : null,
           href: null,
+          image: null,
           featureId: candidate.featureId,
           markerId: null,
         });
@@ -335,7 +401,15 @@ export function WorldMapViewer({
         const response = await fetch(`${searchEndpoint}${separator}q=${encodeURIComponent(term)}`, { signal: controller.signal });
         const body = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(body.error || "Kartensuche fehlgeschlagen.");
-        setResults(Array.isArray(body.items) ? body.items : fallback);
+        const remote = Array.isArray(body.items) ? body.items as MapSearchItem[] : [];
+        const seen = new Set<string>();
+        const merged = [...fallback, ...remote].filter((item) => {
+          const key = `${item.kind}:${item.id}:${item.featureId ?? ""}:${item.markerId ?? ""}`;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+        setResults(merged.slice(0, 12));
       } catch (cause) { if ((cause as Error).name !== "AbortError") setResults(fallback); }
       finally { setSearching(false); }
     }, 180);
@@ -347,7 +421,17 @@ export function WorldMapViewer({
     if (item.featureId) focused = focusFeature(item.featureId);
     if (!focused && item.markerId) focused = focusMarker(item.markerId);
     if (!focused && item.href) { window.location.assign(item.href); return; }
-    if (focused) setSelection({ label: item.name, subtitle: item.subtitle, href: item.href, featureId: item.featureId, markerId: item.markerId });
+    if (focused) {
+      const marker = item.markerId ? markerRefs.current.get(item.markerId) : null;
+      setSelection({
+        label: item.name,
+        subtitle: item.subtitle,
+        href: item.href,
+        image: marker?.get("previewImage") ? String(marker.get("previewImage")) : null,
+        featureId: item.featureId,
+        markerId: item.markerId,
+      });
+    }
     setQuery(item.name); setResults([]);
   }
 
@@ -365,7 +449,7 @@ export function WorldMapViewer({
       <div className={styles.topSearch}>
         <div className={`${styles.searchShell} ${styles.glass}`}>
           <span className={styles.searchIcon} aria-hidden="true">⌕</span>
-          <input className={styles.searchInput} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Land, Stadt, NPC oder Ort suchen …" aria-label="In dieser Karte suchen"/>
+          <input className={styles.searchInput} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Land, Stadt, NPC, Spezies oder Ort suchen …" aria-label="In dieser Karte suchen"/>
           {searching ? <span className={styles.searchBusy}>Suche …</span> : null}
         </div>
         {query.trim() ? <div className={`${styles.searchResults} ${styles.glass}`}>
@@ -389,7 +473,7 @@ export function WorldMapViewer({
               <button type="button" className="button ghost" style={{ minHeight: 28, height: 28, padding: "0 8px", fontSize: 9 }} onClick={() => refreshContentVisibility(allContentVisibility(false))}>Alle aus</button>
             </div>
             {MAP_CONTENT_FILTERS.map((filter) => {
-              const disabled = filter.id === "markers" && markers.length === 0;
+              const disabled = filter.id === "markers" ? regularMarkerCount === 0 : filter.id === "species" ? speciesMarkerCount === 0 : false;
               return <div className={styles.layerRow} key={filter.id}>
                 <div className={styles.layerInfo}><strong>{filter.icon} {filter.label}</strong><small>{filter.hint}</small></div>
                 <div className={styles.layerControl}><input type="checkbox" checked={contentVisibility[filter.id]} disabled={disabled} onChange={(event) => toggleContent(filter.id, event.target.checked)} aria-label={`${filter.label} ein- oder ausblenden`}/></div>
@@ -407,6 +491,7 @@ export function WorldMapViewer({
 
       {selection ? <aside className={`${styles.inspector} ${styles.glass}`}>
         <div className={styles.panelHeader}><div><span className={styles.kicker}>AUSGEWÄHLT</span><h3 className={styles.panelTitle}>{selection.label}</h3></div><button type="button" className={styles.closeButton} onClick={() => setSelection(null)} aria-label="Auswahl schließen">×</button></div>
+        {selection.image ? <img className={styles.inspectorPreview} src={selection.image} alt=""/> : null}
         {selection.subtitle ? <p className={styles.inspectorText}>{selection.subtitle}</p> : null}
         <div className={styles.inspectorActions}>{selection.href ? <a className="button primary" href={selection.href}>Details öffnen</a> : null}</div>
       </aside> : null}
