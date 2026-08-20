@@ -1,4 +1,5 @@
 export const PERSON_GENDER_OPTIONS = [
+  { value: "unknown", label: "Unbekannt" },
   { value: "male", label: "Männlich" },
   { value: "female", label: "Weiblich" },
   { value: "hermaphrodite", label: "Hermaphrodit" },
