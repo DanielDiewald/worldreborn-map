@@ -48,14 +48,46 @@ test("legacy remote URLs are materialized once and keep their saved crop", () =>
   assert.match(derivatives, /materializeLegacyRemoteEntityImage/);
 });
 
-test("npc race and culture lists route legacy remote URLs through avatar endpoints", () => {
-  const npc = read("src/lib/entities/npcs.ts");
-  const race = read("src/lib/race-registry.ts");
-  const culture = read("src/lib/entities/cultures.ts");
-  for (const source of [npc, race, culture]) {
+test("remote materialization reads the canonical crop only after the image reference is rewritten", () => {
+  const derivatives = read("src/lib/entity-image-derivatives.ts");
+  const materializeIndex = derivatives.indexOf("materializeLegacyRemoteEntityImage(projectId, entityType, entityId, sourceImage)");
+  const canonicalIndex = derivatives.indexOf("const canonicalSourceImage = await getEntitySource(projectId, entityType, entityId)");
+  const cropIndex = derivatives.indexOf("const crop = await getCrop(projectId, entityType, entityId, sourceImage)");
+  assert.ok(materializeIndex >= 0);
+  assert.ok(canonicalIndex > materializeIndex);
+  assert.ok(cropIndex > canonicalIndex);
+});
+
+test("fast avatar path rejects derivatives whose source or crop no longer matches", () => {
+  const fast = read("src/lib/entity-image-derivative-fast.ts");
+  assert.match(fast, /currentImage !== `\/api\/media\/\$\{mediaId\}`/);
+  assert.match(fast, /row\.source_image !== `media:\$\{mediaId\}:\$\{row\.media_storage_path\}`/);
+  assert.match(fast, /row\.crop_source_image === currentImage/);
+  assert.match(fast, /sameCrop\(row\.derivative_crop, currentCrop\)/);
+});
+
+test("all cropped admin entity lists route remote URLs through avatar endpoints", () => {
+  const sources = [
+    read("src/lib/entities/npcs.ts"),
+    read("src/lib/entities/gods.ts"),
+    read("src/lib/entities/groups.ts"),
+    read("src/lib/entities/locations.ts"),
+    read("src/lib/race-registry.ts"),
+    read("src/lib/entities/cultures.ts"),
+  ];
+  for (const source of sources) {
     assert.match(source, /\^https\?:\/\//);
     assert.match(source, /LIKE '\/\/%'/);
     assert.match(source, /entity-images\//);
     assert.match(source, /\/avatar/);
   }
+});
+
+test("dashboard and family tree normalize person artwork through the shared avatar helper", () => {
+  const dashboard = read("src/app/admin/projects/[projectId]/page.tsx");
+  const familyTree = read("src/app/admin/projects/[projectId]/family-trees/[treeId]/page.tsx");
+  const helper = read("src/lib/entity-image-url.ts");
+  assert.match(dashboard, /entityListImageUrl\(projectId,"person",npc\.id,npc\.image\)/);
+  assert.match(familyTree, /entityListImageUrl\(projectId,"person",person\.personId,person\.image\)/);
+  assert.match(helper, /imageReferenceUsesAvatarDerivative\(image\)/);
 });
