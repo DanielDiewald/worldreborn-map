@@ -5,6 +5,7 @@ import path from "node:path";
 import sharp from "sharp";
 import { pool } from "@/lib/db";
 import { normalizeEntityImageCrop, type EntityImageCrop } from "@/lib/entity-image-crop";
+import { entityAvatarExtractRect, entityAvatarLocalSourceKey, entityAvatarManagedSourceKey } from "@/lib/entity-image-crop-geometry";
 import { classifyDerivativeImageSource, imageReferenceUsesAvatarDerivative } from "@/lib/entity-image-source";
 import { materializeLegacyRemoteEntityImage } from "@/lib/legacy-remote-image-materialize";
 import { getMediaStorageRoot, localStorage } from "@/lib/storage";
@@ -72,21 +73,6 @@ function sameCrop(left: unknown, right: EntityImageCrop | null) {
   return normalized.x === right.x && normalized.y === right.y && normalized.zoom === right.zoom;
 }
 
-function squareExtract(width: number, height: number, crop: EntityImageCrop) {
-  const zoom = Math.min(4, Math.max(1, crop.zoom));
-  const side = Math.max(1, Math.min(width, height) / zoom);
-  const focusX = width * Math.min(100, Math.max(0, crop.x)) / 100;
-  const focusY = height * Math.min(100, Math.max(0, crop.y)) / 100;
-  const left = Math.max(0, Math.min(width - side, focusX - side / 2));
-  const top = Math.max(0, Math.min(height - side, focusY - side / 2));
-  return {
-    left: Math.max(0, Math.round(left)),
-    top: Math.max(0, Math.round(top)),
-    width: Math.max(1, Math.min(width, Math.round(side))),
-    height: Math.max(1, Math.min(height, Math.round(side))),
-  };
-}
-
 async function renderAvatar(source: Buffer, crop: EntityImageCrop | null) {
   const base = sharp(source, { failOn: "error" }).rotate();
   if (crop) {
@@ -94,7 +80,7 @@ async function renderAvatar(source: Buffer, crop: EntityImageCrop | null) {
     const width = metadata.width ?? 0, height = metadata.height ?? 0;
     if (width <= 0 || height <= 0) throw new Error("Bilddimensionen konnten für das Thumbnail nicht gelesen werden.");
     return base
-      .extract(squareExtract(width, height, crop))
+      .extract(entityAvatarExtractRect(width, height, crop))
       .resize(ENTITY_AVATAR_SIZE, ENTITY_AVATAR_SIZE, { fit: "fill" })
       .webp({ quality: 78, effort: 4 })
       .toBuffer();
@@ -158,7 +144,7 @@ async function resolveSafeLocalImage(localPath: string): Promise<ResolvedDerivat
       if (filePath !== root && !filePath.startsWith(rootPrefix)) continue;
       const fileStat = await stat(filePath);
       if (!fileStat.isFile()) continue;
-      const sourceKey = `local:${localPath}:${fileStat.size}:${Math.trunc(fileStat.mtimeMs)}`;
+      const sourceKey = entityAvatarLocalSourceKey(localPath, fileStat.size, fileStat.mtimeMs);
       return { sourceKey, sourceMediaId: null, read: () => readFile(filePath) };
     } catch {
       // Try the next explicitly allowed root. Missing paths are normal for legacy installations.
@@ -179,7 +165,7 @@ export async function resolveDerivativeImageSource(projectId: number, sourceImag
     // As long as storage_path exists, derivatives must be generated from the cached local bytes.
     if (!row?.storage_path) return null;
     return {
-      sourceKey: `media:${reference.mediaId}:${row.storage_path}`,
+      sourceKey: entityAvatarManagedSourceKey(reference.mediaId, row.storage_path),
       sourceMediaId: reference.mediaId,
       read: () => localStorage.read(row.storage_path!),
     };
