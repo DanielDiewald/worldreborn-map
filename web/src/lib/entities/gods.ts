@@ -22,7 +22,7 @@ function godFilter(projectId:number,filters:GodListFilters={}){
 }
 
 const godSelect=`SELECT g.g_id AS god_id,n.n_id AS person_id,n.n_id AS npc_id,n.name,
-  CASE WHEN n.image ~ '^/api/media/[0-9]+$' OR n.image LIKE '/img/%' OR n.image LIKE '/images/%' OR n.image LIKE '/uploads/%'
+  CASE WHEN n.image ~ '^/api/media/[0-9]+$' OR n.image ~* '^https?://' OR n.image LIKE '//%' OR n.image LIKE '/img/%' OR n.image LIKE '/images/%' OR n.image LIKE '/uploads/%'
     THEN '/api/admin/projects/'||n.camp_id||'/entity-images/person/'||n.n_id||'/avatar' ELSE n.image END AS image,
   g.title,g.domain,g.faction,n.title AS person_title,n.species,n.profession,LEFT(n.public_description,1200) AS public_description,n.visibility_mode
   FROM gods g JOIN npcs n ON n.n_id=g.n_id`;
