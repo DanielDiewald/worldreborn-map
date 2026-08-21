@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { EntityImageFrame } from "@/components/entity-image-frame";
 
 type Props = {
@@ -20,6 +20,7 @@ function validImage(value?: string | null) {
 export function ImageSourceInput({ current, pathName = "image", fileName = "imageFile", label = "Bild / Porträt" }: Props) {
   const id = useId();
   const initial = validImage(current) ? current!.trim() : "";
+  const lastServerImageRef=useRef(initial);
   const [pathValue, setPathValue] = useState(initial);
   const [filePreview, setFilePreview] = useState("");
   const [remove, setRemove] = useState(false);
@@ -27,6 +28,15 @@ export function ImageSourceInput({ current, pathName = "image", fileName = "imag
   const source = remove ? "" : filePreview || pathValue || initial;
 
   useEffect(() => () => { if (filePreview.startsWith("blob:")) URL.revokeObjectURL(filePreview); }, [filePreview]);
+  useEffect(()=>{
+    const next=validImage(current)?current!.trim():"";
+    if(lastServerImageRef.current===next)return;
+    lastServerImageRef.current=next;
+    setPathValue(next);
+    setFilePreview("");
+    setRemove(false);
+    setError(null);
+  },[current]);
 
   function chooseFile(file: File | null) {
     setError(null);
