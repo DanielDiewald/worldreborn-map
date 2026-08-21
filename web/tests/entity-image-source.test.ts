@@ -10,9 +10,10 @@ test("managed media and safe local image paths use avatar derivatives", () => {
   assert.equal(imageReferenceUsesAvatarDerivative("/img/npcs/lyrana.jpg"), true);
 });
 
-test("external URLs are never treated as server-side derivative sources", () => {
+test("external URLs are materialized and use server-side avatar derivatives", () => {
   assert.deepEqual(classifyDerivativeImageSource("https://example.com/image.jpg"), { kind: "external", source: "https://example.com/image.jpg" });
-  assert.equal(imageReferenceUsesAvatarDerivative("https://example.com/image.jpg"), false);
+  assert.equal(imageReferenceUsesAvatarDerivative("https://example.com/image.jpg"), true);
+  assert.equal(imageReferenceUsesAvatarDerivative("//cdn.example.com/image.jpg"), true);
 });
 
 test("path traversal and uncontrolled filesystem paths are rejected", () => {
