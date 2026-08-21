@@ -87,10 +87,10 @@ const npcSelect=`SELECT n.n_id AS "nId",c.char_id AS "charId",n.camp_id AS "camp
   LEFT JOIN fantasy_dates death_fd ON death_fd.project_id=n.camp_id AND death_fd.entity_type='person' AND death_fd.entity_id=n.n_id AND death_fd.field_key='death'`;
 
 // Dense list pages deliberately do not fetch descriptions, admin notes, media metadata or death
-// details. Managed originals and safe local image paths are replaced by the lazy 256px derivative
-// endpoint before they ever reach the React tree.
+// details. Managed originals, cached/legacy remote URLs and safe local image paths are replaced by
+// the lazy 256px derivative endpoint before they ever reach the React tree.
 const npcListSelect=`SELECT n.n_id AS "nId",c.char_id AS "charId",n.camp_id AS "campId",n.name,n.gender,
-  CASE WHEN n.image ~ '^/api/media/[0-9]+$' OR n.image LIKE '/img/%' OR n.image LIKE '/images/%' OR n.image LIKE '/uploads/%'
+  CASE WHEN n.image ~ '^/api/media/[0-9]+$' OR n.image ~* '^https?://' OR n.image LIKE '//%' OR n.image LIKE '/img/%' OR n.image LIKE '/images/%' OR n.image LIKE '/uploads/%'
     THEN '/api/admin/projects/'||n.camp_id||'/entity-images/person/'||n.n_id||'/avatar' ELSE n.image END AS image,
   n.title,n.profession,n.visibility_mode AS "visibilityMode",c.loc_id AS "locId",l.name AS location,c.race_id::int AS "raceId",
   COALESCE(CASE n.gender WHEN 'male' THEN NULLIF(r.masculine_name,'') WHEN 'female' THEN NULLIF(r.feminine_name,'') WHEN 'hermaphrodite' THEN NULLIF(r.hermaphrodite_name,'') ELSE NULL END,NULLIF(r.name,''),NULLIF(c.race,''),'Unbekannt') AS race,
