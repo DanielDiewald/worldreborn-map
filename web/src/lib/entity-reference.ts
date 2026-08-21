@@ -35,9 +35,9 @@ async function resolvePerson(projectId: number, entityType: string, entityId: nu
         WHERE n.camp_id=$1 AND n.n_id=$2 AND n.archived_at IS NULL`,
       [projectId, entityId],
     );
-    if (result.rowCount !== 1) throw new Error("Person does not belong to this project.");
+    if (result.rowCount !== 1) throw new Error("Die Person gehört nicht zu dieser Welt oder ist archiviert.");
     const row = result.rows[0];
-    if (row.has_character === row.has_god) throw new Error("Person subtype invariant is violated.");
+    if (row.has_character === row.has_god) throw new Error("Der Personen-Datensatz besitzt keinen eindeutigen Charakter-/Gottheiten-Subtyp.");
     return { type: "person", id: row.n_id, projectId, kind: row.has_god ? "god" : "character" };
   }
 
@@ -49,7 +49,7 @@ async function resolvePerson(projectId: number, entityType: string, entityId: nu
         WHERE n.camp_id=$1 AND c.char_id=$2 AND n.archived_at IS NULL`,
       [projectId, entityId],
     );
-    if (result.rowCount !== 1) throw new Error("Character does not belong to this project.");
+    if (result.rowCount !== 1) throw new Error("Der Charakter gehört nicht zu dieser Welt oder ist archiviert.");
     return { type: "person", id: result.rows[0].n_id, projectId, kind: "character" };
   }
 
@@ -60,7 +60,7 @@ async function resolvePerson(projectId: number, entityType: string, entityId: nu
       WHERE n.camp_id=$1 AND g.g_id=$2 AND n.archived_at IS NULL`,
     [projectId, entityId],
   );
-  if (result.rowCount !== 1) throw new Error("God does not belong to this project.");
+  if (result.rowCount !== 1) throw new Error("Die Gottheit gehört nicht zu dieser Welt oder ist archiviert.");
   return { type: "person", id: result.rows[0].n_id, projectId, kind: "god" };
 }
 
@@ -70,7 +70,7 @@ export async function resolveEntityReference(args: {
   entityId: number;
 }): Promise<ResolvedEntityReference> {
   if (!Number.isSafeInteger(args.projectId) || args.projectId <= 0 || !Number.isSafeInteger(args.entityId) || args.entityId <= 0) {
-    throw new Error("Invalid entity reference.");
+    throw new Error("Ungültige Entitätsreferenz.");
   }
 
   if (isPersonReferenceType(args.entityType)) {
@@ -88,9 +88,9 @@ export async function resolveEntityReference(args: {
     player: "SELECT 1 FROM users WHERE camp_id=$1 AND user_id=$2",
   };
   const query = queries[args.entityType as CanonicalEntityType];
-  if (!query) throw new Error(`Unsupported entity type: ${args.entityType}`);
+  if (!query) throw new Error(`Nicht unterstützter Entitätstyp: ${args.entityType}`);
 
   const result = await pool.query(query, [args.projectId, args.entityId]);
-  if (result.rowCount !== 1) throw new Error("Entity does not belong to this project.");
+  if (result.rowCount !== 1) throw new Error("Die ausgewählte Entität gehört nicht zu dieser Welt oder existiert nicht mehr.");
   return { type: args.entityType as CanonicalEntityType, id: args.entityId, projectId: args.projectId };
 }
