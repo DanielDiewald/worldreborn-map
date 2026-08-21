@@ -6,6 +6,7 @@ import sharp from "sharp";
 import { pool } from "@/lib/db";
 import { normalizeEntityImageCrop, type EntityImageCrop } from "@/lib/entity-image-crop";
 import { classifyDerivativeImageSource, imageReferenceUsesAvatarDerivative } from "@/lib/entity-image-source";
+import { materializeLegacyRemoteEntityImage } from "@/lib/legacy-remote-image-materialize";
 import { getMediaStorageRoot, localStorage } from "@/lib/storage";
 
 export const ENTITY_AVATAR_SIZE = 256;
@@ -206,10 +207,14 @@ export async function ensureEntityAvatarDerivative(projectId: number, entityType
     return null;
   }
 
-  const [crop, source] = await Promise.all([
+  const [crop, initiallyResolved] = await Promise.all([
     getCrop(projectId, entityType, entityId, sourceImage),
     resolveDerivativeImageSource(projectId, sourceImage),
   ]);
+  let source = initiallyResolved;
+  if (!source && classifyDerivativeImageSource(sourceImage).kind === "external") {
+    source = await materializeLegacyRemoteEntityImage(projectId, entityType, entityId, sourceImage);
+  }
   if (!source) {
     if (current) await deleteEntityAvatarDerivative(projectId, entityType, entityId);
     return null;
