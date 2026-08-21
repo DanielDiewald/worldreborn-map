@@ -40,6 +40,9 @@ export async function listRaceRegistry(projectId: number) {
            r.masculine_name AS "masculineName",r.feminine_name AS "feminineName",r.hermaphrodite_name AS "hermaphroditeName",
            LEFT(r.description,320) AS description,
            CASE WHEN r.image ~ '^/api/media/[0-9]+$'
+                  OR r.image LIKE '/img/%'
+                  OR r.image LIKE '/images/%'
+                  OR r.image LIKE '/uploads/%'
              THEN '/api/admin/projects/'||r.project_id||'/entity-images/race/'||r.race_id||'/avatar'
              ELSE r.image END AS image,
            r.origin_map_id::int AS "originMapId",pm.name AS "originMapName",
