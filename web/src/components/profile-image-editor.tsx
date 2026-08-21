@@ -32,9 +32,24 @@ export function ProfileImageEditor({
   const [crop, setCrop] = useState<EntityImageCrop>(currentCrop ?? DEFAULT_CROP);
   const cropStageRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ pointerId: number; clientX: number; clientY: number; cropX: number; cropY: number; width: number; height: number } | null>(null);
+  const lastServerImageRef = useRef(initialImage);
   const source = remove ? "" : filePreview || pathValue || initialImage;
 
   useEffect(() => () => { if (filePreview.startsWith("blob:")) URL.revokeObjectURL(filePreview); }, [filePreview]);
+
+  // Server Actions can re-render the same client component instance after saving. Keep the local
+  // editor in sync when the canonical image changed on the server, without overwriting an active
+  // unsaved drag/slider operation during ordinary renders.
+  useEffect(() => {
+    const nextImage = hasEntityImage(current) ? current!.trim() : "";
+    if (lastServerImageRef.current === nextImage) return;
+    lastServerImageRef.current = nextImage;
+    setPathValue(nextImage);
+    setFilePreview("");
+    setRemove(false);
+    setCropEnabled(Boolean(currentCrop));
+    setCrop(currentCrop ?? DEFAULT_CROP);
+  }, [current, currentCrop]);
 
   const cropValue = useMemo(() => cropEnabled && hasEntityImage(source) ? JSON.stringify(crop) : "", [cropEnabled, crop, source]);
 
@@ -47,7 +62,8 @@ export function ProfileImageEditor({
   }
 
   function startDrag(event: ReactPointerEvent<HTMLDivElement>) {
-    if (!cropEnabled || !cropStageRef.current) return;
+    if (!cropEnabled || !cropStageRef.current || !hasEntityImage(source)) return;
+    event.preventDefault();
     const rect = cropStageRef.current.getBoundingClientRect();
     dragRef.current = { pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY, cropX: crop.x, cropY: crop.y, width: rect.width, height: rect.height };
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -56,6 +72,7 @@ export function ProfileImageEditor({
   function moveDrag(event: ReactPointerEvent<HTMLDivElement>) {
     const drag = dragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
+    event.preventDefault();
     const dx = event.clientX - drag.clientX;
     const dy = event.clientY - drag.clientY;
     setCrop((value) => ({
@@ -90,26 +107,29 @@ export function ProfileImageEditor({
           onPointerMove={moveDrag}
           onPointerUp={endDrag}
           onPointerCancel={endDrag}
+          style={{ touchAction: "none", cursor: cropEnabled && hasEntityImage(source) ? "grab" : "default", userSelect: "none" }}
           title={cropEnabled ? "Bild ziehen, um den sichtbaren Ausschnitt zu verschieben" : undefined}
         >
           <EntityImageFrame src={source || null} fallback="Bild" crop={cropEnabled ? crop : null} className="profile-image-editor-preview"/>
           {cropEnabled && hasEntityImage(source) ? <span className="profile-image-crop-hint">Ziehen zum Positionieren</span> : null}
         </div>
-        {cropEnabled ? <button type="button" className="button ghost" onClick={() => { setCropEnabled(false); setCrop(DEFAULT_CROP); }}>Zuschnitt entfernen</button> : <button type="button" className="button" disabled={!hasEntityImage(source)} onClick={() => { setCrop(DEFAULT_CROP); setCropEnabled(true); }}>1:1-Zuschnitt anlegen</button>}
+        {cropEnabled ? <div className="row wrap-row">
+          <button type="button" className="button ghost" onClick={() => setCrop(DEFAULT_CROP)}>Zuschnitt zurücksetzen</button>
+          <button type="button" className="button ghost" onClick={() => { setCropEnabled(false); setCrop(DEFAULT_CROP); }}>Zuschnitt entfernen</button>
+        </div> : <button type="button" className="button" disabled={!hasEntityImage(source)} onClick={() => { setCrop(DEFAULT_CROP); setCropEnabled(true); }}>1:1-Zuschnitt verwenden</button>}
       </div>
     </div>
 
     {cropEnabled && hasEntityImage(source) ? <div className="profile-image-crop-controls">
-      <label>Horizontaler Fokus
+      <label>Horizontaler Fokus · {Math.round(crop.x)}%
         <input type="range" min="0" max="100" step="1" value={crop.x} onChange={(event) => setCrop((value) => ({ ...value, x: Number(event.target.value) }))}/>
       </label>
-      <label>Vertikaler Fokus
+      <label>Vertikaler Fokus · {Math.round(crop.y)}%
         <input type="range" min="0" max="100" step="1" value={crop.y} onChange={(event) => setCrop((value) => ({ ...value, y: Number(event.target.value) }))}/>
       </label>
       <label>Zoom · {crop.zoom.toFixed(2)}×
         <input type="range" min="1" max="4" step="0.05" value={crop.zoom} onChange={(event) => setCrop((value) => ({ ...value, zoom: Number(event.target.value) }))}/>
       </label>
-      <button type="button" className="button ghost" onClick={() => setCrop(DEFAULT_CROP)}>Zuschnitt zentrieren</button>
     </div> : null}
 
     <div className="field-grid two profile-image-source-fields">
