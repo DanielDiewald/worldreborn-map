@@ -8,10 +8,10 @@ export const LOCATION_KINDS=["world","continent","country","region","province","
 export type LocationKind=(typeof LOCATION_KINDS)[number];
 
 const locationSchema=z.object({
-  name:z.string().trim().min(1).max(100),
+  name:z.string().trim().min(1,"Name ist ein Pflichtfeld.").max(100,"Der Name darf höchstens 100 Zeichen enthalten."),
   locationType:z.string().trim().max(80).optional(),
   locationKind:z.enum(LOCATION_KINDS).default("other"),
-  slug:z.string().trim().max(140).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).nullable().optional(),
+  slug:z.string().trim().max(140).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/,"Der Slug darf nur Kleinbuchstaben, Zahlen und Bindestriche enthalten.").nullable().optional(),
   description:z.string().max(100_000).optional(),
   coatOfArm:z.string().trim().max(4000).optional(),
   parentLocId:z.coerce.number().int().positive().nullable().optional(),
@@ -48,21 +48,22 @@ function listFilter(projectId:number,filters:LocationListFilters={}){
   return{values,where};
 }
 
+async function assertActiveLocation(projectId:number,locationId:number,label:string){const row=await pool.query("SELECT 1 FROM locations WHERE camp_id=$1 AND loc_id=$2 AND archived_at IS NULL",[projectId,locationId]);if(row.rowCount!==1)throw new Error(`${label} gehört nicht zu dieser Welt oder ist archiviert.`);}
+async function assertActivePerson(projectId:number,personId:number){const row=await pool.query("SELECT 1 FROM npcs WHERE camp_id=$1 AND n_id=$2 AND archived_at IS NULL",[projectId,personId]);if(row.rowCount!==1)throw new Error("Die ausgewählte Person gehört nicht zu dieser Welt oder ist archiviert.");}
+async function assertMapBinding(projectId:number,mapId?:number|null,mapFeatureId?:number|null){
+  if(mapId){const map=await pool.query("SELECT 1 FROM project_maps WHERE project_id=$1 AND map_id=$2",[projectId,mapId]);if(map.rowCount!==1)throw new Error("Die ausgewählte Karte gehört nicht zu dieser Welt.");}
+  if(mapFeatureId){const feature=await pool.query("SELECT map_id FROM map_features WHERE project_id=$1 AND feature_id=$2",[projectId,mapFeatureId]);if(feature.rowCount!==1)throw new Error("Das ausgewählte Kartenobjekt gehört nicht zu dieser Welt.");if(mapId&&Number(feature.rows[0].map_id)!==mapId)throw new Error("Das Kartenobjekt gehört nicht zur ausgewählten Karte.");}
+}
 async function validateReferences(projectId:number,parentLocId?:number|null,ownerNpcId?:number|null,capitalLocId?:number|null,mapId?:number|null,mapFeatureId?:number|null){
-  if(parentLocId){const parent=await pool.query("SELECT 1 FROM locations WHERE camp_id=$1 AND loc_id=$2 AND archived_at IS NULL",[projectId,parentLocId]);if(parent.rowCount!==1)throw new Error("Parent location does not belong to this project.");}
-  if(ownerNpcId){const owner=await pool.query("SELECT 1 FROM npcs WHERE camp_id=$1 AND n_id=$2 AND archived_at IS NULL",[projectId,ownerNpcId]);if(owner.rowCount!==1)throw new Error("Owner does not belong to this project.");}
-  if(capitalLocId){const capital=await pool.query("SELECT 1 FROM locations WHERE camp_id=$1 AND loc_id=$2 AND archived_at IS NULL",[projectId,capitalLocId]);if(capital.rowCount!==1)throw new Error("Capital does not belong to this project.");}
-  if(mapId){const map=await pool.query("SELECT 1 FROM project_maps WHERE project_id=$1 AND map_id=$2",[projectId,mapId]);if(map.rowCount!==1)throw new Error("Map does not belong to this project.");}
-  if(mapFeatureId){
-    const feature=await pool.query("SELECT map_id FROM map_features WHERE project_id=$1 AND feature_id=$2",[projectId,mapFeatureId]);
-    if(feature.rowCount!==1)throw new Error("Map feature does not belong to this project.");
-    if(mapId&&Number(feature.rows[0].map_id)!==mapId)throw new Error("Map feature does not belong to the selected map.");
-  }
+  if(parentLocId)await assertActiveLocation(projectId,parentLocId,"Der übergeordnete Ort");
+  if(ownerNpcId)await assertActivePerson(projectId,ownerNpcId);
+  if(capitalLocId)await assertActiveLocation(projectId,capitalLocId,"Die Hauptstadt / der Hauptort");
+  await assertMapBinding(projectId,mapId,mapFeatureId);
 }
 
 async function assertNoHierarchyCycle(projectId:number,locationId:number,parentLocId?:number|null){
   if(!parentLocId)return;
-  if(parentLocId===locationId)throw new Error("A location cannot be its own parent.");
+  if(parentLocId===locationId)throw new Error("Ein Ort kann nicht sein eigener übergeordneter Ort sein.");
   const cycle=await pool.query(`
     WITH RECURSIVE descendants(loc_id) AS (
       SELECT loc_id FROM locations WHERE camp_id=$1 AND parent_loc_id=$2 AND archived_at IS NULL
@@ -71,7 +72,7 @@ async function assertNoHierarchyCycle(projectId:number,locationId:number,parentL
     )
     SELECT 1 FROM descendants WHERE loc_id=$3 LIMIT 1
   `,[projectId,locationId,parentLocId]);
-  if(cycle.rowCount)throw new Error("This parent would create a location hierarchy cycle.");
+  if(cycle.rowCount)throw new Error("Dieser übergeordnete Ort würde einen Zyklus in der Ortshierarchie erzeugen.");
 }
 
 export async function listLocations(projectId:number){const result=await pool.query<LocationListItem>(`${locationSelect} WHERE l.camp_id=$1 AND l.archived_at IS NULL ORDER BY l.location_kind,l.name,l.loc_id`,[projectId]);return result.rows;}
@@ -97,7 +98,20 @@ export async function getLocationPath(projectId:number,locationId:number){
   return result.rows;
 }
 
-export async function createLocation(projectId:number,input:unknown){const data=locationSchema.parse(input);await validateReferences(projectId,data.parentLocId,data.ownerNpcId,data.capitalLocId,data.mapId,data.mapFeatureId);const result=await pool.query<{loc_id:number}>(`INSERT INTO locations(camp_id,name,coat_of_arm,parent_loc_id,location_type,location_kind,slug,description,owner_n_id,capital_loc_id,population,visibility_mode,map_id,map_feature_id,metadata,updated_at) SELECT c.camp_id,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'{}'::jsonb,now() FROM campaigns c WHERE c.camp_id=$1 AND c.status<>'archived' RETURNING loc_id`,[projectId,data.name,data.coatOfArm||null,data.parentLocId||null,data.locationType||null,data.locationKind,data.slug||null,data.description||null,data.ownerNpcId||null,data.capitalLocId||null,data.population??null,data.visibilityMode,data.mapId??null,data.mapFeatureId??null]);if(result.rowCount!==1)throw new Error("Project not found or archived.");return result.rows[0].loc_id;}
-export async function updateLocation(projectId:number,locationId:number,input:unknown){const data=locationSchema.parse(input);await assertNoHierarchyCycle(projectId,locationId,data.parentLocId);if(data.capitalLocId===locationId)throw new Error("A location cannot be its own capital.");await validateReferences(projectId,data.parentLocId,data.ownerNpcId,data.capitalLocId,data.mapId,data.mapFeatureId);const result=await pool.query(`UPDATE locations SET name=$3,coat_of_arm=$4,parent_loc_id=$5,location_type=$6,location_kind=$7,slug=$8,description=$9,owner_n_id=$10,capital_loc_id=$11,population=$12,visibility_mode=$13,map_id=$14,map_feature_id=$15,updated_at=now() WHERE camp_id=$1 AND loc_id=$2 AND archived_at IS NULL`,[projectId,locationId,data.name,data.coatOfArm||null,data.parentLocId||null,data.locationType||null,data.locationKind,data.slug||null,data.description||null,data.ownerNpcId||null,data.capitalLocId||null,data.population??null,data.visibilityMode,data.mapId??null,data.mapFeatureId??null]);if(result.rowCount!==1)throw new Error("Location not found in this project.");}
-export async function archiveLocation(projectId:number,locationId:number){const result=await pool.query(`UPDATE locations SET archived_at=now(),updated_at=now() WHERE camp_id=$1 AND loc_id=$2 AND archived_at IS NULL`,[projectId,locationId]);if(result.rowCount!==1)throw new Error("Location not found in this project.");}
+export async function createLocation(projectId:number,input:unknown){const data=locationSchema.parse(input);await validateReferences(projectId,data.parentLocId,data.ownerNpcId,data.capitalLocId,data.mapId,data.mapFeatureId);const result=await pool.query<{loc_id:number}>(`INSERT INTO locations(camp_id,name,coat_of_arm,parent_loc_id,location_type,location_kind,slug,description,owner_n_id,capital_loc_id,population,visibility_mode,map_id,map_feature_id,metadata,updated_at) SELECT c.camp_id,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'{}'::jsonb,now() FROM campaigns c WHERE c.camp_id=$1 AND c.status<>'archived' RETURNING loc_id`,[projectId,data.name,data.coatOfArm||null,data.parentLocId||null,data.locationType||null,data.locationKind,data.slug||null,data.description||null,data.ownerNpcId||null,data.capitalLocId||null,data.population??null,data.visibilityMode,data.mapId??null,data.mapFeatureId??null]);if(result.rowCount!==1)throw new Error("Die Welt wurde nicht gefunden oder ist archiviert.");return result.rows[0].loc_id;}
+
+export async function updateLocation(projectId:number,locationId:number,input:unknown){
+  const data=locationSchema.parse(input);
+  const current=await pool.query<{parent_loc_id:number|null;owner_n_id:number|null;capital_loc_id:number|null;map_id:number|null;map_feature_id:number|null}>("SELECT parent_loc_id,owner_n_id,capital_loc_id,map_id,map_feature_id FROM locations WHERE camp_id=$1 AND loc_id=$2 AND archived_at IS NULL",[projectId,locationId]);
+  if(current.rowCount!==1)throw new Error("Der Ort wurde nicht gefunden oder gehört nicht zu dieser Welt.");
+  const before=current.rows[0];
+  const nextParent=data.parentLocId??null,nextOwner=data.ownerNpcId??null,nextCapital=data.capitalLocId??null,nextMap=data.mapId??null,nextFeature=data.mapFeatureId??null;
+  if(nextParent!==before.parent_loc_id){await assertNoHierarchyCycle(projectId,locationId,nextParent);if(nextParent)await assertActiveLocation(projectId,nextParent,"Der übergeordnete Ort");}
+  if(nextOwner!==before.owner_n_id&&nextOwner)await assertActivePerson(projectId,nextOwner);
+  if(nextCapital!==before.capital_loc_id){if(nextCapital===locationId)throw new Error("Ein Ort kann nicht seine eigene Hauptstadt / sein eigener Hauptort sein.");if(nextCapital)await assertActiveLocation(projectId,nextCapital,"Die Hauptstadt / der Hauptort");}
+  if(nextMap!==before.map_id||nextFeature!==before.map_feature_id)await assertMapBinding(projectId,nextMap,nextFeature);
+  const result=await pool.query(`UPDATE locations SET name=$3,coat_of_arm=$4,parent_loc_id=$5,location_type=$6,location_kind=$7,slug=$8,description=$9,owner_n_id=$10,capital_loc_id=$11,population=$12,visibility_mode=$13,map_id=$14,map_feature_id=$15,updated_at=now() WHERE camp_id=$1 AND loc_id=$2 AND archived_at IS NULL`,[projectId,locationId,data.name,data.coatOfArm||null,nextParent,data.locationType||null,data.locationKind,data.slug||null,data.description||null,nextOwner,nextCapital,data.population??null,data.visibilityMode,nextMap,nextFeature]);
+  if(result.rowCount!==1)throw new Error("Der Ort wurde zwischenzeitlich archiviert oder gelöscht.");
+}
+export async function archiveLocation(projectId:number,locationId:number){const result=await pool.query(`UPDATE locations SET archived_at=now(),updated_at=now() WHERE camp_id=$1 AND loc_id=$2 AND archived_at IS NULL`,[projectId,locationId]);if(result.rowCount!==1)throw new Error("Der Ort wurde nicht gefunden oder ist bereits archiviert.");}
 export async function getLocationTree(projectId:number){return listLocations(projectId);}
