@@ -198,20 +198,17 @@ export async function deleteEntityAvatarDerivative(projectId: number, entityType
 
 export async function ensureEntityAvatarDerivative(projectId: number, entityType: DerivableEntityType, entityId: number): Promise<EntityImageDerivative | null> {
   if (!Number.isSafeInteger(projectId) || projectId <= 0 || !Number.isSafeInteger(entityId) || entityId <= 0) return null;
-  const [sourceImage, current] = await Promise.all([
+  const [initialSourceImage, current] = await Promise.all([
     getEntitySource(projectId, entityType, entityId),
     existingDerivative(projectId, entityType, entityId),
   ]);
-  if (!sourceImage) {
+  if (!initialSourceImage) {
     if (current) await deleteEntityAvatarDerivative(projectId, entityType, entityId);
     return null;
   }
 
-  const [crop, initiallyResolved] = await Promise.all([
-    getCrop(projectId, entityType, entityId, sourceImage),
-    resolveDerivativeImageSource(projectId, sourceImage),
-  ]);
-  let source = initiallyResolved;
+  let sourceImage = initialSourceImage;
+  let source = await resolveDerivativeImageSource(projectId, sourceImage);
   if (!source && classifyDerivativeImageSource(sourceImage).kind === "external") {
     source = await materializeLegacyRemoteEntityImage(projectId, entityType, entityId, sourceImage);
   }
@@ -219,6 +216,19 @@ export async function ensureEntityAvatarDerivative(projectId: number, entityType
     if (current) await deleteEntityAvatarDerivative(projectId, entityType, entityId);
     return null;
   }
+
+  // Legacy remote materialization rewrites both the entity image reference and the crop source from
+  // the old URL to /api/media/<id>. Re-read the canonical image before reading the crop so the two
+  // operations can never race and accidentally render an uncropped avatar.
+  const canonicalSourceImage = await getEntitySource(projectId, entityType, entityId);
+  if (canonicalSourceImage && canonicalSourceImage !== sourceImage) {
+    const canonicalSource = await resolveDerivativeImageSource(projectId, canonicalSourceImage);
+    if (canonicalSource) {
+      sourceImage = canonicalSourceImage;
+      source = canonicalSource;
+    }
+  }
+  const crop = await getCrop(projectId, entityType, entityId, sourceImage);
 
   const currentMediaId = current?.source_media_id == null ? null : Number(current.source_media_id);
   if (current && current.source_image === source.sourceKey && currentMediaId === source.sourceMediaId && sameCrop(current.crop, crop)) {
