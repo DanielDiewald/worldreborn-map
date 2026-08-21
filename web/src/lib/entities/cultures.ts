@@ -21,7 +21,7 @@ export type CultureRaceRow = { raceId: number; name: string; parentName: string 
 
 const cultureSelect = `SELECT c.culture_id::int AS "cultureId",c.project_id AS "projectId",c.name,c.description,c.image,c.image_media_id::int AS "imageMediaId",c.primary_location_id::int AS "primaryLocationId",l.name AS "primaryLocationName",c.visibility_mode AS "visibilityMode",(SELECT count(*)::int FROM culture_races cr WHERE cr.culture_id=c.culture_id) AS "raceCount" FROM cultures c LEFT JOIN locations l ON l.camp_id=c.project_id AND l.loc_id=c.primary_location_id`;
 const cultureListSelect = `SELECT c.culture_id::int AS "cultureId",c.project_id AS "projectId",c.name,LEFT(c.description,240) AS description,
-  CASE WHEN c.image ~ '^/api/media/[0-9]+$' OR c.image LIKE '/img/%' OR c.image LIKE '/images/%' OR c.image LIKE '/uploads/%'
+  CASE WHEN c.image ~ '^/api/media/[0-9]+$' OR c.image ~* '^https?://' OR c.image LIKE '//%' OR c.image LIKE '/img/%' OR c.image LIKE '/images/%' OR c.image LIKE '/uploads/%'
     THEN '/api/admin/projects/'||c.project_id||'/entity-images/culture/'||c.culture_id||'/avatar' ELSE c.image END AS image,
   c.image_media_id::int AS "imageMediaId",c.primary_location_id::int AS "primaryLocationId",l.name AS "primaryLocationName",c.visibility_mode AS "visibilityMode",COALESCE(rc.race_count,0)::int AS "raceCount"
   FROM cultures c
@@ -55,9 +55,9 @@ export async function updateCulture(projectId: number, cultureId: number, input:
   const client=await pool.connect();
   try{
     await client.query("BEGIN");
-    const result = await client.query("UPDATE cultures SET name=$3,description=$4,image=$5,image_media_id=$6,primary_location_id=$7,visibility_mode=$8,updated_at=now() WHERE project_id=$1 AND culture_id=$2 AND archived_at IS NULL", [projectId, cultureId, data.name, clean(data.description), data.image || "noimage", data.imageMediaId ?? null, data.primaryLocationId ?? null, data.visibilityMode]);
-    if (result.rowCount !== 1) throw new Error("Die Kultur wurde nicht gefunden oder ist archiviert.");
-    await client.query(`INSERT INTO audit_log(project_id,actor_type,action,entity_type,entity_id,metadata) VALUES($1,'admin','culture.updated','culture',$2,$3::jsonb)`, [projectId, cultureId, JSON.stringify({ name: data.name })]);
+    const result=await client.query("UPDATE cultures SET name=$3,description=$4,image=$5,image_media_id=$6,primary_location_id=$7,visibility_mode=$8,updated_at=now() WHERE project_id=$1 AND culture_id=$2 AND archived_at IS NULL", [projectId, cultureId, data.name, clean(data.description), data.image || "noimage", data.imageMediaId ?? null, data.primaryLocationId ?? null, data.visibilityMode]);
+    if(result.rowCount!==1)throw new Error("Die Kultur wurde nicht gefunden oder ist archiviert.");
+    await client.query(`INSERT INTO audit_log(project_id,actor_type,action,entity_type,entity_id,metadata) VALUES($1,'admin','culture.updated','culture',$2,$3::jsonb)`,[projectId,cultureId,JSON.stringify({name:data.name})]);
     await client.query("COMMIT");
   }catch(error){await client.query("ROLLBACK");throw error;}finally{client.release();}
 }
