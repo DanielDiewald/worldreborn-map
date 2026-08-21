@@ -59,5 +59,5 @@ export function classifyDerivativeImageSource(value: string | null | undefined):
 
 export function imageReferenceUsesAvatarDerivative(value: string | null | undefined) {
   const source = classifyDerivativeImageSource(value);
-  return source.kind === "managed_media" || source.kind === "local_path";
+  return source.kind === "managed_media" || source.kind === "local_path" || source.kind === "external";
 }
