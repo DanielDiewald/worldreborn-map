@@ -1,0 +1,17 @@
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+import { EntityPicker } from "@/components/entity-picker";
+import { FantasyDateInput } from "@/components/fantasy-date-input";
+import { FormRequiredLegend } from "@/components/form-ui";
+import { ImageSourceInput } from "@/components/image-source-input";
+import { SubmitButton } from "@/components/submit-button";
+import type { CalendarMonth } from "@/lib/fantasy-calendar";
+import { createTimelineEventAction } from "./actions";
+
+export function TimelineCreateDialog({projectId,months,beforeEraLabel,afterEraLabel,hasYearZero}:{projectId:number;months:CalendarMonth[];beforeEraLabel:string;afterEraLabel:string;hasYearZero:boolean}){
+  const dialogRef=useRef<HTMLDialogElement>(null);const triggerRef=useRef<HTMLButtonElement>(null);const [open,setOpen]=useState(false);const [dirty,setDirty]=useState(false);
+  useEffect(()=>{const dialog=dialogRef.current;if(!dialog)return;if(open&&!dialog.open)dialog.showModal();if(!open&&dialog.open)dialog.close();},[open]);
+  function requestClose(){if(dirty&&!window.confirm("Ungespeicherte Eingaben verwerfen?"))return;setOpen(false);setDirty(false);window.requestAnimationFrame(()=>triggerRef.current?.focus());}
+  return <><button ref={triggerRef} type="button" className="button primary" onClick={()=>setOpen(true)} aria-haspopup="dialog">＋ Ereignis</button><dialog ref={dialogRef} className="form-dialog" aria-labelledby="timeline-create-title" onClose={()=>{setOpen(false);setDirty(false);}} onCancel={(event)=>{event.preventDefault();requestClose();}} onClick={(event)=>{if(event.target===event.currentTarget)requestClose();}}>{open?<div className="form-dialog-body"><div className="form-dialog-heading"><div><span className="panel-kicker">NEUES EREIGNIS</span><h2 id="timeline-create-title">Timeline-Ereignis anlegen</h2><p>Das Datum wird gegen den Weltkalender validiert und als World Day normalisiert.</p></div><button type="button" className="button ghost form-dialog-close" onClick={requestClose} aria-label="Dialog schließen">×</button></div><form action={createTimelineEventAction.bind(null,projectId)} className="stack" onInput={()=>setDirty(true)}><FormRequiredLegend/><label>Name<input name="name" maxLength={100} required autoFocus placeholder="z. B. Fall der Silberkrone"/></label><FantasyDateInput prefix="event" label="Ereignisdatum" months={months} beforeEraLabel={beforeEraLabel} afterEraLabel={afterEraLabel} hasYearZero={hasYearZero} allowUnknown={false}/><EntityPicker projectId={projectId} name="locationId" types={["location"]} label="Ort" placeholder="Optionalen Ort suchen …"/><div className="field-grid two"><label>Kategorie <span className="muted">optional</span><input name="category" maxLength={80}/></label><label>Wichtigkeit<input name="importance" type="number" min="0" max="10" step="1" defaultValue="0"/></label><label>Sichtbarkeit<select name="visibilityMode" defaultValue="admin_only"><option value="admin_only">Nur Admin</option><option value="all_players">Alle Spieler</option><option value="selected_players">Ausgewählte Spieler</option></select></label></div><ImageSourceInput label="Ereignisbild"/><label>Beschreibung <span className="muted">optional</span><textarea name="notes" maxLength={100000}/></label><div className="form-actions"><button type="button" className="button ghost" onClick={requestClose}>Abbrechen</button><SubmitButton className="primary" pendingLabel="Ereignis wird angelegt …">Ereignis anlegen</SubmitButton></div></form></div>:null}</dialog></>;
+}
