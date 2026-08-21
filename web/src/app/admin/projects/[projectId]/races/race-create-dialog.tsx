@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { FormRequiredLegend } from "@/components/form-ui";
 import { ProfileImageEditor } from "@/components/profile-image-editor";
 import { RaceOriginPicker } from "@/components/race-origin-picker";
 import { SubmitButton } from "@/components/submit-button";
@@ -23,7 +24,9 @@ type OriginMap = {
 
 export function RaceCreateDialog({ projectId, rootSpecies, maps }: { projectId: number; rootSpecies: RootSpeciesOption[]; maps: OriginMap[] }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
+  const [dirty,setDirty]=useState(false);
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -32,15 +35,22 @@ export function RaceCreateDialog({ projectId, rootSpecies, maps }: { projectId: 
     if (!open && dialog.open) dialog.close();
   }, [open]);
 
+  function requestClose(){
+    if(dirty&&!window.confirm("Ungespeicherte Eingaben verwerfen?"))return;
+    setOpen(false);setDirty(false);
+    window.requestAnimationFrame(()=>triggerRef.current?.focus());
+  }
+
   return <>
-    <button type="button" className="button primary" onClick={() => setOpen(true)}>＋ Spezies / Subspezies anlegen</button>
-    <dialog ref={dialogRef} className={styles.createDialog} onClose={() => setOpen(false)} onCancel={() => setOpen(false)} onClick={(event) => { if (event.target === event.currentTarget) setOpen(false); }}>
+    <button ref={triggerRef} type="button" className="button primary" onClick={() => setOpen(true)} aria-haspopup="dialog">＋ Spezies / Subspezies anlegen</button>
+    <dialog ref={dialogRef} className={styles.createDialog} aria-labelledby="race-create-title" aria-describedby="race-create-description" onClose={() => {setOpen(false);setDirty(false);}} onCancel={(event) => {event.preventDefault();requestClose();}} onClick={(event) => { if (event.target === event.currentTarget) requestClose(); }}>
       {open ? <div className={styles.dialogPanel}>
         <div className={styles.dialogHeader}>
-          <div><span className="panel-kicker">NEUER WELTDATENSATZ</span><h2>Spezies oder Subspezies anlegen</h2><p>Lege zuerst die Taxonomie fest. Biologie, Merkmale, Verbreitung und Kulturen kannst du anschließend auf der Detailseite ausbauen.</p></div>
-          <button type="button" className={styles.dialogClose} onClick={() => setOpen(false)} aria-label="Dialog schließen">×</button>
+          <div><span className="panel-kicker">NEUER WELTDATENSATZ</span><h2 id="race-create-title">Spezies oder Subspezies anlegen</h2><p id="race-create-description">Lege zuerst die Taxonomie fest. Biologie, Merkmale, Verbreitung und Kulturen kannst du anschließend auf der Detailseite ausbauen.</p></div>
+          <button type="button" className={styles.dialogClose} onClick={requestClose} aria-label="Dialog schließen">×</button>
         </div>
-        <form action={createRaceAction.bind(null, projectId)} className="stack">
+        <form action={createRaceAction.bind(null, projectId)} className="stack" onInput={()=>setDirty(true)}>
+          <FormRequiredLegend/>
           <section className={styles.formSection}>
             <div className={styles.sectionTitle}><span>01</span><div><strong>Taxonomie</strong><small>Grundbegriff und optionale übergeordnete Spezies</small></div></div>
             <div className="field-grid two">
@@ -49,7 +59,7 @@ export function RaceCreateDialog({ projectId, rootSpecies, maps }: { projectId: 
             </div>
           </section>
           <section className={styles.formSection}>
-            <div className={styles.sectionTitle}><span>02</span><div><strong>Bezeichnungen</strong><small>Optional abhängig vom Geschlecht des Characters</small></div></div>
+            <div className={styles.sectionTitle}><span>02</span><div><strong>Bezeichnungen</strong><small>Optional abhängig vom Geschlecht des Charakters</small></div></div>
             <div className="field-grid two">
               <label>Männliche Bezeichnung <span className="muted">optional</span><input name="masculineName" maxLength={120} placeholder="z. B. Elf"/></label>
               <label>Weibliche Bezeichnung <span className="muted">optional</span><input name="feminineName" maxLength={120} placeholder="z. B. Elfin"/></label>
@@ -58,11 +68,11 @@ export function RaceCreateDialog({ projectId, rootSpecies, maps }: { projectId: 
           </section>
           <section className={styles.formSection}>
             <div className={styles.sectionTitle}><span>03</span><div><strong>Codex & Erscheinung</strong><small>Beschreibung, Originalbild, optionaler 1:1-Profilzuschnitt und ungefährer Ursprung</small></div></div>
-            <label>Biologische / taxonomische Beschreibung<textarea name="description" className="large-textarea" maxLength={100000} placeholder="Aussehen, Anatomie, Evolution, Herkunft, besondere körperliche Merkmale …"/></label>
+            <label>Biologische / taxonomische Beschreibung <span className="muted">optional</span><textarea name="description" className="large-textarea" maxLength={100000} placeholder="Aussehen, Anatomie, Evolution, Herkunft, besondere körperliche Merkmale …"/></label>
             <ProfileImageEditor label="Vorschaubild der Spezies / Subspezies"/>
             <RaceOriginPicker maps={maps}/>
           </section>
-          <div className={styles.dialogActions}><button type="button" className="button ghost" onClick={() => setOpen(false)}>Abbrechen</button><SubmitButton className="primary" pendingLabel="Datensatz wird angelegt …">Spezies anlegen</SubmitButton></div>
+          <div className={styles.dialogActions}><button type="button" className="button ghost" onClick={requestClose}>Abbrechen</button><SubmitButton className="primary" pendingLabel="Datensatz wird angelegt …">Spezies anlegen</SubmitButton></div>
         </form>
       </div> : null}
     </dialog>
