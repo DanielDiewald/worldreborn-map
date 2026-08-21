@@ -24,7 +24,7 @@ import {
   type RaceRelationType,
 } from "@/lib/entities/races";
 import { entityImageCropFromForm } from "@/lib/entity-image-crop";
-import { saveEntityImageProfile } from "@/lib/entity-image-profiles";
+import { getEntityImageProfile, saveEntityImageProfile } from "@/lib/entity-image-profiles";
 import { resolveEntityImageSource } from "@/lib/media";
 import { getProject } from "@/lib/projects";
 import { RACE_BIOLOGY_FIELDS } from "@/lib/race-worldbuilding";
@@ -42,7 +42,23 @@ function raceInput(formData: FormData, image: string, imageMediaId: number | nul
 
 export async function createRaceAction(projectId: number, formData: FormData) { await requireAdminSession(); await assertProject(projectId); const name = text(formData, "name"); const source = await resolveEntityImageSource(projectId, formData, { title: name || "Spezies" }); const created = await createRace(projectId, raceInput(formData, source.image, source.mediaId)); await saveEntityImageProfile(projectId,"race",created.raceId,source.image,entityImageCropFromForm(formData)); redirect(`/admin/projects/${projectId}/races/${created.raceId}`); }
 export async function updateRaceAction(projectId: number, raceId: number, formData: FormData) { await requireAdminSession(); await assertProject(projectId); const current = await getRace(projectId, raceId); if (!current) throw new Error("Spezies wurde nicht gefunden."); const source = await resolveEntityImageSource(projectId, formData, { current: current.image, title: current.name }); const imageMediaId = source.uploaded ? source.mediaId : source.removed || source.image !== current.image ? null : current.imageMediaId; await updateRace(projectId, raceId, raceInput(formData, source.image, imageMediaId)); if(formData.has("imageCrop")||source.uploaded||source.removed||source.image!==current.image)await saveEntityImageProfile(projectId,"race",raceId,source.image,entityImageCropFromForm(formData)); refreshRace(projectId,raceId); revalidatePath(`/admin/projects/${projectId}/npcs`); revalidatePath(`/admin/projects/${projectId}/characters`); }
-export async function updateRaceImageAction(projectId:number,raceId:number,formData:FormData){await requireAdminSession();await assertProject(projectId);const current=await getRace(projectId,raceId);if(!current)throw new Error("Spezies wurde nicht gefunden.");const source=await resolveEntityImageSource(projectId,formData,{current:current.image,title:current.name});const imageMediaId=source.uploaded?source.mediaId:source.removed||source.image!==current.image?null:current.imageMediaId;const updated=await pool.query("UPDATE races SET image=$3,image_media_id=$4,updated_at=now() WHERE project_id=$1 AND race_id=$2 AND archived_at IS NULL",[projectId,raceId,source.image,imageMediaId]);if(updated.rowCount!==1)throw new Error("Spezies wurde nicht gefunden.");await saveEntityImageProfile(projectId,"race",raceId,source.image,entityImageCropFromForm(formData));refreshRace(projectId,raceId);}
+export async function updateRaceImageAction(projectId:number,raceId:number,formData:FormData){
+  await requireAdminSession();
+  await assertProject(projectId);
+  const current=await getRace(projectId,raceId);
+  if(!current)throw new Error("Spezies wurde nicht gefunden.");
+  const source=await resolveEntityImageSource(projectId,formData,{current:current.image,title:current.name});
+  const imageMediaId=source.uploaded?source.mediaId:source.removed||source.image!==current.image?null:current.imageMediaId;
+  const requestedCrop=entityImageCropFromForm(formData);
+  const updated=await pool.query("UPDATE races SET image=$3,image_media_id=$4,updated_at=now() WHERE project_id=$1 AND race_id=$2 AND archived_at IS NULL",[projectId,raceId,source.image,imageMediaId]);
+  if(updated.rowCount!==1)throw new Error("Spezies wurde nicht gefunden.");
+  await saveEntityImageProfile(projectId,"race",raceId,source.image,requestedCrop);
+  if(requestedCrop){
+    const persisted=await getEntityImageProfile(projectId,"race",raceId,source.image);
+    if(!persisted)throw new Error("Der 1:1-Zuschnitt konnte nicht dauerhaft gespeichert werden.");
+  }
+  refreshRace(projectId,raceId);
+}
 
 export async function updateRaceBiologyAction(projectId: number, raceId: number, formData: FormData) {
   await requireAdminSession(); await assertProject(projectId); const values: Record<string, unknown> = {};
