@@ -51,6 +51,20 @@ test("species crop is pointer-safe, persisted, reloaded and reused by the map", 
   assert.match(markers, /imageReferenceUsesAvatarDerivative/);
 });
 
+test("species detail page exposes the crop editor without a hidden navigation step", () => {
+  const detail = read("src/app/admin/projects/[projectId]/races/[raceId]/page.tsx");
+  const panel = read("src/app/admin/projects/[projectId]/races/[raceId]/race-image-crop-panel.tsx");
+  const action = read("src/app/admin/projects/[projectId]/races/actions.ts");
+  assert.match(detail, /RaceImageCropPanel/);
+  assert.doesNotMatch(detail, /<ImageSourceInput/);
+  assert.match(panel, /ProfileImageEditor/);
+  assert.match(panel, /currentCrop=\{imageProfile\?\.crop\}/);
+  assert.match(panel, /name="returnTo" value="detail"/);
+  assert.match(panel, /Bild & Zuschnitt speichern/);
+  assert.match(action, /returnTo/);
+  assert.match(action, /\/races\/\$\{raceId\}\?imageSaved=1/);
+});
+
 test("asset endpoint keeps authentication read-only and invalidates cache when the file changes", () => {
   const route = read("src/app/api/admin/projects/[projectId]/entity-images/[entityType]/[entityId]/avatar/route.ts");
   assert.match(route, /hasValidAdminSession\(\{ touch: false \}\)/);
