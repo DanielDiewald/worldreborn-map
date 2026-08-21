@@ -1,3 +1,5 @@
+import { imageReferenceUsesAvatarDerivative } from "@/lib/entity-image-source";
+
 export type EntityImageUrlType = "person" | "race" | "culture" | "group" | "location";
 
 export function hasUsableEntityImage(source?: string | null) {
@@ -8,7 +10,7 @@ export function hasUsableEntityImage(source?: string | null) {
 export function entityListImageUrl(projectId: number, entityType: EntityImageUrlType, entityId: number, source?: string | null) {
   if (!hasUsableEntityImage(source)) return null;
   const image = source!.trim();
-  if (/^\/api\/media\/\d+$/.test(image)) {
+  if (imageReferenceUsesAvatarDerivative(image)) {
     return `/api/admin/projects/${projectId}/entity-images/${entityType}/${entityId}/avatar`;
   }
   return image;
