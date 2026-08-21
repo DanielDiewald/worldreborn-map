@@ -174,7 +174,9 @@ export async function resolveDerivativeImageSource(projectId: number, sourceImag
       [projectId, reference.mediaId],
     );
     const row = media.rows[0];
-    if (!row?.storage_path || row.external_url) return null;
+    // Remote URL imports are persisted locally and intentionally retain external_url as provenance.
+    // As long as storage_path exists, derivatives must be generated from the cached local bytes.
+    if (!row?.storage_path) return null;
     return {
       sourceKey: `media:${reference.mediaId}:${row.storage_path}`,
       sourceMediaId: reference.mediaId,
