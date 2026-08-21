@@ -6,20 +6,22 @@ import { requireAdminSession } from "@/lib/auth/session";
 import { archiveCulture, createCulture, getCulture, linkCultureRace, unlinkCultureRace, updateCulture } from "@/lib/entities/cultures";
 import { entityImageCropFromForm } from "@/lib/entity-image-crop";
 import { saveEntityImageProfile } from "@/lib/entity-image-profiles";
+import { formCheckbox, formEnum, formOptionalId, formOptionalText, formText } from "@/lib/form-data";
 import { resolveEntityImageSource } from "@/lib/media";
+import { getProject } from "@/lib/projects";
 
-function text(formData: FormData, name: string) { return String(formData.get(name) ?? "").trim(); }
-function optionalId(formData: FormData, name: string) { const value = Number(text(formData, name)); return Number.isSafeInteger(value) && value > 0 ? value : null; }
+const VISIBILITY=["admin_only","all_players","selected_players"] as const;
+async function assertProject(projectId:number){if(!Number.isSafeInteger(projectId)||projectId<=0||!(await getProject(projectId)))throw new Error("Die ausgewählte Welt wurde nicht gefunden oder ist archiviert.");}
 function input(formData: FormData, image: string, imageMediaId: number | null) {
   return {
-    name: text(formData, "name"), description: text(formData, "description") || null, image, imageMediaId,
-    primaryLocationId: optionalId(formData, "primaryLocationId"),
-    visibilityMode: ["admin_only", "all_players", "selected_players"].includes(text(formData, "visibilityMode")) ? text(formData, "visibilityMode") as "admin_only" | "all_players" | "selected_players" : "admin_only" as const,
+    name: formText(formData, "name"), description: formOptionalText(formData, "description"), image, imageMediaId,
+    primaryLocationId: formOptionalId(formData, "primaryLocationId"),
+    visibilityMode: formEnum(formData,"visibilityMode",VISIBILITY,"admin_only"),
   };
 }
 
 export async function createCultureAction(projectId: number, formData: FormData) {
-  await requireAdminSession(); const name = text(formData, "name");
+  await requireAdminSession(); await assertProject(projectId); const name = formText(formData, "name");
   const source = await resolveEntityImageSource(projectId, formData, { title: name || "Kultur" });
   const created = await createCulture(projectId, input(formData, source.image, source.mediaId));
   await saveEntityImageProfile(projectId, "culture", created.cultureId, source.image, entityImageCropFromForm(formData));
@@ -27,7 +29,7 @@ export async function createCultureAction(projectId: number, formData: FormData)
 }
 
 export async function updateCultureAction(projectId: number, cultureId: number, formData: FormData) {
-  await requireAdminSession(); const current = await getCulture(projectId, cultureId); if (!current) throw new Error("Kultur wurde nicht gefunden.");
+  await requireAdminSession(); await assertProject(projectId); const current = await getCulture(projectId, cultureId); if (!current) throw new Error("Die Kultur wurde nicht gefunden oder gehört nicht zu dieser Welt.");
   const source = await resolveEntityImageSource(projectId, formData, { current: current.image, title: current.name });
   const imageMediaId = source.uploaded ? source.mediaId : source.removed || source.image !== current.image ? null : current.imageMediaId;
   await updateCulture(projectId, cultureId, input(formData, source.image, imageMediaId));
@@ -38,9 +40,9 @@ export async function updateCultureAction(projectId: number, cultureId: number, 
 }
 
 export async function linkCultureRaceAction(projectId: number, cultureId: number, formData: FormData) {
-  await requireAdminSession(); const raceId = optionalId(formData, "raceId"); if (!raceId) throw new Error("Spezies auswählen.");
-  await linkCultureRace(projectId, cultureId, raceId, formData.get("isPrimary") === "on", text(formData, "notes") || null);
+  await requireAdminSession(); await assertProject(projectId); const raceId = formOptionalId(formData, "raceId"); if (!raceId) throw new Error("Spezies / Subspezies ist ein Pflichtfeld.");
+  await linkCultureRace(projectId, cultureId, raceId, formCheckbox(formData,"isPrimary"), formOptionalText(formData, "notes"));
   revalidatePath(`/admin/projects/${projectId}/cultures/${cultureId}`); revalidatePath(`/admin/projects/${projectId}/races/${raceId}`);
 }
-export async function unlinkCultureRaceAction(projectId: number, cultureId: number, raceId: number) { await requireAdminSession(); await unlinkCultureRace(projectId, cultureId, raceId); revalidatePath(`/admin/projects/${projectId}/cultures/${cultureId}`); revalidatePath(`/admin/projects/${projectId}/races/${raceId}`); }
-export async function archiveCultureAction(projectId: number, cultureId: number) { await requireAdminSession(); await archiveCulture(projectId, cultureId); redirect(`/admin/projects/${projectId}/cultures`); }
+export async function unlinkCultureRaceAction(projectId: number, cultureId: number, raceId: number) { await requireAdminSession(); await assertProject(projectId); await unlinkCultureRace(projectId, cultureId, raceId); revalidatePath(`/admin/projects/${projectId}/cultures/${cultureId}`); revalidatePath(`/admin/projects/${projectId}/races/${raceId}`); }
+export async function archiveCultureAction(projectId: number, cultureId: number) { await requireAdminSession(); await assertProject(projectId); await archiveCulture(projectId, cultureId); redirect(`/admin/projects/${projectId}/cultures`); }
