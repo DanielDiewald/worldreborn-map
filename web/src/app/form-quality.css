@@ -1,0 +1,24 @@
+/* Shared form quality rules. Keep form semantics visible without turning every page into a client component. */
+.form-required-mark{margin-left:3px;color:#e4b96d;font-weight:900}.form-optional-mark{margin-left:6px;color:var(--muted-2);font-size:10px;font-weight:500}.form-required-legend{margin:0 0 10px;color:var(--muted);font-size:11px}.form-required-legend .form-required-mark{margin-left:0;margin-right:4px}
+
+/* Existing legacy labels gain a visible required marker automatically. Components that render their label separately (e.g. EntityPicker) add the explicit marker themselves. */
+label:not(.form-field):has(input[required],select[required],textarea[required])::before{content:"*";display:inline-block;margin-right:4px;color:#e4b96d;font-weight:900}
+
+.form-field{display:grid;gap:6px}.form-field-label{display:inline-flex;align-items:baseline;gap:2px}.form-field-hint{color:var(--muted-2);font-size:10px;font-weight:500;line-height:1.45}.form-field-error{color:#ef9a9a;font-size:10px;font-weight:650;line-height:1.45}.form-field.has-error :is(input,textarea,select){border-color:#74434a;box-shadow:0 0 0 3px rgba(205,116,116,.08)}
+.form-message,.form-error-summary{border:1px solid var(--border);border-radius:10px;padding:10px 12px;background:#12161c;color:var(--text);font-size:12px;line-height:1.5}.form-message.success{border-color:rgba(98,168,124,.45);background:rgba(98,168,124,.08)}.form-message.error,.form-error-summary{border-color:rgba(205,116,116,.5);background:rgba(205,116,116,.08)}.form-message.warning{border-color:rgba(199,164,93,.45);background:rgba(199,164,93,.07)}.form-error-summary ul{margin:7px 0 0;padding-left:18px;color:#e7b4b7}.form-error-summary strong{color:#f0d2d4}
+
+:where(input,textarea,select)[aria-invalid="true"]{border-color:#74434a!important;box-shadow:0 0 0 3px rgba(205,116,116,.08)!important}
+:where(input,textarea,select):disabled{cursor:not-allowed;opacity:.58;background:#0d1014;color:#737985}
+:where(input,textarea,select)[readonly]{cursor:default;background:#15191f;color:#c6c9cf;border-style:dashed}
+
+.form-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap}.form-actions.split{justify-content:space-between}.form-action-copy{display:grid;gap:2px;margin-right:auto}.form-action-copy span{color:var(--muted);font-size:11px}
+
+/* Make compact checkbox/radio controls readable and finger-friendly without stretching their actual control. */
+label:has(> input[type="checkbox"]),label:has(> input[type="radio"]){min-height:32px;align-content:center}
+label>input[type="checkbox"],label>input[type="radio"]{width:18px;height:18px;min-height:18px;padding:0;vertical-align:middle}
+
+button:focus-visible,.button:focus-visible,summary:focus-visible,a:focus-visible{outline:2px solid var(--gold-bright);outline-offset:2px}
+
+.form-dialog{width:min(760px,calc(100vw - 28px));max-height:min(88vh,900px);overflow:auto;border:1px solid var(--border);border-radius:14px;padding:0;background:#11151a;color:var(--text);box-shadow:0 28px 90px rgba(0,0,0,.55)}.form-dialog::backdrop{background:rgba(0,0,0,.68);backdrop-filter:blur(3px)}.form-dialog-body{display:grid;gap:18px;padding:20px}.form-dialog-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}.form-dialog-heading p{margin:4px 0 0;color:var(--muted);font-size:12px}.form-dialog-close{min-width:38px;min-height:38px;padding:0}
+
+@media(max-width:720px){.form-actions{align-items:stretch}.form-actions>*{width:100%}.form-dialog{width:calc(100vw - 16px);max-height:94vh}.form-dialog-body{padding:15px}.field-grid.two{grid-template-columns:1fr!important}.sticky-savebar{position:static!important}.create-popover{min-width:0!important;width:min(94vw,680px)!important}}
