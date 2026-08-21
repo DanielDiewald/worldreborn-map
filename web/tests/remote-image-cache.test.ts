@@ -38,3 +38,24 @@ test("cached remote media is served locally and can generate 256px derivatives",
   assert.match(derivatives, /if \(!row\?\.storage_path\) return null/);
   assert.doesNotMatch(derivatives, /!row\?\.storage_path \|\| row\.external_url/);
 });
+
+test("legacy remote URLs are materialized once and keep their saved crop", () => {
+  const materialize = read("src/lib/legacy-remote-image-materialize.ts");
+  const derivatives = read("src/lib/entity-image-derivatives.ts");
+  assert.match(materialize, /legacy_materialized: true/);
+  assert.match(materialize, /AND \$\{config\.image\}=\$3/);
+  assert.match(materialize, /UPDATE entity_image_crops SET source_image=\$4/);
+  assert.match(derivatives, /materializeLegacyRemoteEntityImage/);
+});
+
+test("npc race and culture lists route legacy remote URLs through avatar endpoints", () => {
+  const npc = read("src/lib/entities/npcs.ts");
+  const race = read("src/lib/race-registry.ts");
+  const culture = read("src/lib/entities/cultures.ts");
+  for (const source of [npc, race, culture]) {
+    assert.match(source, /\^https\?:\/\//);
+    assert.match(source, /LIKE '\/\/%'/);
+    assert.match(source, /entity-images\//);
+    assert.match(source, /\/avatar/);
+  }
+});
