@@ -30,7 +30,7 @@ export type LocationListFilters={query?:string;visibility?:"admin_only"|"all_pla
 
 const locationSelect=`SELECT l.loc_id,l.name,l.coat_of_arm,l.parent_loc_id,l.location_type,l.location_kind,l.slug,l.description,l.owner_n_id,l.capital_loc_id,l.population,l.visibility_mode,l.map_id,l.map_feature_id,p.name AS parent_name,o.name AS owner_name,c.name AS capital_name FROM locations l LEFT JOIN locations p ON p.loc_id=l.parent_loc_id AND p.camp_id=l.camp_id LEFT JOIN npcs o ON o.n_id=l.owner_n_id AND o.camp_id=l.camp_id LEFT JOIN locations c ON c.loc_id=l.capital_loc_id AND c.camp_id=l.camp_id`;
 const locationListSelect=`SELECT l.loc_id,l.name,
-  CASE WHEN l.coat_of_arm ~ '^/api/media/[0-9]+$' OR l.coat_of_arm LIKE '/img/%' OR l.coat_of_arm LIKE '/images/%' OR l.coat_of_arm LIKE '/uploads/%'
+  CASE WHEN l.coat_of_arm ~ '^/api/media/[0-9]+$' OR l.coat_of_arm ~* '^https?://' OR l.coat_of_arm LIKE '//%' OR l.coat_of_arm LIKE '/img/%' OR l.coat_of_arm LIKE '/images/%' OR l.coat_of_arm LIKE '/uploads/%'
     THEN '/api/admin/projects/'||l.camp_id||'/entity-images/location/'||l.loc_id||'/avatar' ELSE l.coat_of_arm END AS coat_of_arm,
   l.parent_loc_id,l.location_type,l.location_kind,l.slug,NULL::text AS description,l.owner_n_id,l.capital_loc_id,l.population,l.visibility_mode,l.map_id,l.map_feature_id,p.name AS parent_name,o.name AS owner_name,c.name AS capital_name
   FROM locations l LEFT JOIN locations p ON p.loc_id=l.parent_loc_id AND p.camp_id=l.camp_id LEFT JOIN npcs o ON o.n_id=l.owner_n_id AND o.camp_id=l.camp_id LEFT JOIN locations c ON c.loc_id=l.capital_loc_id AND c.camp_id=l.camp_id`;
