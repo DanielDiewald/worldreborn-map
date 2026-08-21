@@ -10,7 +10,9 @@ export async function GET(_request:Request,{params}:{params:Promise<{mediaId:str
  // Asset requests are numerous on list pages. They must never serialize on an UPDATE of the
  // same admin_sessions row; normal page/navigation requests still touch last_seen_at.
  const admin=await hasValidAdminSession({touch:false});if(!admin){const player=await getPlayerSession();if(!player||player.projectId!==record.project_id)return NextResponse.json({error:"Not found"},{status:404});const allowed=(await canPlayerReadMedia(mediaId,player.projectId,player.playerId))||(await canPlayerReadMapLayerMedia(mediaId,player.projectId,player.playerId));if(!allowed)return NextResponse.json({error:"Not found"},{status:404});}
+ // Remote imports keep external_url as provenance, but cached local bytes are authoritative so
+ // images continue to work even after the original link disappears.
+ if(record.storage_path){try{const data=await readStoredMedia(record.storage_path);return new Response(new Uint8Array(data),{status:200,headers:{"Content-Type":record.mime_type||"application/octet-stream","Content-Length":String(data.length),"Cache-Control":"private, max-age=300","X-Content-Type-Options":"nosniff","Content-Security-Policy":"default-src 'none'; img-src 'self'; sandbox"}});}catch{if(!record.external_url)return NextResponse.json({error:"Not found"},{status:404});}}
  if(record.external_url)return NextResponse.redirect(record.external_url);
- if(!record.storage_path)return NextResponse.json({error:"Not found"},{status:404});
- try{const data=await readStoredMedia(record.storage_path);return new Response(new Uint8Array(data),{status:200,headers:{"Content-Type":record.mime_type||"application/octet-stream","Content-Length":String(data.length),"Cache-Control":"private, max-age=300","X-Content-Type-Options":"nosniff","Content-Security-Policy":"default-src 'none'; img-src 'self'; sandbox"}});}catch{return NextResponse.json({error:"Not found"},{status:404});}
+ return NextResponse.json({error:"Not found"},{status:404});
 }
