@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { EntityImageFrame, hasEntityImage } from "@/components/entity-image-frame";
 import type { EntityImageCrop } from "@/lib/entity-image-crop";
 
@@ -14,6 +14,8 @@ type Props = {
 };
 
 const DEFAULT_CROP: EntityImageCrop = { x: 50, y: 50, zoom: 1 };
+const MAX_IMAGE_BYTES = 50 * 1024 * 1024;
+const ACCEPTED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 
 export function ProfileImageEditor({
@@ -24,12 +26,14 @@ export function ProfileImageEditor({
   cropName = "imageCrop",
   label = "Bild / Porträt",
 }: Props) {
+  const id = useId();
   const initialImage = hasEntityImage(current) ? current!.trim() : "";
   const [pathValue, setPathValue] = useState(initialImage);
   const [filePreview, setFilePreview] = useState("");
   const [remove, setRemove] = useState(false);
   const [cropEnabled, setCropEnabled] = useState(Boolean(currentCrop));
   const [crop, setCrop] = useState<EntityImageCrop>(currentCrop ?? DEFAULT_CROP);
+  const [imageError, setImageError] = useState<string | null>(null);
   const cropStageRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ pointerId: number; clientX: number; clientY: number; cropX: number; cropY: number; width: number; height: number } | null>(null);
   const lastServerImageRef = useRef(initialImage);
@@ -37,9 +41,6 @@ export function ProfileImageEditor({
 
   useEffect(() => () => { if (filePreview.startsWith("blob:")) URL.revokeObjectURL(filePreview); }, [filePreview]);
 
-  // Server Actions can re-render the same client component instance after saving. Keep the local
-  // editor in sync when the canonical image changed on the server, without overwriting an active
-  // unsaved drag/slider operation during ordinary renders.
   useEffect(() => {
     const nextImage = hasEntityImage(current) ? current!.trim() : "";
     if (lastServerImageRef.current === nextImage) return;
@@ -49,16 +50,27 @@ export function ProfileImageEditor({
     setRemove(false);
     setCropEnabled(Boolean(currentCrop));
     setCrop(currentCrop ?? DEFAULT_CROP);
+    setImageError(null);
   }, [current, currentCrop]);
 
   const cropValue = useMemo(() => cropEnabled && hasEntityImage(source) ? JSON.stringify(crop) : "", [cropEnabled, crop, source]);
 
   function chooseFile(file: File | null) {
+    setImageError(null);
+    if (file && !ACCEPTED_IMAGE_TYPES.has(file.type)) {
+      setImageError("Nicht unterstützter Dateityp. Erlaubt sind JPEG, PNG, WebP und GIF.");
+      return false;
+    }
+    if (file && file.size > MAX_IMAGE_BYTES) {
+      setImageError("Das Bild ist größer als 50 MB. Bitte wähle eine kleinere Datei.");
+      return false;
+    }
     setRemove(false);
     setFilePreview((previous) => {
       if (previous.startsWith("blob:")) URL.revokeObjectURL(previous);
       return file ? URL.createObjectURL(file) : "";
     });
+    return true;
   }
 
   function startDrag(event: ReactPointerEvent<HTMLDivElement>) {
@@ -86,6 +98,9 @@ export function ProfileImageEditor({
     if (dragRef.current?.pointerId === event.pointerId) dragRef.current = null;
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
   }
+
+  const uploadHelpId = `${id}-upload-help`;
+  const uploadErrorId = imageError ? `${id}-upload-error` : undefined;
 
   return <fieldset className="profile-image-editor">
     <legend>{label}</legend>
@@ -134,13 +149,25 @@ export function ProfileImageEditor({
 
     <div className="field-grid two profile-image-source-fields">
       <label>Datei hochladen
-        <input name={fileName} type="file" accept="image/jpeg,image/png,image/webp,image/gif" onChange={(event) => chooseFile(event.target.files?.[0] ?? null)}/>
+        <input
+          name={fileName}
+          type="file"
+          accept="image/jpeg,image/png,image/webp,image/gif"
+          aria-describedby={[uploadHelpId, uploadErrorId].filter(Boolean).join(" ") || undefined}
+          aria-invalid={Boolean(imageError)}
+          onChange={(event) => {
+            const file = event.target.files?.[0] ?? null;
+            if (!chooseFile(file)) event.currentTarget.value = "";
+          }}
+        />
+        <small id={uploadHelpId} className="form-field-hint">JPEG, PNG, WebP oder GIF · maximal 50 MB. Ein Upload hat Vorrang vor dem Bildpfad.</small>
+        {imageError ? <small id={uploadErrorId} className="form-field-error" role="alert">{imageError}</small> : null}
       </label>
       <label>oder Bildpfad / URL
-        <input name={pathName} value={pathValue} onChange={(event) => { setRemove(false); setPathValue(event.target.value); }} placeholder="/images/... oder https://..."/>
+        <input name={pathName} value={pathValue} onChange={(event) => { setRemove(false); setImageError(null); setPathValue(event.target.value); }} placeholder="/images/... oder https://..."/>
       </label>
     </div>
-    <label><input type="checkbox" name={`${pathName}Remove`} value="1" checked={remove} onChange={(event) => { setRemove(event.target.checked); if (event.target.checked) setCropEnabled(false); }}/> Bild entfernen</label>
-    <p className="section-help">Der 1:1-Zuschnitt ist optional. Ohne gespeicherten Zuschnitt zeigt WorldReborn weiterhin das vollständige Original im quadratischen Rahmen.</p>
+    <label><input type="checkbox" name={`${pathName}Remove`} value="1" checked={remove} onChange={(event) => { setRemove(event.target.checked); setImageError(null); if (event.target.checked) setCropEnabled(false); }}/> Bild entfernen</label>
+    <p className="section-help">Der 1:1-Zuschnitt ist optional. Ohne gespeicherten Zuschnitt zeigt WorldReborn weiterhin das vollständige Original im quadratischen Rahmen. „Bild entfernen“ löscht nur die Bildreferenz und den Crop, nicht die übrigen Profildaten.</p>
   </fieldset>;
 }
