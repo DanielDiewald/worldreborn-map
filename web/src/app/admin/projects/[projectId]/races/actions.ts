@@ -58,6 +58,7 @@ export async function updateRaceImageAction(projectId:number,raceId:number,formD
     if(!persisted)throw new Error("Der 1:1-Zuschnitt konnte nicht dauerhaft gespeichert werden.");
   }
   refreshRace(projectId,raceId);
+  if(text(formData,"returnTo")==="detail")redirect(`/admin/projects/${projectId}/races/${raceId}?imageSaved=1`);
   redirect(`/admin/projects/${projectId}/races/${raceId}/image?saved=1`);
 }
 
