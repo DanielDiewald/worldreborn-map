@@ -1,8 +1,9 @@
 /* Shared form quality rules. Keep form semantics visible without turning every page into a client component. */
 .form-required-mark{margin-left:3px;color:#e4b96d;font-weight:900}.form-optional-mark{margin-left:6px;color:var(--muted-2);font-size:10px;font-weight:500}.form-required-legend{margin:0 0 10px;color:var(--muted);font-size:11px}.form-required-legend .form-required-mark{margin-left:0;margin-right:4px}
 
-/* Existing legacy labels gain a visible required marker automatically. Components that render their label separately (e.g. EntityPicker) add the explicit marker themselves. */
-label:not(.form-field):has(input[required],select[required],textarea[required])::before{content:"*";display:inline-block;margin-right:4px;color:#e4b96d;font-weight:900}
+/* Legacy labels are grid containers, so an inline pseudo-element would become its own row. Keep the required hint in the top-right corner instead. */
+label:not(.form-field):has(input[required],select[required],textarea[required]){position:relative;padding-top:16px}
+label:not(.form-field):has(input[required],select[required],textarea[required])::after{content:"* Pflichtfeld";position:absolute;top:0;right:0;color:#cbb078;font-size:9px;font-weight:750;letter-spacing:.02em}
 
 .form-field{display:grid;gap:6px}.form-field-label{display:inline-flex;align-items:baseline;gap:2px}.form-field-hint{color:var(--muted-2);font-size:10px;font-weight:500;line-height:1.45}.form-field-error{color:#ef9a9a;font-size:10px;font-weight:650;line-height:1.45}.form-field.has-error :is(input,textarea,select){border-color:#74434a;box-shadow:0 0 0 3px rgba(205,116,116,.08)}
 .form-message,.form-error-summary{border:1px solid var(--border);border-radius:10px;padding:10px 12px;background:#12161c;color:var(--text);font-size:12px;line-height:1.5}.form-message.success{border-color:rgba(98,168,124,.45);background:rgba(98,168,124,.08)}.form-message.error,.form-error-summary{border-color:rgba(205,116,116,.5);background:rgba(205,116,116,.08)}.form-message.warning{border-color:rgba(199,164,93,.45);background:rgba(199,164,93,.07)}.form-error-summary ul{margin:7px 0 0;padding-left:18px;color:#e7b4b7}.form-error-summary strong{color:#f0d2d4}
