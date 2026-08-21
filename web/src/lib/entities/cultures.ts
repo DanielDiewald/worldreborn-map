@@ -21,7 +21,8 @@ export type CultureRaceRow = { raceId: number; name: string; parentName: string 
 
 const cultureSelect = `SELECT c.culture_id::int AS "cultureId",c.project_id AS "projectId",c.name,c.description,c.image,c.image_media_id::int AS "imageMediaId",c.primary_location_id::int AS "primaryLocationId",l.name AS "primaryLocationName",c.visibility_mode AS "visibilityMode",(SELECT count(*)::int FROM culture_races cr WHERE cr.culture_id=c.culture_id) AS "raceCount" FROM cultures c LEFT JOIN locations l ON l.camp_id=c.project_id AND l.loc_id=c.primary_location_id`;
 const cultureListSelect = `SELECT c.culture_id::int AS "cultureId",c.project_id AS "projectId",c.name,LEFT(c.description,240) AS description,
-  CASE WHEN c.image ~ '^/api/media/[0-9]+$' THEN '/api/admin/projects/'||c.project_id||'/entity-images/culture/'||c.culture_id||'/avatar' ELSE c.image END AS image,
+  CASE WHEN c.image ~ '^/api/media/[0-9]+$' OR c.image LIKE '/img/%' OR c.image LIKE '/images/%' OR c.image LIKE '/uploads/%'
+    THEN '/api/admin/projects/'||c.project_id||'/entity-images/culture/'||c.culture_id||'/avatar' ELSE c.image END AS image,
   c.image_media_id::int AS "imageMediaId",c.primary_location_id::int AS "primaryLocationId",l.name AS "primaryLocationName",c.visibility_mode AS "visibilityMode",COALESCE(rc.race_count,0)::int AS "raceCount"
   FROM cultures c
   LEFT JOIN locations l ON l.camp_id=c.project_id AND l.loc_id=c.primary_location_id
