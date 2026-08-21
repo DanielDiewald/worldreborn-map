@@ -2,6 +2,7 @@ import "server-only";
 
 import path from "node:path";
 import { pool } from "@/lib/db";
+import { entityAvatarManagedSourceKey } from "@/lib/entity-image-crop-geometry";
 import { validateImageBuffer } from "@/lib/image-validation";
 import { downloadRemoteImage } from "@/lib/remote-image";
 import { localStorage } from "@/lib/storage";
@@ -63,7 +64,7 @@ export async function materializeLegacyRemoteEntityImage(projectId: number, enti
     await client.query("COMMIT");
     return {
       managedImage,
-      sourceKey: `media:${mediaId}:${saved.storagePath}`,
+      sourceKey: entityAvatarManagedSourceKey(mediaId, saved.storagePath),
       sourceMediaId: mediaId,
       read: () => localStorage.read(saved.storagePath),
     };
