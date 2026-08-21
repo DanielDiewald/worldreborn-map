@@ -16,6 +16,7 @@ export async function getExistingEntityAvatarDerivative(projectId: number, entit
     `SELECT derivative_id,storage_path,mime_type,size_bytes,width,height
        FROM entity_image_derivatives
       WHERE project_id=$1 AND entity_type=$2 AND entity_id=$3 AND variant='avatar'
+        AND source_media_id IS NOT NULL
       LIMIT 1`,
     [projectId, entityType, entityId],
   );
