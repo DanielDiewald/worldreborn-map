@@ -2,6 +2,7 @@ import "server-only";
 
 import { pool } from "@/lib/db";
 import { normalizeEntityImageCrop, type EntityImageCrop } from "@/lib/entity-image-crop";
+import { entityAvatarManagedSourceKey } from "@/lib/entity-image-crop-geometry";
 import type { DerivableEntityType, EntityImageDerivative } from "@/lib/entity-image-derivatives";
 
 type FastConfig = {
@@ -70,7 +71,7 @@ export async function getExistingEntityAvatarDerivative(projectId: number, entit
   if (!Number.isSafeInteger(mediaId) || mediaId <= 0) return null;
   const currentImage = row.current_image?.trim() ?? "";
   if (currentImage !== `/api/media/${mediaId}`) return null;
-  if (row.source_image !== `media:${mediaId}:${row.media_storage_path}`) return null;
+  if (row.source_image !== entityAvatarManagedSourceKey(mediaId, row.media_storage_path)) return null;
 
   if (config.croppable) {
     const currentCrop = row.crop_source_image === currentImage ? normalizeEntityImageCrop(row.current_crop) : null;
