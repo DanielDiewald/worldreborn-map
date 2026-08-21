@@ -52,6 +52,7 @@ export function EntityImageFrame({
     transform: `scale(${crop.zoom})`,
     transformOrigin: `${crop.x}% ${crop.y}%`,
   } : undefined;
+  const passiveImageStyle: CSSProperties = { userSelect: "none", pointerEvents: "none" };
 
   if (effectiveMode === "thumbnail") {
     return <span className={classes} style={rootStyle} data-has-image={image ? "true" : "false"} data-has-crop={crop ? "true" : "false"}>
@@ -61,6 +62,7 @@ export function EntityImageFrame({
         alt={alt}
         loading={loading}
         decoding={decoding}
+        draggable={false}
         style={{
           position: "absolute",
           inset: 0,
@@ -68,6 +70,7 @@ export function EntityImageFrame({
           height: "100%",
           objectFit: crop ? "cover" : "contain",
           objectPosition: crop ? undefined : "center",
+          ...passiveImageStyle,
           ...cropStyle,
         }}
       /> : <span className="entity-image-fallback" aria-hidden="true" style={{position:"relative",zIndex:1}}>{fallback}</span>}
@@ -82,6 +85,7 @@ export function EntityImageFrame({
         alt={alt}
         loading={loading}
         decoding={decoding}
+        draggable={false}
         style={{
           position: "absolute",
           inset: 0,
@@ -89,6 +93,7 @@ export function EntityImageFrame({
           width: "100%",
           height: "100%",
           objectFit: "cover",
+          ...passiveImageStyle,
           ...cropStyle,
         }}
       />
@@ -101,6 +106,7 @@ export function EntityImageFrame({
         aria-hidden="true"
         loading={loading}
         decoding={decoding}
+        draggable={false}
         style={{
           position: "absolute",
           inset: "-8%",
@@ -113,6 +119,7 @@ export function EntityImageFrame({
           transform: "scale(1.04)",
           opacity: .82,
           pointerEvents: "none",
+          userSelect: "none",
         }}
       />
       <img
@@ -121,6 +128,7 @@ export function EntityImageFrame({
         alt={alt}
         loading={loading}
         decoding={decoding}
+        draggable={false}
         style={{
           position: "absolute",
           inset: 0,
@@ -129,6 +137,7 @@ export function EntityImageFrame({
           height: "100%",
           objectFit: "contain",
           objectPosition: "center",
+          ...passiveImageStyle,
         }}
       />
       <span aria-hidden="true" style={{position:"absolute",inset:0,zIndex:2,boxShadow:"inset 0 0 0 1px rgba(255,255,255,.055)",pointerEvents:"none"}}/>
