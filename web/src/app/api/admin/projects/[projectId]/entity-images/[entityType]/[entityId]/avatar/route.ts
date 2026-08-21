@@ -6,6 +6,13 @@ import { localStorage } from "@/lib/storage";
 
 const ENTITY_TYPES = new Set<DerivableEntityType>(["person","race","culture","group","location"]);
 
+function derivativeEtag(derivative: { derivativeId: number; storagePath: string }) {
+  // UPSERT keeps derivative_id stable. The storage path changes whenever a crop/source is rendered
+  // again, so it must be part of the validator or browsers can incorrectly reuse the pre-crop file.
+  const version = derivative.storagePath.replace(/[^a-z0-9]/gi, "").slice(-24) || "v";
+  return `"wr-avatar-${derivative.derivativeId}-${version}"`;
+}
+
 export async function GET(request: Request, { params }: { params: Promise<{ projectId: string; entityType: string; entityId: string }> }) {
   if (!(await hasValidAdminSession({ touch: false }))) return NextResponse.json({ error: "Not found" }, { status: 404 });
   const raw = await params;
@@ -16,12 +23,12 @@ export async function GET(request: Request, { params }: { params: Promise<{ proj
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
   try {
-    // Normal image/crop writes refresh this row eagerly. Existing avatars therefore need only one
-    // indexed derivative lookup; legacy rows without a derivative fall back to one-time generation.
+    // Managed media uses the one-query fast path. Local legacy paths deliberately fall through to
+    // ensureEntityAvatarDerivative so file mtime/size can invalidate the derivative safely.
     const derivative = await getExistingEntityAvatarDerivative(projectId, entityType, entityId)
       ?? await ensureEntityAvatarDerivative(projectId, entityType, entityId);
-    if (!derivative) return NextResponse.json({ error: "No managed image" }, { status: 404 });
-    const etag = `"wr-avatar-${derivative.derivativeId}"`;
+    if (!derivative) return NextResponse.json({ error: "No derivable image" }, { status: 404 });
+    const etag = derivativeEtag(derivative);
     if (request.headers.get("if-none-match") === etag) {
       return new Response(null, { status: 304, headers: { ETag: etag, "Cache-Control": "private, no-cache" } });
     }
