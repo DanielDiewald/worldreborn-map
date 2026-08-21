@@ -2,6 +2,7 @@ import "server-only";
 
 import { pool } from "@/lib/db";
 import { normalizeEntityImageCrop } from "@/lib/entity-image-crop";
+import { imageReferenceUsesAvatarDerivative } from "@/lib/entity-image-source";
 import type { WorldMapMarker } from "@/components/map/map-types";
 
 type RaceOriginRow = {
@@ -23,10 +24,6 @@ function previewImage(value: string | null) {
   const image = value?.trim();
   if (!image || image === "noimage" || image === "/noimg.jpg") return null;
   return image;
-}
-
-function managedImage(value: string | null) {
-  return Boolean(value && /^\/api\/media\/\d+$/.test(value));
 }
 
 export async function listRaceOriginMarkers(projectId: number, mapId: number): Promise<WorldMapMarker[]> {
@@ -54,7 +51,7 @@ export async function listRaceOriginMarkers(projectId: number, mapId: number): P
     const kind = race.parent_name ? "Subspezies" : "Spezies";
     const description = race.description?.trim();
     const original = previewImage(race.image);
-    const usesDerivative = managedImage(original);
+    const usesDerivative = imageReferenceUsesAvatarDerivative(original);
     const image = usesDerivative ? `/api/admin/projects/${projectId}/entity-images/race/${raceId}/avatar` : original;
     const crop = !usesDerivative && original && race.crop_source_image === original ? normalizeEntityImageCrop(race.crop) : null;
     return {
@@ -70,8 +67,8 @@ export async function listRaceOriginMarkers(projectId: number, mapId: number): P
       x: race.origin_x == null ? null : Number(race.origin_x),
       y: race.origin_y == null ? null : Number(race.origin_y),
       icon: image,
-      // The persistent derivative already contains the saved 1:1 crop. External images still use
-      // the client-side crop metadata because WorldReborn does not download arbitrary remote URLs.
+      // Persistent derivatives already contain the saved 1:1 crop. External images still use
+      // client-side crop metadata because WorldReborn never downloads arbitrary remote URLs.
       image_crop: crop,
       label: hierarchy,
       short_description: description ? `${kind} · ${description.slice(0, 220)}` : `${kind} · ungefährer Ursprung`,
