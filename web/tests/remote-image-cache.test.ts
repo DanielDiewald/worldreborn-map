@@ -45,6 +45,7 @@ test("legacy remote URLs are materialized once and keep their saved crop", () =>
   assert.match(materialize, /legacy_materialized: true/);
   assert.match(materialize, /AND \$\{config\.image\}=\$3/);
   assert.match(materialize, /UPDATE entity_image_crops SET source_image=\$4/);
+  assert.match(materialize, /entityAvatarManagedSourceKey/);
   assert.match(derivatives, /materializeLegacyRemoteEntityImage/);
 });
 
@@ -61,7 +62,7 @@ test("remote materialization reads the canonical crop only after the image refer
 test("fast avatar path rejects derivatives whose source or crop no longer matches", () => {
   const fast = read("src/lib/entity-image-derivative-fast.ts");
   assert.match(fast, /currentImage !== `\/api\/media\/\$\{mediaId\}`/);
-  assert.match(fast, /row\.source_image !== `media:\$\{mediaId\}:\$\{row\.media_storage_path\}`/);
+  assert.match(fast, /row\.source_image !== entityAvatarManagedSourceKey\(mediaId, row\.media_storage_path\)/);
   assert.match(fast, /row\.crop_source_image === currentImage/);
   assert.match(fast, /sameCrop\(row\.derivative_crop, currentCrop\)/);
 });
