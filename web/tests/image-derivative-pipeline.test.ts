@@ -30,9 +30,9 @@ test("dense entity lists route managed and local sources through avatar derivati
   for (const file of files) {
     const source = read(file);
     assert.match(source, /entity-images\//, file);
-    assert.match(source, /\/img\/%|LIKE '\/img\/%'/, file);
-    assert.match(source, /\/images\/%|LIKE '\/images\/%'/, file);
-    assert.match(source, /\/uploads\/%|LIKE '\/uploads\/%'/, file);
+    assert.match(source, /LIKE '\/img\/%'/, file);
+    assert.match(source, /LIKE '\/images\/%'/, file);
+    assert.match(source, /LIKE '\/uploads\/%'/, file);
   }
 });
 
@@ -46,12 +46,15 @@ test("species crop is pointer-safe, persisted, reloaded and reused by the map", 
   assert.match(editor, /1:1-Zuschnitt verwenden/);
   assert.match(action, /saveEntityImageProfile\(projectId,"race",raceId/);
   assert.match(action, /getEntityImageProfile\(projectId,"race",raceId,source\.image\)/);
+  assert.match(action, /\/races\/\$\{raceId\}\/image\?saved=1/);
   assert.match(page, /getEntityImageProfile\(projectId,"race",raceId,race\.image\)/);
   assert.match(markers, /imageReferenceUsesAvatarDerivative/);
 });
 
-test("asset endpoint keeps authentication read-only", () => {
+test("asset endpoint keeps authentication read-only and invalidates cache when the file changes", () => {
   const route = read("src/app/api/admin/projects/[projectId]/entity-images/[entityType]/[entityId]/avatar/route.ts");
   assert.match(route, /hasValidAdminSession\(\{ touch: false \}\)/);
+  assert.match(route, /derivative\.storagePath/);
+  assert.match(route, /wr-avatar-/);
   assert.doesNotMatch(route, /last_seen_at/);
 });
